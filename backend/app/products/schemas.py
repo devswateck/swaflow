@@ -12,6 +12,8 @@ class ProductCreate(BaseModel):
     sku: str | None = Field(default=None, max_length=100)
     price: Decimal = Field(gt=0, max_digits=14, decimal_places=2)
     currency: str = Field(default="COP", max_length=10)
+    whatsapp_catalog_id: str | None = Field(default=None, max_length=100)
+    whatsapp_product_retailer_id: str | None = Field(default=None, max_length=200)
     metadata: dict = Field(default_factory=dict)
 
 
@@ -21,6 +23,8 @@ class ProductUpdate(BaseModel):
     sku: str | None = Field(default=None, max_length=100)
     price: Decimal | None = Field(default=None, gt=0, max_digits=14, decimal_places=2)
     currency: str | None = Field(default=None, max_length=10)
+    whatsapp_catalog_id: str | None = Field(default=None, max_length=100)
+    whatsapp_product_retailer_id: str | None = Field(default=None, max_length=200)
     status: str | None = Field(default=None, max_length=30)
     metadata: dict | None = None
 
@@ -32,6 +36,7 @@ class ProductRead(TimestampedRead):
     sku: str | None
     price: Decimal
     currency: str
+    whatsapp_catalog_id: str | None
+    whatsapp_product_retailer_id: str | None
     status: str
     metadata_json: dict
-

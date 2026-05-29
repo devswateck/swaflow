@@ -6,7 +6,7 @@ from app.core.schemas import ORMModel
 
 
 class LoginRequest(BaseModel):
-    company_id: UUID
+    company_id: UUID | None = None
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
 
@@ -24,3 +24,7 @@ class CurrentUserRead(ORMModel):
     role: str
     status: str
 
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=8, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)

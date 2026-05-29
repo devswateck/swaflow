@@ -53,6 +53,8 @@ def create_product(db: Session, *, company_id: UUID, payload: ProductCreate) -> 
         sku=payload.sku,
         price=payload.price,
         currency=payload.currency,
+        whatsapp_catalog_id=payload.whatsapp_catalog_id,
+        whatsapp_product_retailer_id=payload.whatsapp_product_retailer_id,
         metadata_json=payload.metadata,
     )
     db.add(product)
@@ -87,4 +89,3 @@ def deactivate_product(db: Session, *, company_id: UUID, product_id: UUID) -> No
     product = get_product(db, company_id=company_id, product_id=product_id)
     product.status = "inactive"
     db.commit()
-

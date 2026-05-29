@@ -11,6 +11,12 @@ from app.core.security import hash_password
 from app.users.models import User
 
 
+def list_companies(db: Session, *, limit: int, offset: int) -> list[Company]:
+    return list(
+        db.scalars(select(Company).order_by(Company.created_at.desc()).limit(limit).offset(offset))
+    )
+
+
 def create_company_with_owner(db: Session, payload: CompanyCreate) -> tuple[Company, User]:
     company = Company(name=payload.name)
     db.add(company)
@@ -38,10 +44,16 @@ def create_company_with_owner(db: Session, payload: CompanyCreate) -> tuple[Comp
     return company, owner
 
 
-def get_company_for_user(db: Session, *, company_id: UUID, current_company_id: UUID) -> Company:
-    if company_id != current_company_id:
+def get_company_for_user(
+    db: Session,
+    *,
+    company_id: UUID,
+    current_company_id: UUID,
+    is_superuser: bool = False,
+) -> Company:
+    if not is_superuser and company_id != current_company_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
-    company = db.scalar(select(Company).where(Company.id == current_company_id))
+    company = db.scalar(select(Company).where(Company.id == company_id))
     if company is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
     return company
@@ -53,11 +65,16 @@ def update_company(
     company_id: UUID,
     current_company_id: UUID,
     payload: CompanyUpdate,
+    is_superuser: bool = False,
 ) -> Company:
-    company = get_company_for_user(db, company_id=company_id, current_company_id=current_company_id)
+    company = get_company_for_user(
+        db,
+        company_id=company_id,
+        current_company_id=current_company_id,
+        is_superuser=is_superuser,
+    )
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(company, field, value)
     db.commit()
     db.refresh(company)
     return company
-

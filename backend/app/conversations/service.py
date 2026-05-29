@@ -5,11 +5,14 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.contacts.models import Contact
 from app.contacts.service import get_contact
 from app.conversations.models import Conversation
 from app.conversations.schemas import ConversationCreate
+from app.funnels.models import SalesFunnel, SalesFunnelStep
 from app.messages.models import Message
 from app.messages.service import create_message
+from app.realtime import realtime_manager
 from app.users.models import User
 
 
@@ -26,11 +29,71 @@ def list_conversations(
         stmt = stmt.where(Conversation.status == status_filter)
     return list(
         db.scalars(
-            stmt.order_by(Conversation.last_message_at.desc().nullslast(), Conversation.created_at.desc())
+            stmt.order_by(
+                Conversation.last_message_at.is_(None).asc(),
+                Conversation.last_message_at.desc(),
+                Conversation.created_at.desc(),
+            )
             .limit(limit)
             .offset(offset)
         )
     )
+
+
+def conversation_to_inbox_item(db: Session, *, conversation: Conversation) -> dict:
+    contact = db.scalar(
+        select(Contact).where(
+            Contact.company_id == conversation.company_id,
+            Contact.id == conversation.contact_id,
+        )
+    )
+    last_message = db.scalar(
+        select(Message)
+        .where(
+            Message.company_id == conversation.company_id,
+            Message.conversation_id == conversation.id,
+        )
+        .order_by(Message.created_at.desc())
+    )
+    funnel_name = None
+    funnel_step_name = None
+    if conversation.funnel_id:
+        funnel = db.scalar(
+            select(SalesFunnel).where(
+                SalesFunnel.company_id == conversation.company_id,
+                SalesFunnel.id == conversation.funnel_id,
+            )
+        )
+        funnel_name = funnel.name if funnel else None
+    if conversation.funnel_step_id:
+        step = db.scalar(
+            select(SalesFunnelStep).where(
+                SalesFunnelStep.company_id == conversation.company_id,
+                SalesFunnelStep.id == conversation.funnel_step_id,
+            )
+        )
+        funnel_step_name = step.name if step else None
+    return {
+        "id": conversation.id,
+        "company_id": conversation.company_id,
+        "contact_id": conversation.contact_id,
+        "channel": conversation.channel,
+        "status": conversation.status,
+        "assigned_user_id": conversation.assigned_user_id,
+        "funnel_id": conversation.funnel_id,
+        "funnel_step_id": conversation.funnel_step_id,
+        "current_step": conversation.current_step,
+        "funnel_name": funnel_name,
+        "funnel_step_name": funnel_step_name,
+        "last_message_at": conversation.last_message_at,
+        "unread_count": conversation.unread_count,
+        "created_at": conversation.created_at,
+        "updated_at": conversation.updated_at,
+        "contact_name": contact.name if contact else None,
+        "contact_phone": contact.phone if contact else "",
+        "last_message": last_message.content if last_message else None,
+        "last_sender_type": last_message.sender_type if last_message else None,
+    }
 
 
 def get_conversation(db: Session, *, company_id: UUID, conversation_id: UUID) -> Conversation:
@@ -117,11 +180,83 @@ def assign_conversation(
     return conversation
 
 
+def assign_conversation_funnel(
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+    funnel_id: UUID | None,
+    funnel_step_id: UUID | None,
+    current_step: str | None,
+) -> Conversation:
+    conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
+    if funnel_id is None:
+        conversation.funnel_id = None
+        conversation.funnel_step_id = None
+        conversation.current_step = current_step
+        db.commit()
+        db.refresh(conversation)
+        return conversation
+
+    funnel = db.scalar(
+        select(SalesFunnel).where(
+            SalesFunnel.company_id == company_id,
+            SalesFunnel.id == funnel_id,
+        )
+    )
+    if funnel is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funnel not found")
+
+    step_id_to_set = None
+    step_name_to_set = current_step
+    if funnel_step_id is not None:
+        step = db.scalar(
+            select(SalesFunnelStep).where(
+                SalesFunnelStep.company_id == company_id,
+                SalesFunnelStep.id == funnel_step_id,
+                SalesFunnelStep.funnel_id == funnel_id,
+            )
+        )
+        if step is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Funnel step not found for selected funnel",
+            )
+        step_id_to_set = step.id
+        if not step_name_to_set:
+            step_name_to_set = step.code
+
+    conversation.funnel_id = funnel.id
+    conversation.funnel_step_id = step_id_to_set
+    conversation.current_step = step_name_to_set
+    db.commit()
+    db.refresh(conversation)
+    return conversation
+
+
 def close_conversation(db: Session, *, company_id: UUID, conversation_id: UUID) -> Conversation:
     conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
     conversation.status = "closed"
     db.commit()
     db.refresh(conversation)
+    return conversation
+
+
+def mark_conversation_read(
+    db: Session, *, company_id: UUID, conversation_id: UUID
+) -> Conversation:
+    conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
+    conversation.unread_count = 0
+    db.commit()
+    db.refresh(conversation)
+    realtime_manager.publish(
+        company_id,
+        "conversation.read",
+        {
+            "conversation_id": str(conversation.id),
+            "unread_count": conversation.unread_count,
+        },
+    )
     return conversation
 
 
@@ -148,9 +283,10 @@ def append_message(
         metadata=metadata,
     )
     conversation.last_message_at = datetime.now(UTC)
+    if sender_type == "customer":
+        conversation.unread_count = (conversation.unread_count or 0) + 1
     if sender_type == "customer" and conversation.status == "waiting_customer":
         conversation.status = "open"
     db.commit()
     db.refresh(message)
     return message
-

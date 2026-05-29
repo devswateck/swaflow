@@ -5,10 +5,12 @@ description = "Backend MVP for a multi-tenant AI sales assistant over WhatsApp."
 requires-python = ">=3.12"
 dependencies = [
     "alembic>=1.13.2",
-    "bcrypt>=4.0,<5.0",
+    "bcrypt>=4.0,<4.1",
     "cryptography>=43.0.0",
     "email-validator>=2.2.0",
     "fastapi>=0.115.0",
+    "httpx>=0.27.2",
+    "openpyxl>=3.1.5",
     "passlib[bcrypt]>=1.7.4",
     "pymysql>=1.1.1",
     "pydantic-settings>=2.4.0",

@@ -14,8 +14,12 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
     openai_api_key: str | None = None
     whatsapp_verify_token: str | None = None
+    whatsapp_app_secret: str | None = None
+    whatsapp_graph_api_version: str = "v25.0"
+    public_base_url: str = "http://localhost:8000"
     encryption_key: str | None = None
     n8n_webhook_url: str | None = None
+    cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

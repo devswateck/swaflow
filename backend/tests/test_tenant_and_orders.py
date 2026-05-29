@@ -3,6 +3,8 @@ from decimal import Decimal
 import pytest
 from fastapi import HTTPException
 
+from app.auth.schemas import PasswordChangeRequest
+from app.auth.service import authenticate_user, change_own_password
 from app.companies.schemas import CompanyCreate
 from app.companies.service import create_company_with_owner
 from app.contacts.models import Contact
@@ -12,6 +14,9 @@ from app.orders.schemas import OrderCreate, OrderItemCreate
 from app.orders.service import create_order, generate_payment_link, mark_paid_by_reference
 from app.products.models import Product
 from app.products.service import get_product
+from app.core.security import verify_password
+from app.users.models import User
+from app.users.service import get_user
 
 
 def bootstrap_company(db, name: str):
@@ -35,6 +40,46 @@ def test_company_bootstrap_creates_owner(db):
     assert owner.company_id == company.id
     assert owner.role == "owner"
     assert owner.email == "owner@acme.example.com"
+    assert owner.password_hash != "super-secret"
+    assert verify_password("super-secret", owner.password_hash)
+
+
+def test_login_works_without_company_id_and_user_can_change_password(db):
+    _, owner = bootstrap_company(db, "Acme")
+
+    assert authenticate_user(db, email=owner.email, password="super-secret") == owner
+
+    change_own_password(
+        db,
+        user=owner,
+        payload=PasswordChangeRequest(
+            current_password="super-secret",
+            new_password="new-super-secret",
+        ),
+    )
+
+    assert authenticate_user(db, email=owner.email, password="super-secret") is None
+    assert authenticate_user(db, email=owner.email, password="new-super-secret") == owner
+
+
+def test_superadmin_access_can_cross_tenant_scope(db):
+    _, owner = bootstrap_company(db, "Acme")
+    swateck, _ = bootstrap_company(db, "Swateck")
+    superadmin = User(
+        company_id=swateck.id,
+        name="Superusuario Swateck",
+        email="admin@swateck.com",
+        password_hash="not-used",
+        role="superadmin",
+    )
+    db.add(superadmin)
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        get_user(db, company_id=swateck.id, user_id=owner.id)
+    assert exc.value.status_code == 404
+
+    assert get_user(db, company_id=None, user_id=owner.id).id == owner.id
 
 
 def test_product_lookup_is_tenant_scoped(db):

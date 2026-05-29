@@ -1,26 +1,408 @@
 from datetime import UTC, datetime
+from decimal import Decimal
+import re
 from uuid import UUID
 
+import httpx
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.ai.models import AiInteractiveTemplate
+from app.ai.runtime import AutoReplyResult, generate_auto_reply
 from app.contacts.service import get_or_create_contact
 from app.conversations.service import append_message, get_or_create_open_conversation
-from app.core.crypto import encrypt_secret
+from app.core.config import get_settings
+from app.core.crypto import decrypt_secret, encrypt_secret
 from app.events.service import create_event
+from app.messages.models import Message
+from app.products.models import Product
+from app.realtime import realtime_manager
 from app.whatsapp.models import WhatsAppAccount
-from app.whatsapp.schemas import WhatsAppAccountCreate
+from app.whatsapp.schemas import (
+    WhatsAppAccountCreate,
+    WhatsAppAccountTestRead,
+    WhatsAppCatalogSyncRequest,
+    WhatsAppCatalogSyncResponse,
+    WhatsAppSendButtonsRequest,
+    WhatsAppSendProductCardsFromDbRequest,
+    WhatsAppSendProductCardsRequest,
+    WhatsAppSendTextRequest,
+    WhatsAppSendTextResponse,
+)
+
+GRAPH_API_BASE_URL = "https://graph.facebook.com"
+
+
+def _normalize_phone(phone: str) -> str:
+    return phone.strip().replace("+", "").replace(" ", "").replace("-", "")
+
+
+def _to_decimal_price(value: object) -> Decimal:
+    if isinstance(value, (int, float, Decimal)):
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return Decimal("0")
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return Decimal("0")
+        numeric_match = re.search(r"([0-9]+(?:[.,][0-9]+)?)", text.replace(".", "").replace(",", "."))
+        if not numeric_match:
+            return Decimal("0")
+        try:
+            return Decimal(numeric_match.group(1))
+        except Exception:
+            return Decimal("0")
+    if isinstance(value, dict):
+        amount = value.get("amount")
+        if amount is not None:
+            try:
+                amount_decimal = Decimal(str(amount))
+                offset = value.get("offset")
+                if isinstance(offset, int) and offset > 0:
+                    return amount_decimal / (Decimal("10") ** offset)
+                return amount_decimal
+            except Exception:
+                return Decimal("0")
+    return Decimal("0")
+
+
+def _meta_request(
+    method: str,
+    path: str,
+    *,
+    access_token: str,
+    json_body: dict | None = None,
+    params: dict | None = None,
+) -> dict:
+    settings = get_settings()
+    url = f"{GRAPH_API_BASE_URL}/{settings.whatsapp_graph_api_version}/{path.lstrip('/')}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+    try:
+        with httpx.Client(timeout=20) as client:
+            response = client.request(
+                method,
+                url,
+                headers=headers,
+                json=json_body,
+                params=params,
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Meta request failed: {exc.__class__.__name__}",
+        ) from exc
+
+    data = response.json() if response.content else {}
+    if response.status_code >= 400:
+        error = data.get("error", {}) if isinstance(data, dict) else {}
+        detail = error.get("message") or response.text or "Meta API error"
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
+    return data if isinstance(data, dict) else {"raw": data}
+
+
+def _send_text_with_account(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    to: str,
+    body: str,
+    source: str = "agent",
+) -> WhatsAppSendTextResponse:
+    recipient = _normalize_phone(to)
+    meta_payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "text",
+        "text": {"preview_url": False, "body": body},
+    }
+    data = _meta_request(
+        "POST",
+        f"/{account.phone_number_id}/messages",
+        access_token=decrypt_secret(account.access_token_encrypted),
+        json_body=meta_payload,
+    )
+    meta_message_id = None
+    if messages := data.get("messages"):
+        meta_message_id = messages[0].get("id")
+
+    contact = get_or_create_contact(
+        db,
+        company_id=account.company_id,
+        phone=recipient,
+        metadata={"whatsapp": {"phone_number_id": account.phone_number_id}},
+    )
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=account.company_id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    message = append_message(
+        db,
+        company_id=account.company_id,
+        conversation_id=conversation.id,
+        sender_type="agent",
+        content=body,
+        message_type="text",
+        external_message_id=meta_message_id,
+        metadata={
+            "raw": data,
+            "sent_at": datetime.now(UTC).isoformat(),
+            "source": source,
+        },
+    )
+    create_event(
+        db,
+        company_id=account.company_id,
+        event_type="message.sent",
+        payload={
+            "conversation_id": str(conversation.id),
+            "contact_id": str(contact.id),
+            "message_id": str(message.id),
+            "meta_message_id": meta_message_id,
+            "source": source,
+        },
+    )
+    db.commit()
+    realtime_manager.publish(
+        account.company_id,
+        "message.sent",
+        {
+            "conversation_id": str(conversation.id),
+            "contact_id": str(contact.id),
+            "message_id": str(message.id),
+            "meta_message_id": meta_message_id,
+            "source": source,
+        },
+    )
+    return WhatsAppSendTextResponse(
+        ok=True,
+        meta_message_id=meta_message_id,
+        contact_id=contact.id,
+        conversation_id=conversation.id,
+        message_id=message.id,
+        raw=data,
+    )
+
+
+def _send_interactive_with_account(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    to: str,
+    interactive_payload: dict,
+    fallback_text: str,
+    source: str,
+) -> WhatsAppSendTextResponse:
+    recipient = _normalize_phone(to)
+    meta_payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "interactive",
+        "interactive": interactive_payload,
+    }
+    data = _meta_request(
+        "POST",
+        f"/{account.phone_number_id}/messages",
+        access_token=decrypt_secret(account.access_token_encrypted),
+        json_body=meta_payload,
+    )
+    meta_message_id = None
+    if messages := data.get("messages"):
+        meta_message_id = messages[0].get("id")
+
+    contact = get_or_create_contact(
+        db,
+        company_id=account.company_id,
+        phone=recipient,
+        metadata={"whatsapp": {"phone_number_id": account.phone_number_id}},
+    )
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=account.company_id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    message = append_message(
+        db,
+        company_id=account.company_id,
+        conversation_id=conversation.id,
+        sender_type="agent",
+        content=fallback_text,
+        message_type="interactive",
+        external_message_id=meta_message_id,
+        metadata={
+            "raw": data,
+            "interactive": interactive_payload,
+            "sent_at": datetime.now(UTC).isoformat(),
+            "source": source,
+        },
+    )
+    create_event(
+        db,
+        company_id=account.company_id,
+        event_type="message.sent",
+        payload={
+            "conversation_id": str(conversation.id),
+            "contact_id": str(contact.id),
+            "message_id": str(message.id),
+            "meta_message_id": meta_message_id,
+            "source": source,
+        },
+    )
+    db.commit()
+    realtime_manager.publish(
+        account.company_id,
+        "message.sent",
+        {
+            "conversation_id": str(conversation.id),
+            "contact_id": str(contact.id),
+            "message_id": str(message.id),
+            "meta_message_id": meta_message_id,
+            "source": source,
+        },
+    )
+    return WhatsAppSendTextResponse(
+        ok=True,
+        meta_message_id=meta_message_id,
+        contact_id=contact.id,
+        conversation_id=conversation.id,
+        message_id=message.id,
+        raw=data,
+    )
+
+
+def _is_duplicate_external_message(
+    db: Session, *, company_id: UUID, external_message_id: str | None
+) -> bool:
+    if not external_message_id:
+        return False
+    return (
+        db.scalar(
+            select(Message.id).where(
+                Message.company_id == company_id,
+                Message.external_message_id == external_message_id,
+            )
+        )
+        is not None
+    )
+
+
+def _send_action_template(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    to: str,
+    action_key: str,
+    fallback_text: str,
+) -> WhatsAppSendTextResponse | None:
+    template = db.scalar(
+        select(AiInteractiveTemplate).where(
+            AiInteractiveTemplate.company_id == account.company_id,
+            AiInteractiveTemplate.action_key == action_key,
+            AiInteractiveTemplate.active.is_(True),
+        )
+    )
+    if template is None:
+        return None
+
+    options = template.options if isinstance(template.options, list) else []
+    if not options:
+        return None
+
+    if template.template_type == "list":
+        interactive_payload = {
+            "type": "list",
+            "body": {"text": template.body_text},
+            "action": {
+                "button": template.button_text or "Ver opciones",
+                "sections": [
+                    {
+                        "title": template.section_title or "Opciones",
+                        "rows": [
+                            {
+                                "id": str(item.get("id") or ""),
+                                "title": str(item.get("title") or "")[:24],
+                                "description": str(item.get("description") or "")[:72],
+                            }
+                            for item in options
+                            if str(item.get("id") or "").strip() and str(item.get("title") or "").strip()
+                        ],
+                    }
+                ],
+            },
+        }
+    else:
+        interactive_payload = {
+            "type": "button",
+            "body": {"text": template.body_text},
+            "action": {
+                "buttons": [
+                    {
+                        "type": "reply",
+                        "reply": {
+                            "id": str(item.get("id") or "")[:256],
+                            "title": str(item.get("title") or "")[:20],
+                        },
+                    }
+                    for item in options[:3]
+                    if str(item.get("id") or "").strip() and str(item.get("title") or "").strip()
+                ]
+            },
+        }
+    if template.footer_text:
+        interactive_payload["footer"] = {"text": template.footer_text}
+    response = _send_interactive_with_account(
+        db,
+        account=account,
+        to=to,
+        interactive_payload=interactive_payload,
+        fallback_text=fallback_text,
+        source=f"ai_action:{action_key}",
+    )
+    sent_message = db.get(Message, response.message_id)
+    if sent_message is not None:
+        metadata = sent_message.metadata_json if isinstance(sent_message.metadata_json, dict) else {}
+        metadata["ai_action"] = {
+            "action_key": action_key,
+            "template_id": str(template.id),
+            "template_name": template.name,
+            "template_type": template.template_type,
+            "sent_as_interactive": True,
+        }
+        sent_message.metadata_json = metadata
+        db.commit()
+    return response
 
 
 def create_account(db: Session, *, company_id: UUID, payload: WhatsAppAccountCreate) -> WhatsAppAccount:
-    account = WhatsAppAccount(
-        company_id=company_id,
-        phone_number_id=payload.phone_number_id,
-        business_account_id=payload.business_account_id,
-        access_token_encrypted=encrypt_secret(payload.access_token),
-        verify_token=payload.verify_token,
+    settings = get_settings()
+    verify_token = payload.verify_token or settings.whatsapp_verify_token
+    if not verify_token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Verify token is required",
+        )
+    account = db.scalar(
+        select(WhatsAppAccount).where(
+            WhatsAppAccount.company_id == company_id,
+            WhatsAppAccount.phone_number_id == payload.phone_number_id,
+        )
     )
-    db.add(account)
+    if account is None:
+        account = WhatsAppAccount(company_id=company_id, phone_number_id=payload.phone_number_id)
+        db.add(account)
+    account.business_account_id = payload.business_account_id
+    account.access_token_encrypted = encrypt_secret(payload.access_token)
+    account.verify_token = verify_token
+    account.status = "active"
     db.commit()
     db.refresh(account)
     return account
@@ -59,6 +441,295 @@ def find_account_by_phone_number_id(
     )
 
 
+def get_account(
+    db: Session,
+    *,
+    company_id: UUID,
+    account_id: UUID | None = None,
+) -> WhatsAppAccount:
+    statement = select(WhatsAppAccount).where(
+        WhatsAppAccount.company_id == company_id,
+        WhatsAppAccount.status == "active",
+    )
+    if account_id is not None:
+        statement = statement.where(WhatsAppAccount.id == account_id)
+    else:
+        statement = statement.order_by(WhatsAppAccount.created_at.desc())
+    account = db.scalar(statement)
+    if account is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="WhatsApp account not configured",
+        )
+    return account
+
+
+def test_account(db: Session, *, company_id: UUID, account_id: UUID) -> WhatsAppAccountTestRead:
+    account = get_account(db, company_id=company_id, account_id=account_id)
+    data = _meta_request(
+        "GET",
+        f"/{account.phone_number_id}",
+        access_token=decrypt_secret(account.access_token_encrypted),
+        params={"fields": "id,display_phone_number,verified_name,quality_rating"},
+    )
+    return WhatsAppAccountTestRead(
+        ok=True,
+        phone_number_id=str(data.get("id") or account.phone_number_id),
+        display_phone_number=data.get("display_phone_number"),
+        verified_name=data.get("verified_name"),
+        quality_rating=data.get("quality_rating"),
+        raw=data,
+    )
+
+
+def send_text_message(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: WhatsAppSendTextRequest,
+) -> WhatsAppSendTextResponse:
+    account = get_account(db, company_id=company_id, account_id=payload.account_id)
+    return _send_text_with_account(
+        db,
+        account=account,
+        to=payload.to,
+        body=payload.body,
+        source="agent_manual",
+    )
+
+
+def send_buttons_message(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: WhatsAppSendButtonsRequest,
+) -> WhatsAppSendTextResponse:
+    account = get_account(db, company_id=company_id, account_id=payload.account_id)
+    interactive_payload = {
+        "type": "button",
+        "body": {"text": payload.body},
+        "action": {
+            "buttons": [
+                {"type": "reply", "reply": {"id": button.id, "title": button.title}}
+                for button in payload.buttons
+            ]
+        },
+    }
+    if payload.footer:
+        interactive_payload["footer"] = {"text": payload.footer}
+    return _send_interactive_with_account(
+        db,
+        account=account,
+        to=payload.to,
+        interactive_payload=interactive_payload,
+        fallback_text=payload.body,
+        source="agent_manual_buttons",
+    )
+
+
+def send_product_cards_message(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: WhatsAppSendProductCardsRequest,
+) -> WhatsAppSendTextResponse:
+    account = get_account(db, company_id=company_id, account_id=payload.account_id)
+    if len(payload.items) == 1:
+        interactive_payload = {
+            "type": "product",
+            "body": {"text": payload.body},
+            "action": {
+                "catalog_id": payload.catalog_id,
+                "product_retailer_id": payload.items[0].product_retailer_id,
+            },
+        }
+    else:
+        interactive_payload = {
+            "type": "product_list",
+            "body": {"text": payload.body},
+            "action": {
+                "catalog_id": payload.catalog_id,
+                "sections": [
+                    {
+                        "title": payload.section_title,
+                        "product_items": [
+                            {"product_retailer_id": item.product_retailer_id}
+                            for item in payload.items
+                        ],
+                    }
+                ],
+            },
+        }
+    return _send_interactive_with_account(
+        db,
+        account=account,
+        to=payload.to,
+        interactive_payload=interactive_payload,
+        fallback_text=payload.body,
+        source="agent_manual_product_cards",
+    )
+
+
+def send_product_cards_from_db(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: WhatsAppSendProductCardsFromDbRequest,
+) -> WhatsAppSendTextResponse:
+    account = get_account(db, company_id=company_id, account_id=payload.account_id)
+    products = list(
+        db.scalars(
+            select(Product).where(
+                Product.company_id == company_id,
+                Product.id.in_(payload.product_ids),
+                Product.status == "active",
+            )
+        )
+    )
+    if not products:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="No active products found for selected ids",
+        )
+    missing_mapping = [
+        product.name
+        for product in products
+        if not product.whatsapp_catalog_id or not product.whatsapp_product_retailer_id
+    ]
+    if missing_mapping:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Products without WhatsApp mapping: {', '.join(missing_mapping[:3])}",
+        )
+    catalog_ids = {product.whatsapp_catalog_id for product in products if product.whatsapp_catalog_id}
+    if len(catalog_ids) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="All selected products must belong to the same WhatsApp catalog_id",
+        )
+    catalog_id = next(iter(catalog_ids))
+    items = [
+        {"product_retailer_id": product.whatsapp_product_retailer_id}
+        for product in products
+        if product.whatsapp_product_retailer_id
+    ]
+    if len(items) == 1:
+        interactive_payload = {
+            "type": "product",
+            "body": {"text": payload.body},
+            "action": {
+                "catalog_id": catalog_id,
+                "product_retailer_id": items[0]["product_retailer_id"],
+            },
+        }
+    else:
+        interactive_payload = {
+            "type": "product_list",
+            "body": {"text": payload.body},
+            "action": {
+                "catalog_id": catalog_id,
+                "sections": [
+                    {
+                        "title": payload.section_title,
+                        "product_items": items,
+                    }
+                ],
+            },
+        }
+    return _send_interactive_with_account(
+        db,
+        account=account,
+        to=payload.to,
+        interactive_payload=interactive_payload,
+        fallback_text=payload.body,
+        source="agent_product_cards_db",
+    )
+
+
+def sync_catalog_products(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: WhatsAppCatalogSyncRequest,
+) -> WhatsAppCatalogSyncResponse:
+    account = get_account(db, company_id=company_id, account_id=payload.account_id)
+    try:
+        data = _meta_request(
+            "GET",
+            f"/{payload.catalog_id}/products",
+            access_token=decrypt_secret(account.access_token_encrypted),
+            params={"fields": "retailer_id,name,description,price,currency,availability"},
+        )
+    except HTTPException as exc:
+        detail = str(exc.detail or "")
+        if "nonexisting field (products)" in detail.lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "El ID ingresado no corresponde a un catalogo de Meta. "
+                    "Parece un ID de conjunto (por ejemplo 'All Products'). "
+                    "En SwaFlow debes usar el ID del catalogo, no el ID del conjunto."
+                ),
+            ) from None
+        raise
+    rows = data.get("data", []) if isinstance(data, dict) else []
+    if not isinstance(rows, list):
+        rows = []
+
+    created = 0
+    updated = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        retailer_id = str(row.get("retailer_id") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if not retailer_id or not name:
+            continue
+        existing = db.scalar(
+            select(Product).where(
+                Product.company_id == company_id,
+                Product.whatsapp_product_retailer_id == retailer_id,
+            )
+        )
+        description = str(row.get("description") or "").strip() or None
+        currency = str(row.get("currency") or "COP").strip() or "COP"
+        availability = str(row.get("availability") or "").lower()
+        status = "inactive" if availability in {"out of stock", "discontinued"} else "active"
+        price = _to_decimal_price(row.get("price"))
+        if price <= 0:
+            price = Decimal("1")
+
+        if existing is None:
+            db.add(
+                Product(
+                    company_id=company_id,
+                    name=name,
+                    description=description,
+                    sku=None,
+                    price=price,
+                    currency=currency,
+                    status=status,
+                    whatsapp_catalog_id=payload.catalog_id,
+                    whatsapp_product_retailer_id=retailer_id,
+                    metadata_json={"source": "meta_catalog_sync"},
+                )
+            )
+            created += 1
+        else:
+            existing.name = name
+            existing.description = description
+            existing.price = price
+            existing.currency = currency
+            existing.status = status
+            existing.whatsapp_catalog_id = payload.catalog_id
+            meta = existing.metadata_json if isinstance(existing.metadata_json, dict) else {}
+            meta["source"] = "meta_catalog_sync"
+            existing.metadata_json = meta
+            updated += 1
+    db.commit()
+    return WhatsAppCatalogSyncResponse(fetched=len(rows), created=created, updated=updated)
+
+
 def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
     processed = 0
     skipped = 0
@@ -85,6 +756,14 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                 if not customer_phone:
                     skipped += 1
                     continue
+                external_message_id = incoming.get("id")
+                if _is_duplicate_external_message(
+                    db,
+                    company_id=account.company_id,
+                    external_message_id=external_message_id,
+                ):
+                    skipped += 1
+                    continue
                 text_body = incoming.get("text", {}).get("body")
                 message_type = incoming.get("type", "text")
                 contact = get_or_create_contact(
@@ -100,14 +779,14 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                     contact_id=contact.id,
                     channel="whatsapp",
                 )
-                append_message(
+                message = append_message(
                     db,
                     company_id=account.company_id,
                     conversation_id=conversation.id,
                     sender_type="customer",
                     content=text_body,
                     message_type=message_type,
-                    external_message_id=incoming.get("id"),
+                    external_message_id=external_message_id,
                     metadata={"raw": incoming, "received_at": datetime.now(UTC).isoformat()},
                 )
                 create_event(
@@ -117,11 +796,93 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                     payload={
                         "conversation_id": str(conversation.id),
                         "contact_id": str(contact.id),
-                        "message_id": incoming.get("id"),
+                        "message_id": external_message_id,
                     },
                 )
                 db.commit()
+                realtime_manager.publish(
+                    account.company_id,
+                    "message.received",
+                    {
+                        "conversation_id": str(conversation.id),
+                        "contact_id": str(contact.id),
+                        "message_id": str(message.id),
+                        "external_message_id": external_message_id,
+                        "unread_count": conversation.unread_count,
+                    },
+                )
+                if (
+                    message_type == "text"
+                    and text_body
+                    and conversation.status in {"open", "waiting_customer"}
+                ):
+                    ai_reply = generate_auto_reply(
+                        db,
+                        company_id=account.company_id,
+                        conversation=conversation,
+                        incoming_text=text_body,
+                    )
+                    if ai_reply:
+                        action_sent = False
+                        if isinstance(ai_reply, AutoReplyResult) and ai_reply.action:
+                            action_sent = (
+                                _send_action_template(
+                                    db,
+                                    account=account,
+                                    to=customer_phone,
+                                    action_key=ai_reply.action,
+                                    fallback_text=ai_reply.reply_text,
+                                )
+                                is not None
+                            )
+                        if not action_sent:
+                            body = ai_reply.reply_text if isinstance(ai_reply, AutoReplyResult) else str(ai_reply)
+                            response = _send_text_with_account(
+                                db,
+                                account=account,
+                                to=customer_phone,
+                                body=body,
+                                source="ai_auto_reply",
+                            )
+                            if isinstance(ai_reply, AutoReplyResult):
+                                sent_message = db.get(Message, response.message_id)
+                                if sent_message is not None:
+                                    metadata = (
+                                        sent_message.metadata_json
+                                        if isinstance(sent_message.metadata_json, dict)
+                                        else {}
+                                    )
+                                    metadata["ai_action"] = {
+                                        "action_key": ai_reply.action,
+                                        "sent_as_interactive": False,
+                                    }
+                                    sent_message.metadata_json = metadata
+                                    db.commit()
+                processed += 1
+
+            for status_update in value.get("statuses", []):
+                create_event(
+                    db,
+                    company_id=account.company_id,
+                    event_type="message.status",
+                    payload={
+                        "message_id": status_update.get("id"),
+                        "status": status_update.get("status"),
+                        "recipient_id": status_update.get("recipient_id"),
+                        "timestamp": status_update.get("timestamp"),
+                        "raw": status_update,
+                    },
+                )
+                db.commit()
+                realtime_manager.publish(
+                    account.company_id,
+                    "message.status",
+                    {
+                        "message_id": status_update.get("id"),
+                        "status": status_update.get("status"),
+                        "recipient_id": status_update.get("recipient_id"),
+                    },
+                )
                 processed += 1
 
     return processed, skipped
-

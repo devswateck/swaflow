@@ -3,6 +3,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.events.dispatcher import dispatch_event
 from app.events.models import Event
 
 
@@ -10,6 +11,7 @@ def create_event(db: Session, *, company_id: UUID, event_type: str, payload: dic
     event = Event(company_id=company_id, event_type=event_type, payload=payload)
     db.add(event)
     db.flush()
+    dispatch_event(db, event)
     return event
 
 
@@ -23,4 +25,3 @@ def list_events(db: Session, *, company_id: UUID, limit: int, offset: int) -> li
             .offset(offset)
         )
     )
-

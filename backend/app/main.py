@@ -9,21 +9,28 @@ from app.contacts.routes import router as contacts_router
 from app.conversations.routes import router as conversations_router
 from app.core.config import get_settings
 from app.events.routes import router as events_router
+from app.funnels.routes import router as funnels_router
 from app.integrations.routes import router as integrations_router
 from app.inventory.routes import router as inventory_router
 from app.orders.routes import router as orders_router
 from app.payments.routes import router as payments_router
 from app.products.routes import router as products_router
+from app.realtime import realtime_manager, router as realtime_router
 from app.users.routes import router as users_router
 from app.whatsapp.routes import router as whatsapp_router
 
 settings = get_settings()
+cors_allow_origins = [
+    origin.strip()
+    for origin in settings.cors_allow_origins.split(",")
+    if origin.strip()
+]
 
 app = FastAPI(title=settings.app_name, version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=cors_allow_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -33,6 +40,13 @@ app.add_middleware(
 @app.get("/health", tags=["health"])
 def health() -> dict[str, str]:
     return {"status": "ok", "environment": settings.app_env}
+
+
+@app.on_event("startup")
+async def configure_realtime_loop() -> None:
+    import asyncio
+
+    realtime_manager.set_loop(asyncio.get_running_loop())
 
 
 app.include_router(auth_router)
@@ -47,6 +61,7 @@ app.include_router(orders_router)
 app.include_router(payments_router)
 app.include_router(appointments_router)
 app.include_router(ai_router)
+app.include_router(funnels_router)
 app.include_router(integrations_router)
 app.include_router(events_router)
-
+app.include_router(realtime_router)

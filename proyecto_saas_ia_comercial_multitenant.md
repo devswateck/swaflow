@@ -1382,3 +1382,195 @@ Swatek Flow AI
 El producto será una plataforma SaaS multi-tenant para automatizar ventas conversacionales por WhatsApp mediante IA. La IA atenderá clientes, identificará intención de compra, consultará catálogo e inventario mediante tools controladas, generará links de pago, registrará ventas confirmadas por pasarela y permitirá agendar citas cuando el cliente no compre inmediatamente.
 
 El backend en FastAPI será el núcleo del sistema y la fuente de verdad. n8n se usará únicamente para automatizaciones periféricas como correos, notificaciones, calendarios y sincronizaciones. Las operaciones críticas como pagos, inventario, órdenes, clientes y estados de conversación estarán controladas directamente por el backend.
+
+---
+
+## 27. Bitácora de implementación real (actualizado 2026-05-29)
+
+Esta sección resume lo que ya quedó construido y operativo en el proyecto, incluyendo backend, frontend, despliegue, WhatsApp, IA y catálogo.
+
+### 27.1 Estado general
+
+- Proyecto operativo en producción bajo dominio:
+  - `https://swaflow.swateck.com`
+- Arquitectura separada en carpetas:
+  - `backend/`
+  - `frontend/`
+- Plataforma multi-tenant activa (aislamiento por `company_id`).
+- Base de datos MySQL conectada por túnel SSH (StackCP) en VPS.
+
+### 27.2 Infraestructura y despliegue
+
+- VPS con Docker Compose en:
+  - `/docker/swaflow`
+- Servicios principales:
+  - `swaflow-backend`
+  - `swaflow-frontend`
+  - `stackcp-tunnel`
+- Enrutamiento por Traefik con rutas API habilitadas para módulos críticos:
+  - `/auth`, `/companies`, `/users`, `/contacts`, `/conversations`, `/products`, `/inventory`, `/orders`, `/payments`, `/appointments`, `/ai`, `/funnels`, `/integrations`, `/outbound-webhooks`, `/events`, `/realtime`, `/whatsapp`, `/webhooks`.
+- Ajuste aplicado en producción para corregir error de enrutamiento de `/funnels`.
+
+### 27.3 Seguridad y acceso
+
+- Login con usuario/contraseña implementado.
+- Contraseñas almacenadas con hash seguro (`bcrypt` vía `passlib`).
+- Soporte de superusuario y gestión de usuarios por tenant.
+- Gestión de sesión con JWT.
+- Recomendación activa: usar siempre tokens permanentes para producción (Meta y OpenAI), nunca tokens temporales.
+
+### 27.4 WhatsApp Cloud API
+
+- Configuración de cuenta WhatsApp por tenant implementada.
+- Webhook activo:
+  - `https://swaflow.swateck.com/webhooks/whatsapp`
+- Verificación de webhook con `verify_token` almacenado en la app.
+- Recepción de mensajes entrantes y envío de salientes operativos.
+- Correcciones aplicadas:
+  - Manejo de duplicados de mensajes por `external_message_id`.
+  - Persistencia de eventos/mensajes de interacción.
+  - Corrección de errores de respuesta no JSON en rutas (`/outbound-webhooks`, `/funnels`).
+
+### 27.5 Inbox y operación conversacional
+
+- Inbox funcional con:
+  - listado de conversaciones,
+  - lectura de mensajes entrantes/salientes,
+  - envío manual de mensajes.
+- Mejoras aplicadas:
+  - actualización en tiempo real,
+  - pantalla de chat con área fija y scroll interno,
+  - permanencia de contexto de navegación al refrescar (evitar salto a dashboard),
+  - registro de acciones interactivas dentro del historial de mensajes.
+- Ajuste de sesión:
+  - se discutió ampliar inactividad a 30-60 min; quedó parametrizable.
+
+### 27.6 Módulo IA (agentes por tenant)
+
+- Configuración de agentes IA por tenant implementada.
+- Flujo activo:
+  1. Se toma `system_prompt` + reglas en base de datos.
+  2. Se agrega contexto reciente de conversación.
+  3. Se agrega contexto de catálogo/productos del tenant.
+  4. Se genera respuesta con OpenAI.
+- Integración de API key OpenAI por entorno productivo aplicada.
+- Correcciones implementadas:
+  - evitar eco/replicación de mensajes,
+  - aplicar correctamente prompt del agente activo,
+  - control de saludo inicial y reglas de conversación,
+  - soporte para reinicio de contexto conversacional cuando aplique.
+
+### 27.7 Plantillas interactivas para IA (botones/listas)
+
+- Biblioteca de plantillas interactivas implementada en backend:
+  - `GET /ai/interactive-templates`
+  - `POST /ai/interactive-templates`
+  - `PUT /ai/interactive-templates/{template_id}`
+  - `DELETE /ai/interactive-templates/{template_id}`
+- Runtime IA actualizado para devolver:
+  - `reply_text`
+  - `action` (clave de plantilla a disparar)
+- Cuando hay `action`, el backend envía mensaje interactivo de WhatsApp (botones o lista) y guarda la acción en metadata del mensaje.
+- Si no encuentra plantilla activa para la acción, hace fallback a texto normal.
+
+### 27.8 Productos y catálogo Meta
+
+- Sincronización de catálogo Meta implementada:
+  - `POST /whatsapp/catalog/sync`
+- Mapeo guardado en `products`:
+  - nombre,
+  - descripción,
+  - precio,
+  - moneda,
+  - disponibilidad/estado,
+  - `whatsapp_catalog_id`,
+  - `whatsapp_product_retailer_id`.
+- Se añadió validación para error común de Meta:
+  - si se ingresa ID de conjunto (“All Products”) en vez de ID de catálogo, la API devuelve mensaje claro.
+- Sincronización exitosa confirmada:
+  - 11 leídos, 11 creados.
+
+### 27.9 Corrección de parseo de precios Meta
+
+- Problema detectado:
+  - productos guardados en BD con `price = 1.00` pese a tener precio en catálogo.
+- Causa:
+  - parser anterior no interpretaba todos los formatos de precio de Meta y caía en fallback.
+- Solución aplicada en `backend/app/whatsapp/service.py`:
+  - parseo robusto para cadenas (`"250000 COP"`, `"COP 250000"`, `"250.000 COP"`),
+  - soporte de precio tipo objeto con `amount` y `offset`,
+  - reinicio/redeploy del backend en VPS completado.
+- Acción operativa posterior:
+  - ejecutar nuevamente `Sync catálogo` para actualizar precios reales en BD.
+
+### 27.10 Módulo Funnels
+
+- Módulo de embudos implementado (backend + frontend).
+- Permite crear funnel y pasos por tenant.
+- Integración con conversación para asignar funnel/paso.
+- Error de carga por ruteo API corregido en Traefik.
+
+### 27.11 Integraciones
+
+- Módulo de integraciones habilitado para conectar:
+  - calendario,
+  - correo/notificaciones,
+  - pasarelas,
+  - webhooks salientes.
+- Se mantiene la regla arquitectónica:
+  - backend para lógica crítica,
+  - n8n para automatización auxiliar.
+
+### 27.12 Archivos y activos creados recientemente
+
+- Importador local de productos desde Excel/fotos:
+  - `backend/scripts/import_products_from_excel.py`
+- Archivo CSV preparado para carga manual en Meta:
+  - `productos/Carga_Meta_Productos.csv`
+- Carpeta de contenidos de producto:
+  - `productos/` (Excel + imágenes por nombre)
+
+### 27.13 Estado actual de producción
+
+- Backend reiniciado y saludable:
+  - `GET /health` responde OK en producción.
+- WhatsApp operativo en recepción y envío.
+- IA responde automáticamente con agente activo.
+- Sincronización de catálogo funcionando (con token y permisos correctos).
+
+### 27.14 Pendientes inmediatos recomendados
+
+1. Re-sincronizar catálogo para refrescar precios corregidos en BD.
+2. Verificar en SQL que los 11 productos queden con precios correctos.
+3. Consolidar UX final de IA interactiva (solo Sync catálogo + biblioteca de plantillas).
+4. Afinar prompt operativo por tenant y reglas de transición en funnels.
+5. Documentar runbook de producción (deploy, rollback, tokens, verificaciones post-restart).
+
+### 27.15 FAQ externo + reglas de seguridad en BD (local, listo para desplegar)
+
+- Se implementó en backend:
+  - nuevo campo `ai_agents.security_rules` (texto independiente del `system_prompt`),
+  - nueva tabla `ai_faq_entries` por tenant (`question`, `answer`, `active`),
+  - límite de **máximo 10 FAQs por tenant**.
+- Endpoints nuevos:
+  - `GET /ai/faqs`
+  - `POST /ai/faqs`
+  - `PUT /ai/faqs/{faq_id}`
+  - `DELETE /ai/faqs/{faq_id}`
+  - `POST /ai/faqs/upload` (archivo externo).
+- Carga de archivo FAQ soporta:
+  - `.csv`, `.txt`, `.json`, `.xlsx`
+  - columnas esperadas: `question/answer` o `pregunta/respuesta`.
+- Runtime IA actualizado:
+  - usa FAQs desde `ai_faq_entries` como contexto principal,
+  - aplica `security_rules` desde `ai_agents`,
+  - mantiene fallback legado para compatibilidad si faltan datos.
+- Frontend IA actualizado:
+  - bloque **Reglas de seguridad** (guardado en `ai_agents.security_rules`),
+  - gestor de FAQ (crear, editar, eliminar, cargar archivo),
+  - contador visible `N/10`.
+- Validación local completada:
+  - `backend`: compile OK + tests `5 passed`,
+  - `frontend`: build OK.
+
+> Nota operativa: cambios hechos localmente; no se desplegó al VPS en esta iteración.

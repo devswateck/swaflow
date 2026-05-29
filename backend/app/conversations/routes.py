@@ -10,6 +10,8 @@ from app.conversations.schemas import (
     ConversationAssign,
     ConversationCreate,
     ConversationDetailRead,
+    ConversationFunnelAssign,
+    ConversationListItemRead,
     ConversationRead,
     ConversationSendMessage,
 )
@@ -21,21 +23,25 @@ from app.users.models import User
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
 
-@router.get("", response_model=list[ConversationRead])
+@router.get("", response_model=list[ConversationListItemRead])
 def list_conversations(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     status: str | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> list[Conversation]:
-    return service.list_conversations(
+) -> list[dict]:
+    conversations = service.list_conversations(
         db,
         company_id=current_user.company_id,
         limit=limit,
         offset=offset,
         status_filter=status,
     )
+    return [
+        service.conversation_to_inbox_item(db, conversation=conversation)
+        for conversation in conversations
+    ]
 
 
 @router.post("", response_model=ConversationRead, status_code=201)
@@ -59,7 +65,10 @@ def get_conversation(
     messages = service.get_conversation_messages(
         db, company_id=current_user.company_id, conversation_id=conversation_id
     )
-    return {**conversation.__dict__, "messages": messages}
+    return {
+        **service.conversation_to_inbox_item(db, conversation=conversation),
+        "messages": messages,
+    }
 
 
 @router.post("/{conversation_id}/assign", response_model=ConversationRead)
@@ -77,6 +86,23 @@ def assign_conversation(
     )
 
 
+@router.post("/{conversation_id}/assign-funnel", response_model=ConversationRead)
+def assign_conversation_funnel(
+    conversation_id: UUID,
+    payload: ConversationFunnelAssign,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Conversation:
+    return service.assign_conversation_funnel(
+        db,
+        company_id=current_user.company_id,
+        conversation_id=conversation_id,
+        funnel_id=payload.funnel_id,
+        funnel_step_id=payload.funnel_step_id,
+        current_step=payload.current_step,
+    )
+
+
 @router.post("/{conversation_id}/close", response_model=ConversationRead)
 def close_conversation(
     conversation_id: UUID,
@@ -84,6 +110,17 @@ def close_conversation(
     db: Session = Depends(get_db),
 ) -> Conversation:
     return service.close_conversation(
+        db, company_id=current_user.company_id, conversation_id=conversation_id
+    )
+
+
+@router.post("/{conversation_id}/read", response_model=ConversationRead)
+def mark_conversation_read(
+    conversation_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Conversation:
+    return service.mark_conversation_read(
         db, company_id=current_user.company_id, conversation_id=conversation_id
     )
 
@@ -102,4 +139,3 @@ def send_message(
         sender_type="agent",
         content=payload.content,
     )
-

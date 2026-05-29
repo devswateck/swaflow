@@ -17,5 +17,6 @@ class Product(Base, IdMixin, TenantMixin, TimestampMixin):
     price: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
     currency: Mapped[str] = mapped_column(String(10), nullable=False, default="COP")
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="active")
+    whatsapp_catalog_id: Mapped[str | None] = mapped_column(String(100))
+    whatsapp_product_retailer_id: Mapped[str | None] = mapped_column(String(200))
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
-

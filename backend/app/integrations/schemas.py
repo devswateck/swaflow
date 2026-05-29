@@ -22,6 +22,7 @@ class IntegrationRead(TimestampedRead):
     type: str
     config: dict
     status: str
+    credentials_configured: bool
 
 
 class OutboundWebhookCreate(BaseModel):
@@ -43,4 +44,4 @@ class OutboundWebhookRead(TimestampedRead):
     event_type: str
     target_url: str
     active: bool
-
+    secret_configured: bool
