@@ -16,7 +16,9 @@ import {
   CalendarDays,
   ChartNoAxesCombined,
   CheckCircle2,
+  ClipboardCopy,
   CreditCard,
+  ExternalLink,
   Gauge,
   GitBranchPlus,
   Inbox,
@@ -115,6 +117,12 @@ type AiFaqUploadResult = {
   updated: number;
 };
 
+type ToastState = {
+  id: number;
+  tone: "success" | "error";
+  message: string;
+};
+
 type AiClassifyResponse = {
   intent: string;
   confidence: number;
@@ -205,6 +213,7 @@ type IntegrationDefinition = {
   subtitle: string;
   icon: typeof Bot;
   secretLabel: string;
+  extraSecretLabel?: string;
   defaultConfig: Record<string, string>;
   fields: IntegrationField[];
 };
@@ -212,6 +221,7 @@ type IntegrationDefinition = {
 type IntegrationFormValue = {
   config: Record<string, string>;
   credentials: string;
+  secondaryCredentials: string;
   status: string;
 };
 
@@ -274,6 +284,34 @@ type ApiConversationDetail = ApiConversation & {
   messages: ApiMessage[];
 };
 
+type ApiProduct = {
+  id: string;
+  name: string;
+  sku: string | null;
+  price: number | string;
+  currency: string;
+  status: string;
+};
+
+type ApiOrder = {
+  id: string;
+  contact_id: string;
+  status: string;
+  total: number | string;
+  currency: string;
+  payment_provider: string | null;
+  payment_reference: string | null;
+  payment_link: string | null;
+  payment_status: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+};
+
+type PaymentLinkResponse = {
+  payment_link: string;
+  payment_reference: string;
+};
+
 type PageKey =
   | "dashboard"
   | "inbox"
@@ -329,8 +367,14 @@ type Order = {
   id: string;
   contact: string;
   total: number;
+  currency: string;
   status: string;
-  payment: string;
+  paymentStatus: string;
+  paymentProvider: string | null;
+  paymentReference: string | null;
+  paymentLink: string | null;
+  paymentExpiresAt: string | null;
+  createdAt: string;
 };
 
 type Appointment = {
@@ -402,22 +446,10 @@ const pageCopy: Record<PageKey, { title: string; subtitle: string }> = {
   },
 };
 
-const initialProducts: Product[] = [
-  { id: "prod-1", name: "Camiseta negra", sku: "CAM-NEG-M", price: 80000, currency: "COP", status: "active" },
-  { id: "prod-2", name: "Gorra premium", sku: "GOR-PRE", price: 65000, currency: "COP", status: "active" },
-  { id: "prod-3", name: "Hoodie urbano", sku: "HOO-URB", price: 180000, currency: "COP", status: "active" },
-];
-
 const initialInventory: InventoryItem[] = [
   { productId: "prod-1", available: 12, reserved: 2 },
   { productId: "prod-2", available: 8, reserved: 1 },
   { productId: "prod-3", available: 5, reserved: 0 },
-];
-
-const initialOrders: Order[] = [
-  { id: "ord-101", contact: "Laura Mejia", total: 80000, status: "waiting_payment", payment: "Link enviado" },
-  { id: "ord-102", contact: "Felipe Torres", total: 245000, status: "paid", payment: "Confirmado" },
-  { id: "ord-103", contact: "Diana Perez", total: 0, status: "pending", payment: "Sin link" },
 ];
 
 const initialAppointments: Appointment[] = [
@@ -559,13 +591,15 @@ const integrationDefinitions: IntegrationDefinition[] = [
     title: "Pasarela de pago",
     subtitle: "Links de pago y webhooks",
     icon: CreditCard,
-    secretLabel: "Llave privada o access token",
+    secretLabel: "Llave privada Wompi",
+    extraSecretLabel: "Clave de eventos Wompi",
     defaultConfig: {
       provider: "wompi",
       environment: "sandbox",
       currency: "COP",
       public_key: "",
       redirect_url: "",
+      payment_link_ttl_minutes: "120",
     },
     fields: [
       {
@@ -589,6 +623,7 @@ const integrationDefinitions: IntegrationDefinition[] = [
       { key: "currency", label: "Moneda", placeholder: "COP" },
       { key: "public_key", label: "Llave publica", placeholder: "pub_..." },
       { key: "redirect_url", label: "URL retorno", placeholder: "https://swaflow.swateck.com/orders" },
+      { key: "payment_link_ttl_minutes", label: "Vigencia link (min)", placeholder: "120" },
     ],
   },
   {
@@ -646,6 +681,7 @@ function createIntegrationForm(definition: IntegrationDefinition): IntegrationFo
   return {
     config: { ...definition.defaultConfig },
     credentials: "",
+    secondaryCredentials: "",
     status: "pending",
   };
 }
@@ -788,6 +824,44 @@ function mapApiMessage(message: ApiMessage): InboxMessage {
   };
 }
 
+function mapApiProduct(product: ApiProduct): Product {
+  const parsedPrice = typeof product.price === "number" ? product.price : Number(product.price);
+  return {
+    id: product.id,
+    name: product.name,
+    sku: product.sku ?? "-",
+    price: Number.isFinite(parsedPrice) ? parsedPrice : 0,
+    currency: product.currency || "COP",
+    status: product.status,
+  };
+}
+
+function mapApiOrder(order: ApiOrder): Order {
+  const parsedTotal = typeof order.total === "number" ? order.total : Number(order.total);
+  const paymentMetadata =
+    order.metadata_json.payment && typeof order.metadata_json.payment === "object"
+      ? (order.metadata_json.payment as Record<string, unknown>)
+      : {};
+  const contactName =
+    order.metadata_json.contact_name ??
+    order.metadata_json.customer_name ??
+    `Contacto ${order.contact_id.slice(0, 8)}`;
+  return {
+    id: order.id,
+    contact: String(contactName),
+    total: Number.isFinite(parsedTotal) ? parsedTotal : 0,
+    currency: order.currency || "COP",
+    status: order.status,
+    paymentStatus: order.payment_status,
+    paymentProvider: order.payment_provider,
+    paymentReference: order.payment_reference,
+    paymentLink: order.payment_link,
+    paymentExpiresAt:
+      typeof paymentMetadata.expires_at === "string" ? paymentMetadata.expires_at : null,
+    createdAt: order.created_at,
+  };
+}
+
 function App() {
   const { token, setToken } = useAuthStore();
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -800,9 +874,9 @@ function App() {
   const [conversationMessages, setConversationMessages] = useState<InboxMessage[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
   const [inboxError, setInboxError] = useState("");
-  const [products, setProducts] = useState(initialProducts);
+  const [products, setProducts] = useState<Product[]>([]);
   const [inventory, setInventory] = useState(initialInventory);
-  const [orders, setOrders] = useState(initialOrders);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [appointments, setAppointments] = useState(initialAppointments);
   const [funnels, setFunnels] = useState<ApiFunnel[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -877,6 +951,20 @@ function App() {
     }
   }, []);
 
+  const loadProducts = useCallback(async () => {
+    try {
+      const response = await api<ApiProduct[]>("/products?limit=200&offset=0&include_inactive=true");
+      setProducts(response.map(mapApiProduct));
+    } catch {
+      setProducts([]);
+    }
+  }, []);
+
+  const loadOrders = useCallback(async () => {
+    const response = await api<ApiOrder[]>("/orders?limit=200&offset=0");
+    setOrders(response.map(mapApiOrder));
+  }, []);
+
   useEffect(() => {
     if (!token) {
       setCurrentUser(null);
@@ -915,7 +1003,9 @@ function App() {
     }
 
     void loadInbox({ showLoading: true });
-  }, [currentUser, loadInbox]);
+    void loadProducts();
+    void loadOrders();
+  }, [currentUser, loadInbox, loadOrders, loadProducts]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -1017,20 +1107,6 @@ function App() {
     setMobileMenuOpen(false);
   }
 
-  function addProduct() {
-    const nextNumber = products.length + 1;
-    const product: Product = {
-      id: `prod-${Date.now()}`,
-      name: `Producto nuevo ${nextNumber}`,
-      sku: `SKU-${String(nextNumber).padStart(3, "0")}`,
-      price: 50000,
-      currency: "COP",
-      status: "active",
-    };
-    setProducts((current) => [product, ...current]);
-    setInventory((current) => [{ productId: product.id, available: 0, reserved: 0 }, ...current]);
-  }
-
   function adjustInventory(productId: string, delta: number) {
     setInventory((current) =>
       current.map((item) =>
@@ -1041,14 +1117,9 @@ function App() {
     );
   }
 
-  function createPaymentLink(orderId: string) {
-    setOrders((current) =>
-      current.map((order) =>
-        order.id === orderId
-          ? { ...order, status: "waiting_payment", payment: "Link enviado" }
-          : order,
-      ),
-    );
+  async function createPaymentLink(orderId: string) {
+    await api<PaymentLinkResponse>(`/orders/${orderId}/payment-link`, { method: "POST" });
+    await loadOrders();
   }
 
   function addAppointment() {
@@ -1246,13 +1317,17 @@ function App() {
               />
             ) : null}
             {activePage === "products" ? (
-              <ProductsPage products={filteredProducts} onAddProduct={addProduct} />
+              <ProductsPage products={filteredProducts} onRefreshProducts={loadProducts} />
             ) : null}
             {activePage === "inventory" ? (
               <InventoryPage products={products} inventory={inventory} onAdjust={adjustInventory} />
             ) : null}
             {activePage === "orders" ? (
-              <OrdersPage orders={orders} onCreatePaymentLink={createPaymentLink} />
+              <OrdersPage
+                orders={orders}
+                onCreatePaymentLink={createPaymentLink}
+                onRefresh={loadOrders}
+              />
             ) : null}
             {activePage === "appointments" ? (
               <AppointmentsPage appointments={appointments} onAddAppointment={addAppointment} />
@@ -1753,29 +1828,79 @@ function InboxPage({
   );
 }
 
-function ProductsPage({ products, onAddProduct }: { products: Product[]; onAddProduct: () => void }) {
+function ProductsPage({
+  products,
+  onRefreshProducts,
+}: {
+  products: Product[];
+  onRefreshProducts: () => Promise<void>;
+}) {
+  const [catalogId, setCatalogId] = useState("");
+  const [syncing, setSyncing] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+
+  async function syncCatalogProducts() {
+    if (!catalogId.trim()) {
+      return;
+    }
+    setSyncing(true);
+    setNotice("");
+    setError("");
+    try {
+      const response = await api<{ fetched: number; created: number; updated: number }>(
+        "/whatsapp/catalog/sync",
+        {
+          method: "POST",
+          body: JSON.stringify({ catalog_id: catalogId.trim() }),
+        },
+      );
+      await onRefreshProducts();
+      setNotice(
+        `Actualizacion completada: ${response.fetched} leidos, ${response.created} creados, ${response.updated} actualizados`,
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible actualizar el catalogo");
+    } finally {
+      setSyncing(false);
+    }
+  }
+
   return (
-    <section className="rounded border border-line bg-white shadow-soft">
-      <SectionHeader
-        title="Catalogo"
-        subtitle="Productos activos disponibles para la IA"
-        action={
-          <button className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white" onClick={onAddProduct}>
-            <Plus className="h-4 w-4" />
-            Nuevo
+    <div className="space-y-5">
+      <section className="rounded border border-line bg-white p-4 shadow-soft">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">Actualizacion de catalogo</h2>
+          <MessageSquareText className="h-4 w-4 text-brand" />
+        </div>
+        <div className="mt-4 flex items-end gap-2">
+          <TextInput label="Catalog ID Meta" value={catalogId} onChange={setCatalogId} />
+          <button
+            className="h-10 rounded bg-brand px-4 text-sm font-medium text-white disabled:opacity-60"
+            type="button"
+            disabled={syncing || !catalogId.trim()}
+            onClick={syncCatalogProducts}
+          >
+            {syncing ? "Actualizando..." : "Actualizar catalogo"}
           </button>
-        }
-      />
-      <DataTable
-        headers={["Producto", "SKU", "Precio", "Estado"]}
-        rows={products.map((product) => [
-          product.name,
-          product.sku,
-          formatMoney(product.price, product.currency),
-          product.status,
-        ])}
-      />
-    </section>
+        </div>
+        {notice ? <p className="mt-3 text-sm text-emerald-700">{notice}</p> : null}
+        {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
+      </section>
+
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader title="Catalogo" subtitle="Productos sincronizados desde Meta para la IA" />
+        <DataTable
+          headers={["Producto", "SKU", "Precio", "Estado"]}
+          rows={products.map((product) => [
+            product.name,
+            product.sku,
+            formatMoney(product.price, product.currency),
+            product.status,
+          ])}
+        />
+      </section>
+    </div>
   );
 }
 
@@ -1830,31 +1955,128 @@ function InventoryPage({
 function OrdersPage({
   orders,
   onCreatePaymentLink,
+  onRefresh,
 }: {
   orders: Order[];
-  onCreatePaymentLink: (orderId: string) => void;
+  onCreatePaymentLink: (orderId: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
 }) {
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
+  const [error, setError] = useState("");
+
+  async function generateLink(orderId: string) {
+    setBusyOrderId(orderId);
+    setNotice("");
+    setError("");
+    try {
+      await onCreatePaymentLink(orderId);
+      setNotice("Link de pago generado y guardado en la orden.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible generar el link de pago");
+    } finally {
+      setBusyOrderId(null);
+    }
+  }
+
+  async function refresh() {
+    setError("");
+    try {
+      await onRefresh();
+      setNotice("Ordenes actualizadas.");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible actualizar las ordenes");
+    }
+  }
+
+  async function copyPaymentLink(paymentLink: string) {
+    await navigator.clipboard.writeText(paymentLink);
+    setNotice("Link de pago copiado.");
+  }
+
   return (
-    <section className="rounded border border-line bg-white shadow-soft">
-      <SectionHeader title="Ordenes" subtitle="Estados de pago y acciones comerciales" />
-      <div className="divide-y divide-line">
-        {orders.map((order) => (
-          <article key={order.id} className="grid gap-3 px-4 py-4 md:grid-cols-[130px_1fr_140px_140px_160px]">
-            <p className="text-sm font-medium">{order.id}</p>
-            <p className="text-sm text-slate-600">{order.contact}</p>
-            <p className="text-sm font-medium">{formatMoney(order.total)}</p>
-            <StatusBadge value={order.status} />
+    <div className="space-y-4">
+      {error ? <Notice tone="error" message={error} /> : null}
+      {notice ? <Notice tone="success" message={notice} /> : null}
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader
+          title="Ordenes"
+          subtitle="Links Wompi persistidos, vencimiento y estados de pago"
+          action={
             <button
-              className="h-9 rounded border border-line px-3 text-sm disabled:opacity-50"
-              disabled={order.status === "paid"}
-              onClick={() => onCreatePaymentLink(order.id)}
+              className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
+              onClick={() => void refresh()}
             >
-              {order.payment}
+              <RefreshCw className="h-4 w-4" />
+              Actualizar
             </button>
-          </article>
-        ))}
-      </div>
-    </section>
+          }
+        />
+        {orders.length ? (
+          <div className="divide-y divide-line">
+            {orders.map((order) => (
+              <article
+                key={order.id}
+                className="grid gap-3 px-4 py-4 lg:grid-cols-[150px_1fr_130px_130px_minmax(220px,1fr)]"
+              >
+                <div>
+                  <p className="text-sm font-medium">#{order.id.slice(0, 8)}</p>
+                  <p className="text-xs text-slate-500">{new Date(order.createdAt).toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-slate-700">{order.contact}</p>
+                  <p className="text-xs text-slate-500">{order.paymentReference ?? "Sin referencia"}</p>
+                </div>
+                <p className="text-sm font-medium">{formatMoney(order.total)}</p>
+                <div className="space-y-1">
+                  <StatusBadge value={order.status} />
+                  <p className="text-xs text-slate-500">{order.paymentStatus}</p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {order.paymentLink ? (
+                    <>
+                      <a
+                        className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
+                        href={order.paymentLink}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        Abrir link
+                      </a>
+                      <button
+                        className="grid h-9 w-9 place-items-center rounded border border-line"
+                        title="Copiar link de pago"
+                        onClick={() => void copyPaymentLink(order.paymentLink!)}
+                      >
+                        <ClipboardCopy className="h-4 w-4" />
+                      </button>
+                      {order.paymentExpiresAt ? (
+                        <p className="w-full text-xs text-slate-500">
+                          Vence: {new Date(order.paymentExpiresAt).toLocaleString()}
+                        </p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <button
+                      className="h-9 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-50"
+                      disabled={order.status === "paid" || busyOrderId === order.id}
+                      onClick={() => void generateLink(order.id)}
+                    >
+                      {busyOrderId === order.id ? "Generando..." : "Generar link"}
+                    </button>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="px-4 py-10 text-center text-sm text-slate-500">
+            Aun no hay ordenes. Los links de pago generados apareceran aqui.
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -2232,8 +2454,7 @@ function AiPage() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
-  const [waCatalogId, setWaCatalogId] = useState("");
-  const [waSyncing, setWaSyncing] = useState(false);
+  const [toasts, setToasts] = useState<ToastState[]>([]);
   const [faqEntries, setFaqEntries] = useState<AiFaqEntry[]>([]);
   const [faqQuestionDraft, setFaqQuestionDraft] = useState("");
   const [faqAnswerDraft, setFaqAnswerDraft] = useState("");
@@ -2301,6 +2522,30 @@ function AiPage() {
     void loadFaqEntries();
   }, [loadFaqEntries]);
 
+  useEffect(() => {
+    if (!notice) {
+      return;
+    }
+    const toast: ToastState = { id: Date.now(), tone: "success", message: notice };
+    setToasts((current) => [...current, toast]);
+    const timer = window.setTimeout(() => {
+      setToasts((current) => current.filter((item) => item.id !== toast.id));
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [notice]);
+
+  useEffect(() => {
+    if (!error) {
+      return;
+    }
+    const toast: ToastState = { id: Date.now() + 1, tone: "error", message: error };
+    setToasts((current) => [...current, toast]);
+    const timer = window.setTimeout(() => {
+      setToasts((current) => current.filter((item) => item.id !== toast.id));
+    }, 4500);
+    return () => window.clearTimeout(timer);
+  }, [error]);
+
   function updateField<K extends keyof AiAgentForm>(field: K, value: AiAgentForm[K]) {
     setForm((current) => ({ ...current, [field]: value }));
   }
@@ -2339,29 +2584,6 @@ function AiPage() {
     }
   }
 
-  async function syncCatalogProducts() {
-    if (!waCatalogId.trim()) return;
-    setWaSyncing(true);
-    setError("");
-    setNotice("");
-    try {
-      const response = await api<{ fetched: number; created: number; updated: number }>(
-        "/whatsapp/catalog/sync",
-        {
-          method: "POST",
-          body: JSON.stringify({ catalog_id: waCatalogId.trim() }),
-        },
-      );
-      setNotice(
-        `Catalogo sincronizado: ${response.fetched} leidos, ${response.created} creados, ${response.updated} actualizados`,
-      );
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "No fue posible sincronizar catalogo");
-    } finally {
-      setWaSyncing(false);
-    }
-  }
-
   async function saveInteractiveTemplate() {
     const options = [interactiveForm.option1, interactiveForm.option2, interactiveForm.option3]
       .map((title, index) => ({ id: `${interactiveForm.action_key}_opt_${index + 1}`, title: title.trim() }))
@@ -2392,17 +2614,21 @@ function AiPage() {
         active: true,
       };
       if (interactiveEditingId) {
-        await api<AiInteractiveTemplate>(`/ai/interactive-templates/${interactiveEditingId}`, {
+        const updated = await api<AiInteractiveTemplate>(`/ai/interactive-templates/${interactiveEditingId}`, {
           method: "PUT",
           body: JSON.stringify(payload),
         });
+        setInteractiveTemplates((current) =>
+          current.map((item) => (item.id === updated.id ? updated : item)),
+        );
       } else {
-        await api<AiInteractiveTemplate>("/ai/interactive-templates", {
+        const created = await api<AiInteractiveTemplate>("/ai/interactive-templates", {
           method: "POST",
           body: JSON.stringify(payload),
         });
+        setInteractiveTemplates((current) => [created, ...current]);
       }
-      await loadInteractiveTemplates();
+      await loadInteractiveTemplates().catch(() => null);
       setNotice(interactiveEditingId ? "Plantilla actualizada" : "Plantilla interactiva guardada");
       setInteractiveEditingId(null);
       setInteractiveForm(createInteractiveTemplateForm());
@@ -2440,10 +2666,11 @@ function AiPage() {
     setNotice("");
     try {
       await api<unknown>(`/ai/interactive-templates/${templateId}`, { method: "DELETE" });
+      setInteractiveTemplates((current) => current.filter((item) => item.id !== templateId));
       if (interactiveEditingId === templateId) {
         cancelInteractiveEdit();
       }
-      await loadInteractiveTemplates();
+      await loadInteractiveTemplates().catch(() => null);
       setNotice("Plantilla eliminada");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible eliminar plantilla");
@@ -2544,8 +2771,10 @@ function AiPage() {
   }
 
   return (
-    <form className="grid gap-5 xl:grid-cols-[1fr_360px]" onSubmit={saveAgent}>
-      <div className="min-w-0 space-y-5">
+    <>
+      <ToastStack toasts={toasts} />
+      <form className="grid gap-5 xl:grid-cols-[1fr_360px]" onSubmit={saveAgent}>
+        <div className="min-w-0 space-y-5">
         {error ? <Notice tone="error" message={error} /> : null}
         {notice ? <Notice tone="success" message={notice} /> : null}
 
@@ -2934,26 +3163,9 @@ function AiPage() {
           </div>
         </section>
 
-        <section className="rounded border border-line bg-white p-4 shadow-soft">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold">WhatsApp interactivo</h2>
-            <MessageSquareText className="h-4 w-4 text-brand" />
-          </div>
-          <div className="mt-4 flex items-end gap-2">
-            <TextInput label="Catalog ID Meta" value={waCatalogId} onChange={setWaCatalogId} />
-            <button
-              className="h-10 rounded bg-brand px-4 text-sm font-medium text-white disabled:opacity-60"
-              type="button"
-              disabled={waSyncing || !waCatalogId.trim()}
-              onClick={syncCatalogProducts}
-            >
-              {waSyncing ? "Sincronizando..." : "Sincronizar catalogo"}
-            </button>
-          </div>
-        </section>
       </div>
 
-      <aside className="space-y-5">
+        <aside className="space-y-5">
         <InfoPanel title="Madurez" icon={Gauge}>
           <div>
             <div className="mb-2 flex items-end justify-between">
@@ -2997,8 +3209,9 @@ function AiPage() {
           <KeyValue label="API global" value="Conectada" strong />
         </InfoPanel>
 
-      </aside>
-    </form>
+        </aside>
+      </form>
+    </>
   );
 }
 
@@ -3261,6 +3474,7 @@ function IntegrationsPage() {
                 ...(saved ? stringifyConfig(saved.config) : {}),
               },
               credentials: "",
+              secondaryCredentials: "",
               status: saved?.status ?? "pending",
             };
           });
@@ -3283,7 +3497,8 @@ function IntegrationsPage() {
 
   function updateIntegrationField(type: string, key: string, value: string) {
     setForms((current) => {
-      const currentForm = current[type] ?? { config: {}, credentials: "", status: "pending" };
+      const currentForm =
+        current[type] ?? { config: {}, credentials: "", secondaryCredentials: "", status: "pending" };
       return {
         ...current,
         [type]: {
@@ -3296,7 +3511,8 @@ function IntegrationsPage() {
 
   function updateIntegrationSecret(type: string, value: string) {
     setForms((current) => {
-      const currentForm = current[type] ?? { config: {}, credentials: "", status: "pending" };
+      const currentForm =
+        current[type] ?? { config: {}, credentials: "", secondaryCredentials: "", status: "pending" };
       return {
         ...current,
         [type]: {
@@ -3307,6 +3523,36 @@ function IntegrationsPage() {
     });
   }
 
+  function updateIntegrationSecondarySecret(type: string, value: string) {
+    setForms((current) => {
+      const currentForm =
+        current[type] ?? { config: {}, credentials: "", secondaryCredentials: "", status: "pending" };
+      return {
+        ...current,
+        [type]: {
+          ...currentForm,
+          secondaryCredentials: value,
+        },
+      };
+    });
+  }
+
+  function buildCredentialsPayload(definition: IntegrationDefinition, form: IntegrationFormValue) {
+    const primary = form.credentials.trim();
+    const secondary = form.secondaryCredentials.trim();
+    if (definition.type === "payments") {
+      const payload: Record<string, string> = {};
+      if (primary) {
+        payload.private_key = primary;
+      }
+      if (secondary) {
+        payload.events_secret = secondary;
+      }
+      return Object.keys(payload).length ? JSON.stringify(payload) : "";
+    }
+    return primary;
+  }
+
   async function saveIntegration(
     event: FormEvent<HTMLFormElement>,
     definition: IntegrationDefinition,
@@ -3314,7 +3560,7 @@ function IntegrationsPage() {
     event.preventDefault();
     const form = forms[definition.type] ?? createIntegrationForm(definition);
     const existing = integrationByType.get(definition.type);
-    const credentials = form.credentials.trim();
+    const credentials = buildCredentialsPayload(definition, form);
     setSavingType(definition.type);
     setError("");
     setMessage("");
@@ -3357,6 +3603,7 @@ function IntegrationsPage() {
         [definition.type]: {
           ...(current[definition.type] ?? createIntegrationForm(definition)),
           credentials: "",
+          secondaryCredentials: "",
           status: "active",
         },
       }));
@@ -3485,6 +3732,15 @@ function IntegrationsPage() {
                     value={form.credentials}
                     onChange={(value) => updateIntegrationSecret(definition.type, value)}
                   />
+                  {definition.extraSecretLabel ? (
+                    <PasswordInput
+                      label={definition.extraSecretLabel}
+                      value={form.secondaryCredentials}
+                      onChange={(value) =>
+                        updateIntegrationSecondarySecret(definition.type, value)
+                      }
+                    />
+                  ) : null}
                   <div className="flex items-end">
                     <button
                       className="inline-flex h-10 w-full items-center justify-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
@@ -3856,6 +4112,32 @@ function Notice({ tone, message }: { tone: "error" | "success"; message: string 
     >
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />
       <span>{message}</span>
+    </div>
+  );
+}
+
+function ToastStack({ toasts }: { toasts: ToastState[] }) {
+  if (!toasts.length) {
+    return null;
+  }
+  return (
+    <div className="pointer-events-none fixed bottom-4 right-4 z-[80] flex w-[min(92vw,420px)] flex-col gap-2">
+      {toasts.map((toast) => {
+        const isError = toast.tone === "error";
+        const Icon = isError ? AlertCircle : CheckCircle2;
+        return (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto flex items-start gap-2 rounded border px-3 py-2 text-sm shadow-soft ${
+              isError ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"
+            }`}
+            role={isError ? "alert" : "status"}
+          >
+            <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{toast.message}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }

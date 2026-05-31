@@ -10,4 +10,4 @@ class MockPaymentWebhook(BaseModel):
 class PaymentWebhookResponse(BaseModel):
     status: str
     order_id: str | None = None
-
+    payment_reference: str | None = None

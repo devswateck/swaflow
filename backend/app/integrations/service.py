@@ -1,10 +1,11 @@
+import json
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.crypto import encrypt_secret
+from app.core.crypto import decrypt_secret, encrypt_secret
 from app.integrations.models import CompanyIntegration, OutboundWebhook
 from app.integrations.schemas import (
     IntegrationCreate,
@@ -39,6 +40,30 @@ def create_integration(
     return integration
 
 
+def _merge_secret_payload(current: str | None, incoming: str) -> str:
+    try:
+        incoming_data = json.loads(incoming)
+    except json.JSONDecodeError:
+        return incoming
+    if not isinstance(incoming_data, dict):
+        return incoming
+
+    current_data: dict = {}
+    if current:
+        try:
+            decoded = decrypt_secret(current)
+            parsed = json.loads(decoded)
+            if isinstance(parsed, dict):
+                current_data = parsed
+        except Exception:
+            current_data = {}
+
+    for key, value in incoming_data.items():
+        if value not in {None, ""}:
+            current_data[key] = value
+    return json.dumps(current_data)
+
+
 def get_integration(db: Session, *, company_id: UUID, integration_id: UUID) -> CompanyIntegration:
     integration = db.scalar(
         select(CompanyIntegration).where(
@@ -58,7 +83,12 @@ def update_integration(
     data = payload.model_dump(exclude_unset=True)
     if "credentials" in data:
         credentials = data.pop("credentials")
-        integration.credentials_encrypted = encrypt_secret(credentials) if credentials else None
+        if credentials:
+            integration.credentials_encrypted = encrypt_secret(
+                _merge_secret_payload(integration.credentials_encrypted, credentials)
+            )
+        elif credentials is None:
+            integration.credentials_encrypted = None
     for field, value in data.items():
         setattr(integration, field, value)
     db.commit()

@@ -1574,3 +1574,39 @@ Esta sección resume lo que ya quedó construido y operativo en el proyecto, inc
   - `frontend`: build OK.
 
 > Nota operativa: cambios hechos localmente; no se desplegó al VPS en esta iteración.
+
+### 27.16 Integración Wompi y persistencia de links de pago
+
+- Se implementó el proveedor Wompi para generar links de pago desde órdenes:
+  - `POST /v1/payment_links`
+  - valor fijo en COP,
+  - `single_use = true`,
+  - vencimiento configurable con valor inicial de **120 minutos**,
+  - URL de retorno configurable.
+- Credenciales cifradas por tenant:
+  - llave privada Wompi,
+  - secreto de eventos Wompi,
+  - soporte independiente para Sandbox y Producción.
+- Webhook receptor:
+  - `POST /webhooks/payments/wompi`
+- Seguridad del webhook:
+  - validación SHA256 con el secreto de eventos,
+  - correlación de la orden por referencia o `payment_link_id`,
+  - persistencia del ID de transacción recibido.
+- Estados de orden:
+  - link generado: `waiting_payment`,
+  - pago confirmado: `paid`,
+  - rechazo o error: `failed`,
+  - vencimiento: `expired`.
+- Notificación por correo tras aprobación:
+  - cliente, si el contacto tiene correo,
+  - usuarios activos con rol `owner` o `admin`,
+  - usando la integración SMTP configurada para el tenant.
+- Frontend:
+  - el módulo **Órdenes** ahora consulta datos reales del backend,
+  - muestra referencia, estado, vencimiento y link persistido,
+  - permite generar, abrir y copiar el link de pago.
+- Validación local completada:
+  - `backend`: compile OK + tests `5 passed`,
+  - `frontend`: build OK,
+  - `git diff --check`: OK.

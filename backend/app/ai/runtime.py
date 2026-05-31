@@ -58,6 +58,12 @@ def _as_list(value: object) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+def _as_json_context(value: object) -> str:
+    if not isinstance(value, dict) or not value:
+        return "{}"
+    return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
 def _normalize_text(value: str) -> str:
     return " ".join(value.strip().lower().split())
 
@@ -96,7 +102,7 @@ def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) ->
         )
     )
     if not products:
-        return "Catalogo: sin productos activos."
+        return "Catalogo interno para consulta: sin productos activos."
 
     rows: list[str] = []
     for product in products:
@@ -105,7 +111,7 @@ def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) ->
         rows.append(
             f"- {product.name} | SKU: {sku} | Precio: {price} {product.currency}"
         )
-    return "Catalogo disponible:\n" + "\n".join(rows)
+    return "Catalogo interno para consulta de la IA, no lo envies completo al cliente:\n" + "\n".join(rows)
 
 
 def _build_recent_conversation_context(
@@ -230,13 +236,18 @@ def generate_auto_reply(
     available_actions = _list_active_actions(db, company_id=company_id)
 
     system_prompt = (
-        f"{agent.system_prompt}\n\n"
-        f"Contexto del tenant: {company_name}\n"
-        f"Tono preferido: {tone}\n"
+        "Configuracion obligatoria del agente desde ai_agents. Esta seccion tiene prioridad sobre "
+        "catalogo, FAQ, historial y cualquier contexto auxiliar:\n"
+        f"system_prompt:\n{agent.system_prompt}\n\n"
+        f"tone: {tone}\n"
+        f"conversation_objective: {conversation_objective or 'resolver dudas y llevar a conversion'}\n"
+        f"security_rules: {security_rules or faq_legacy or 'no inventar datos ni promesas no verificadas'}\n"
+        f"rules_json: {_as_json_context(rules)}\n\n"
+        "Contexto auxiliar del tenant. Usalo solo cuando ayude a cumplir la configuracion del agente:\n"
+        f"Tenant: {company_name}\n"
         f"Idioma de respuesta: {language}\n"
         f"Personalidad: {personality or 'comercial consultiva'}\n"
         f"Horario operativo: {schedule or 'sin restriccion'}\n"
-        f"Objetivo comercial: {conversation_objective or 'resolver dudas y llevar a conversion'}\n"
         f"Descripcion del negocio: {business_description or 'no definida'}\n"
         f"Productos/servicios declarados: {products_services or 'no definidos'}\n"
         f"Fuentes de conocimiento: {knowledge_sources or 'catalogo y mensajes del tenant'}\n"
@@ -244,15 +255,17 @@ def generate_auto_reply(
         f"Campos a capturar: {', '.join(capture_fields) if capture_fields else 'sin campos obligatorios'}\n"
         f"Pasos del funnel: {', '.join(funnel_steps) if funnel_steps else 'sin pasos definidos'}\n"
         f"Criterio de handoff: {handoff_rule or 'cuando el cliente pida humano'}\n"
-        f"Reglas de seguridad: {security_rules or faq_legacy or 'no inventar datos ni promesas no verificadas'}\n"
         f"Mensaje de bienvenida recomendado: {welcome_message or 'no definido'}\n"
         f"{_build_catalog_context(db, company_id=company_id)}\n\n"
         "Reglas de salida:\n"
+        "- Obedece primero system_prompt, tone, rules_json, security_rules y conversation_objective.\n"
         "- Responde siempre en el idioma configurado arriba.\n"
         "- No inventes precios ni stock.\n"
         "- Si no tienes dato suficiente, pide una aclaracion breve.\n"
         "- Si aplica handoff por regla, indica transferencia a humano.\n"
         "- Mensajes cortos (maximo 4 lineas) orientados a conversion.\n"
+        "- Usa el catalogo solo como fuente interna. No listes productos, precios ni catalogo completo en el saludo.\n"
+        "- En primer contacto o saludo, respeta la apertura del prompt del agente y no recomiendes productos hasta que el cliente elija una opcion o pregunte por productos.\n"
         f"- Primer contacto detectado: {'si' if first_contact else 'no'}.\n"
         f"- Mensaje de saludo detectado: {'si' if greeting_message else 'no'}.\n"
         "- Si es primer contacto, cumple estrictamente el flujo de apertura definido en el prompt del agente.\n"
