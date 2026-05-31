@@ -293,6 +293,14 @@ type ApiProduct = {
   status: string;
 };
 
+type ApiInventory = {
+  id: string;
+  product_id: string;
+  quantity_available: number;
+  quantity_reserved: number;
+  updated_at: string;
+};
+
 type ApiOrder = {
   id: string;
   contact_id: string;
@@ -445,12 +453,6 @@ const pageCopy: Record<PageKey, { title: string; subtitle: string }> = {
     subtitle: "Tenant, usuarios, roles y entorno operativo",
   },
 };
-
-const initialInventory: InventoryItem[] = [
-  { productId: "prod-1", available: 12, reserved: 2 },
-  { productId: "prod-2", available: 8, reserved: 1 },
-  { productId: "prod-3", available: 5, reserved: 0 },
-];
 
 const initialAppointments: Appointment[] = [
   { id: "apt-1", contact: "Diana Perez", scheduledAt: "2026-05-20 14:00", status: "scheduled", owner: "Carolina" },
@@ -836,6 +838,14 @@ function mapApiProduct(product: ApiProduct): Product {
   };
 }
 
+function mapApiInventory(item: ApiInventory): InventoryItem {
+  return {
+    productId: item.product_id,
+    available: item.quantity_available,
+    reserved: item.quantity_reserved,
+  };
+}
+
 function mapApiOrder(order: ApiOrder): Order {
   const parsedTotal = typeof order.total === "number" ? order.total : Number(order.total);
   const paymentMetadata =
@@ -875,7 +885,7 @@ function App() {
   const [inboxLoading, setInboxLoading] = useState(false);
   const [inboxError, setInboxError] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
-  const [inventory, setInventory] = useState(initialInventory);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [appointments, setAppointments] = useState(initialAppointments);
   const [funnels, setFunnels] = useState<ApiFunnel[]>([]);
@@ -960,6 +970,19 @@ function App() {
     }
   }, []);
 
+  const loadInventory = useCallback(async () => {
+    try {
+      const response = await api<ApiInventory[]>("/inventory?limit=200&offset=0");
+      setInventory(response.map(mapApiInventory));
+    } catch {
+      setInventory([]);
+    }
+  }, []);
+
+  const loadCatalogData = useCallback(async () => {
+    await Promise.all([loadProducts(), loadInventory()]);
+  }, [loadInventory, loadProducts]);
+
   const loadOrders = useCallback(async () => {
     const response = await api<ApiOrder[]>("/orders?limit=200&offset=0");
     setOrders(response.map(mapApiOrder));
@@ -1003,9 +1026,9 @@ function App() {
     }
 
     void loadInbox({ showLoading: true });
-    void loadProducts();
+    void loadCatalogData();
     void loadOrders();
-  }, [currentUser, loadInbox, loadOrders, loadProducts]);
+  }, [currentUser, loadCatalogData, loadInbox, loadOrders]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -1107,14 +1130,18 @@ function App() {
     setMobileMenuOpen(false);
   }
 
-  function adjustInventory(productId: string, delta: number) {
-    setInventory((current) =>
-      current.map((item) =>
-        item.productId === productId
-          ? { ...item, available: Math.max(0, item.available + delta) }
-          : item,
-      ),
-    );
+  async function adjustInventory(productId: string, delta: number) {
+    const updated = await api<ApiInventory>(`/inventory/${productId}/adjust`, {
+      method: "POST",
+      body: JSON.stringify({ delta_available: delta }),
+    });
+    const next = mapApiInventory(updated);
+    setInventory((current) => {
+      const exists = current.some((item) => item.productId === productId);
+      return exists
+        ? current.map((item) => (item.productId === productId ? next : item))
+        : [...current, next];
+    });
   }
 
   async function createPaymentLink(orderId: string) {
@@ -1317,7 +1344,7 @@ function App() {
               />
             ) : null}
             {activePage === "products" ? (
-              <ProductsPage products={filteredProducts} onRefreshProducts={loadProducts} />
+              <ProductsPage products={filteredProducts} inventory={inventory} onRefreshProducts={loadCatalogData} />
             ) : null}
             {activePage === "inventory" ? (
               <InventoryPage products={products} inventory={inventory} onAdjust={adjustInventory} />
@@ -1830,9 +1857,11 @@ function InboxPage({
 
 function ProductsPage({
   products,
+  inventory,
   onRefreshProducts,
 }: {
   products: Product[];
+  inventory: InventoryItem[];
   onRefreshProducts: () => Promise<void>;
 }) {
   const [catalogId, setCatalogId] = useState("");
@@ -1891,13 +1920,17 @@ function ProductsPage({
       <section className="rounded border border-line bg-white shadow-soft">
         <SectionHeader title="Catalogo" subtitle="Productos sincronizados desde Meta para la IA" />
         <DataTable
-          headers={["Producto", "SKU", "Precio", "Estado"]}
-          rows={products.map((product) => [
-            product.name,
-            product.sku,
-            formatMoney(product.price, product.currency),
-            product.status,
-          ])}
+          headers={["Producto", "SKU", "Precio", "Disponible real", "Estado"]}
+          rows={products.map((product) => {
+            const stock = inventory.find((item) => item.productId === product.id);
+            return [
+              product.name,
+              product.sku,
+              formatMoney(product.price, product.currency),
+              String(Math.max(0, (stock?.available ?? 0) - (stock?.reserved ?? 0))),
+              product.status,
+            ];
+          })}
         />
       </section>
     </div>
@@ -1911,23 +1944,40 @@ function InventoryPage({
 }: {
   products: Product[];
   inventory: InventoryItem[];
-  onAdjust: (productId: string, delta: number) => void;
+  onAdjust: (productId: string, delta: number) => Promise<void>;
 }) {
-  const rows = inventory.map((item) => {
-    const product = products.find((candidate) => candidate.id === item.productId);
-    const realAvailable = Math.max(0, item.available - item.reserved);
+  const [busyProductId, setBusyProductId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const rows = products.map((product) => {
+    const item = inventory.find((candidate) => candidate.productId === product.id);
+    const available = item?.available ?? 0;
+    const reserved = item?.reserved ?? 0;
+    const realAvailable = Math.max(0, available - reserved);
     return {
-      id: item.productId,
-      product: product?.name ?? "Producto sin nombre",
-      available: item.available,
-      reserved: item.reserved,
+      id: product.id,
+      product: product.name,
+      available,
+      reserved,
       realAvailable,
     };
   });
 
+  async function adjust(productId: string, delta: number) {
+    setBusyProductId(productId);
+    setError("");
+    try {
+      await onAdjust(productId, delta);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible actualizar el inventario");
+    } finally {
+      setBusyProductId(null);
+    }
+  }
+
   return (
     <section className="rounded border border-line bg-white shadow-soft">
-      <SectionHeader title="Stock" subtitle="Ajustes rapidos para pruebas del MVP" />
+      <SectionHeader title="Stock" subtitle="Inventario sincronizado con el catalogo de productos" />
+      {error ? <p className="border-b border-line px-4 py-3 text-sm text-red-600">{error}</p> : null}
       <div className="divide-y divide-line">
         {rows.map((row) => (
           <article key={row.id} className="grid gap-3 px-4 py-4 md:grid-cols-[1fr_120px_120px_150px]">
@@ -1938,10 +1988,18 @@ function InventoryPage({
             <MetricPill label="Stock" value={String(row.available)} />
             <MetricPill label="Reservado" value={String(row.reserved)} />
             <div className="flex items-center gap-2">
-              <button className="h-9 w-9 rounded border border-line" onClick={() => onAdjust(row.id, -1)}>
+              <button
+                className="h-9 w-9 rounded border border-line disabled:opacity-60"
+                disabled={busyProductId === row.id || row.available <= 0}
+                onClick={() => void adjust(row.id, -1)}
+              >
                 -
               </button>
-              <button className="h-9 w-9 rounded border border-line" onClick={() => onAdjust(row.id, 1)}>
+              <button
+                className="h-9 w-9 rounded border border-line disabled:opacity-60"
+                disabled={busyProductId === row.id}
+                onClick={() => void adjust(row.id, 1)}
+              >
                 +
               </button>
             </div>

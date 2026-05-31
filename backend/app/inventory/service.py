@@ -7,10 +7,36 @@ from sqlalchemy.orm import Session
 
 from app.inventory.models import Inventory
 from app.inventory.schemas import InventoryAdjustment, InventoryUpdate
+from app.products.models import Product
 from app.products.service import get_product
 
 
+def ensure_inventory_for_products(db: Session, *, company_id: UUID) -> int:
+    product_ids = set(
+        db.scalars(select(Product.id).where(Product.company_id == company_id))
+    )
+    if not product_ids:
+        return 0
+
+    existing_product_ids = set(
+        db.scalars(
+            select(Inventory.product_id).where(
+                Inventory.company_id == company_id,
+                Inventory.product_id.in_(product_ids),
+            )
+        )
+    )
+    missing_product_ids = product_ids - existing_product_ids
+    db.add_all(
+        Inventory(company_id=company_id, product_id=product_id)
+        for product_id in missing_product_ids
+    )
+    return len(missing_product_ids)
+
+
 def list_inventory(db: Session, *, company_id: UUID, limit: int, offset: int) -> list[Inventory]:
+    if ensure_inventory_for_products(db, company_id=company_id):
+        db.commit()
     return list(
         db.scalars(
             select(Inventory)
@@ -78,4 +104,3 @@ def adjust_inventory(
 
 def available_units(inventory: Inventory) -> int:
     return inventory.quantity_available - inventory.quantity_reserved
-

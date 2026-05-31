@@ -15,6 +15,7 @@ from app.conversations.service import append_message, get_or_create_open_convers
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.events.service import create_event
+from app.inventory.service import ensure_inventory_for_products
 from app.messages.models import Message
 from app.products.models import Product
 from app.realtime import realtime_manager
@@ -726,6 +727,7 @@ def sync_catalog_products(
             meta["source"] = "meta_catalog_sync"
             existing.metadata_json = meta
             updated += 1
+    ensure_inventory_for_products(db, company_id=company_id)
     db.commit()
     return WhatsAppCatalogSyncResponse(fetched=len(rows), created=created, updated=updated)
 

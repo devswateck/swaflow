@@ -9,7 +9,9 @@ from app.companies.schemas import CompanyCreate
 from app.companies.service import create_company_with_owner
 from app.contacts.models import Contact
 from app.core.schemas import OwnerCreate
+from app.ai.runtime import _build_catalog_context
 from app.inventory.models import Inventory
+from app.inventory.service import list_inventory
 from app.orders.schemas import OrderCreate, OrderItemCreate
 from app.orders.service import create_order, generate_payment_link, mark_paid_by_reference
 from app.products.models import Product
@@ -139,3 +141,51 @@ def test_order_flow_reserves_stock_and_settles_payment(db):
     assert paid_order.status == "paid"
     assert inventory.quantity_available == 3
     assert inventory.quantity_reserved == 0
+
+
+def test_inventory_listing_creates_missing_rows_for_tenant_products(db):
+    company, _ = bootstrap_company(db, "Acme")
+    product = Product(
+        company_id=company.id,
+        name="Bronceador profesional",
+        sku="BRONCE-01",
+        price=Decimal("130000.00"),
+        currency="COP",
+    )
+    db.add(product)
+    db.commit()
+
+    rows = list_inventory(db, company_id=company.id, limit=50, offset=0)
+
+    assert len(rows) == 1
+    assert rows[0].product_id == product.id
+    assert rows[0].quantity_available == 0
+    assert rows[0].quantity_reserved == 0
+
+
+def test_ai_catalog_context_includes_real_inventory_availability(db):
+    company, _ = bootstrap_company(db, "Acme")
+    product = Product(
+        company_id=company.id,
+        name="Top Bronce 250ml",
+        sku="TOP-250",
+        price=Decimal("130000.00"),
+        currency="COP",
+    )
+    db.add(product)
+    db.flush()
+    db.add(
+        Inventory(
+            company_id=company.id,
+            product_id=product.id,
+            quantity_available=6,
+            quantity_reserved=2,
+        )
+    )
+    db.commit()
+
+    context = _build_catalog_context(db, company_id=company.id)
+
+    assert "Top Bronce 250ml" in context
+    assert "Stock real disponible: 4" in context
+    assert "stock: 6, reservado: 2" in context

@@ -7,12 +7,13 @@ from decimal import Decimal
 from uuid import UUID
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.ai.models import AiAgent, AiFaqEntry, AiInteractiveTemplate
 from app.companies.models import Company
 from app.conversations.models import Conversation
+from app.inventory.models import Inventory
 from app.messages.models import Message
 from app.products.models import Product
 from app.core.config import get_settings
@@ -93,25 +94,47 @@ def _customer_message_count(
 
 
 def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) -> str:
-    products = list(
-        db.scalars(
-            select(Product)
+    product_rows = list(
+        db.execute(
+            select(Product, Inventory)
+            .outerjoin(
+                Inventory,
+                and_(
+                    Inventory.company_id == Product.company_id,
+                    Inventory.product_id == Product.id,
+                ),
+            )
             .where(Product.company_id == company_id, Product.status == "active")
             .order_by(Product.created_at.desc())
             .limit(limit)
         )
     )
-    if not products:
+    if not product_rows:
         return "Catalogo interno para consulta: sin productos activos."
 
     rows: list[str] = []
-    for product in products:
+    for product, inventory in product_rows:
         price = _stringify_price(product.price)
         sku = product.sku or "-"
+        if inventory is None:
+            stock = "SIN INVENTARIO CONFIGURADO: no ofrecer"
+        else:
+            real_available = max(
+                0, inventory.quantity_available - inventory.quantity_reserved
+            )
+            stock = (
+                f"Stock real disponible: {real_available} "
+                f"(stock: {inventory.quantity_available}, reservado: {inventory.quantity_reserved})"
+            )
+            if real_available <= 0:
+                stock += " | NO DISPONIBLE: no ofrecer"
         rows.append(
-            f"- {product.name} | SKU: {sku} | Precio: {price} {product.currency}"
+            f"- {product.name} | SKU: {sku} | Precio: {price} {product.currency} | {stock}"
         )
-    return "Catalogo interno para consulta de la IA, no lo envies completo al cliente:\n" + "\n".join(rows)
+    return (
+        "Catalogo e inventario interno para consulta obligatoria de la IA, "
+        "no lo envies completo al cliente:\n" + "\n".join(rows)
+    )
 
 
 def _build_recent_conversation_context(
@@ -261,6 +284,8 @@ def generate_auto_reply(
         "- Obedece primero system_prompt, tone, rules_json, security_rules y conversation_objective.\n"
         "- Responde siempre en el idioma configurado arriba.\n"
         "- No inventes precios ni stock.\n"
+        "- Antes de ofrecer o recomendar cualquier producto, consulta el catalogo e inventario interno incluido arriba.\n"
+        "- Ofrece un producto solamente si su Stock real disponible es mayor que cero. Si no tiene inventario configurado o esta agotado, no lo ofrezcas y explica brevemente que una asesora confirmara disponibilidad.\n"
         "- Si no tienes dato suficiente, pide una aclaracion breve.\n"
         "- Si aplica handoff por regla, indica transferencia a humano.\n"
         "- Mensajes cortos (maximo 4 lineas) orientados a conversion.\n"
