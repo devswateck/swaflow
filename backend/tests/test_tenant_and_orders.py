@@ -5,6 +5,8 @@ from fastapi import HTTPException
 
 from app.auth.schemas import PasswordChangeRequest
 from app.auth.service import authenticate_user, change_own_password
+from app.ai.schemas import AiInteractiveTemplateCreate, AiInteractiveTemplateOption
+from app.ai.service import create_interactive_template, list_interactive_templates
 from app.companies.schemas import CompanyCreate
 from app.companies.service import create_company_with_owner
 from app.contacts.models import Contact
@@ -189,3 +191,34 @@ def test_ai_catalog_context_includes_real_inventory_availability(db):
     assert "Top Bronce 250ml" in context
     assert "Stock real disponible: 4" in context
     assert "stock: 6, reservado: 2" in context
+
+
+def test_interactive_template_save_updates_existing_action_key(db):
+    company, _ = bootstrap_company(db, "Acme")
+    create_interactive_template(
+        db,
+        company_id=company.id,
+        payload=AiInteractiveTemplateCreate(
+            name="Menu principal",
+            action_key="menu_principal",
+            body_text="Selecciona una opcion",
+            options=[AiInteractiveTemplateOption(id="menu_principal_opt_1", title="Cursos")],
+        ),
+    )
+
+    updated = create_interactive_template(
+        db,
+        company_id=company.id,
+        payload=AiInteractiveTemplateCreate(
+            name="Menu actualizado",
+            action_key=" MENU_PRINCIPAL ",
+            body_text="Selecciona una opcion actualizada",
+            options=[AiInteractiveTemplateOption(id="menu_principal_opt_1", title="Productos")],
+        ),
+    )
+    rows = list_interactive_templates(db, company_id=company.id)
+
+    assert len(rows) == 1
+    assert rows[0].id == updated.id
+    assert rows[0].name == "Menu actualizado"
+    assert rows[0].options[0]["title"] == "Productos"

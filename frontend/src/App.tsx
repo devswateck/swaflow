@@ -2524,6 +2524,7 @@ function AiPage() {
   const [interactiveSaving, setInteractiveSaving] = useState(false);
   const [interactiveEditingId, setInteractiveEditingId] = useState<string | null>(null);
   const [interactiveDeletingId, setInteractiveDeletingId] = useState<string | null>(null);
+  const [interactiveHighlightedId, setInteractiveHighlightedId] = useState<string | null>(null);
   const [interactiveForm, setInteractiveForm] = useState(createInteractiveTemplateForm);
 
   const checklist = aiChecklist(form);
@@ -2554,8 +2555,8 @@ function AiPage() {
     try {
       const rows = await api<AiInteractiveTemplate[]>("/ai/interactive-templates");
       setInteractiveTemplates(rows);
-    } catch {
-      setInteractiveTemplates([]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible cargar las plantillas");
     }
   }, []);
 
@@ -2677,16 +2678,17 @@ function AiPage() {
           body: JSON.stringify(payload),
         });
         setInteractiveTemplates((current) =>
-          current.map((item) => (item.id === updated.id ? updated : item)),
+          [updated, ...current.filter((item) => item.id !== updated.id)],
         );
+        setInteractiveHighlightedId(updated.id);
       } else {
         const created = await api<AiInteractiveTemplate>("/ai/interactive-templates", {
           method: "POST",
           body: JSON.stringify(payload),
         });
-        setInteractiveTemplates((current) => [created, ...current]);
+        setInteractiveTemplates((current) => [created, ...current.filter((item) => item.id !== created.id)]);
+        setInteractiveHighlightedId(created.id);
       }
-      await loadInteractiveTemplates().catch(() => null);
       setNotice(interactiveEditingId ? "Plantilla actualizada" : "Plantilla interactiva guardada");
       setInteractiveEditingId(null);
       setInteractiveForm(createInteractiveTemplateForm());
@@ -2696,6 +2698,14 @@ function AiPage() {
       setInteractiveSaving(false);
     }
   }
+
+  useEffect(() => {
+    if (!interactiveHighlightedId) {
+      return;
+    }
+    const timer = window.setTimeout(() => setInteractiveHighlightedId(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [interactiveHighlightedId]);
 
   function editInteractiveTemplate(template: AiInteractiveTemplate) {
     setInteractiveEditingId(template.id);
@@ -3083,141 +3093,153 @@ function AiPage() {
           <p className="mt-1 text-xs text-slate-500">
             Usa el action_key en el prompt. Ejemplo: {`{"action":"menu_principal"}`}.
           </p>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <TextInput
-              label="Nombre de plantilla"
-              value={interactiveForm.name}
-              onChange={(value) => setInteractiveForm((current) => ({ ...current, name: value }))}
-            />
-            <TextInput
-              label="Action key"
-              value={interactiveForm.action_key}
-              onChange={(value) =>
-                setInteractiveForm((current) => ({
-                  ...current,
-                  action_key: value.toLowerCase().replace(/\s+/g, "_"),
-                }))
-              }
-            />
-            <SelectInput
-              label="Tipo"
-              value={interactiveForm.template_type}
-              options={[
-                { value: "buttons", label: "Botones" },
-                { value: "list", label: "Lista" },
-              ]}
-              onChange={(value) =>
-                setInteractiveForm((current) => ({ ...current, template_type: value as "buttons" | "list" }))
-              }
-            />
-            <TextInput
-              label="Texto principal"
-              value={interactiveForm.body_text}
-              onChange={(value) => setInteractiveForm((current) => ({ ...current, body_text: value }))}
-            />
-            <TextInput
-              label="Opcion 1"
-              value={interactiveForm.option1}
-              onChange={(value) => setInteractiveForm((current) => ({ ...current, option1: value }))}
-            />
-            <TextInput
-              label="Opcion 2"
-              value={interactiveForm.option2}
-              onChange={(value) => setInteractiveForm((current) => ({ ...current, option2: value }))}
-            />
-            <TextInput
-              label="Opcion 3"
-              value={interactiveForm.option3}
-              onChange={(value) => setInteractiveForm((current) => ({ ...current, option3: value }))}
-            />
-            <TextInput
-              label="Footer (opcional)"
-              value={interactiveForm.footer_text}
-              onChange={(value) => setInteractiveForm((current) => ({ ...current, footer_text: value }))}
-            />
-          </div>
-          {interactiveForm.template_type === "list" ? (
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <TextInput
-                label="Texto boton lista"
-                value={interactiveForm.button_text}
-                onChange={(value) => setInteractiveForm((current) => ({ ...current, button_text: value }))}
-              />
-              <TextInput
-                label="Titulo de seccion"
-                value={interactiveForm.section_title}
-                onChange={(value) => setInteractiveForm((current) => ({ ...current, section_title: value }))}
-              />
-            </div>
-          ) : null}
-          <div className="mt-3">
-            <div className="flex flex-wrap gap-2">
-              <button
-                className="h-10 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
-                type="button"
-                disabled={interactiveSaving}
-                onClick={() => void saveInteractiveTemplate()}
-              >
-                {interactiveSaving
-                  ? "Guardando..."
-                  : interactiveEditingId
-                    ? "Actualizar plantilla"
-                    : "Guardar plantilla"}
-              </button>
-              {interactiveEditingId ? (
-                <button
-                  className="h-10 rounded border border-line px-3 text-sm"
-                  type="button"
-                  onClick={cancelInteractiveEdit}
-                >
-                  Cancelar edicion
-                </button>
-              ) : null}
-            </div>
-          </div>
-          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-            <span>Plantillas creadas</span>
-            <span>Vista con maximo 3 tarjetas, usa scroll para ver mas</span>
-          </div>
-          <div className="mt-2 max-h-[380px] space-y-2 overflow-y-auto pr-1">
-            {interactiveTemplates.length ? (
-              interactiveTemplates.map((item) => (
-                <div key={item.id} className="rounded border border-line bg-panel p-3 text-sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-medium">
-                        {item.name} · <span className="text-brand">{item.action_key}</span>
-                      </p>
-                      <p className="text-xs text-slate-500">
-                        {item.template_type === "buttons" ? "Botones" : "Lista"} · {item.options.length} opciones
-                      </p>
+          <div className="mt-4 grid gap-4 lg:grid-cols-[280px_1fr]">
+            <div className="rounded border border-line bg-panel p-3">
+              <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
+                <span>Plantillas creadas</span>
+                <span>{interactiveTemplates.length}</span>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">Se muestran al guardar. Usa scroll para ver mas.</p>
+              <div className="mt-3 max-h-[390px] space-y-2 overflow-y-auto pr-1">
+                {interactiveTemplates.length ? (
+                  interactiveTemplates.map((item) => (
+                    <div
+                      key={item.id}
+                      className={`rounded border p-3 text-sm transition-colors ${
+                        item.id === interactiveHighlightedId
+                          ? "border-brand bg-[#e5f3ee]"
+                          : "border-line bg-white"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{item.name}</p>
+                          <p className="truncate text-xs text-brand">{item.action_key}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {item.template_type === "buttons" ? "Botones" : "Lista"} · {item.options.length} opciones
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 gap-1">
+                          <button
+                            className="grid h-8 w-8 place-items-center rounded border border-line bg-white text-slate-600 disabled:opacity-50"
+                            type="button"
+                            title="Editar plantilla"
+                            onClick={() => editInteractiveTemplate(item)}
+                            disabled={interactiveSaving || interactiveDeletingId === item.id}
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            className="grid h-8 w-8 place-items-center rounded border border-line bg-white text-red-600 disabled:opacity-50"
+                            type="button"
+                            title="Eliminar plantilla"
+                            onClick={() => void deleteInteractiveTemplate(item.id)}
+                            disabled={interactiveDeletingId === item.id}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
                     </div>
-                    <div className="flex shrink-0 gap-1">
-                      <button
-                        className="grid h-8 w-8 place-items-center rounded border border-line bg-white text-slate-600 disabled:opacity-50"
-                        type="button"
-                        title="Editar plantilla"
-                        onClick={() => editInteractiveTemplate(item)}
-                        disabled={interactiveSaving || interactiveDeletingId === item.id}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        className="grid h-8 w-8 place-items-center rounded border border-line bg-white text-red-600 disabled:opacity-50"
-                        type="button"
-                        title="Eliminar plantilla"
-                        onClick={() => void deleteInteractiveTemplate(item.id)}
-                        disabled={interactiveDeletingId === item.id}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-slate-500">Sin plantillas interactivas.</p>
+                )}
+              </div>
+            </div>
+
+            <div className="min-w-0">
+              <div className="grid gap-3 md:grid-cols-2">
+                <TextInput
+                  label="Nombre de plantilla"
+                  value={interactiveForm.name}
+                  onChange={(value) => setInteractiveForm((current) => ({ ...current, name: value }))}
+                />
+                <TextInput
+                  label="Action key"
+                  value={interactiveForm.action_key}
+                  onChange={(value) =>
+                    setInteractiveForm((current) => ({
+                      ...current,
+                      action_key: value.toLowerCase().replace(/\s+/g, "_"),
+                    }))
+                  }
+                />
+                <SelectInput
+                  label="Tipo"
+                  value={interactiveForm.template_type}
+                  options={[
+                    { value: "buttons", label: "Botones" },
+                    { value: "list", label: "Lista" },
+                  ]}
+                  onChange={(value) =>
+                    setInteractiveForm((current) => ({ ...current, template_type: value as "buttons" | "list" }))
+                  }
+                />
+                <TextInput
+                  label="Texto principal"
+                  value={interactiveForm.body_text}
+                  onChange={(value) => setInteractiveForm((current) => ({ ...current, body_text: value }))}
+                />
+                <TextInput
+                  label="Opcion 1"
+                  value={interactiveForm.option1}
+                  onChange={(value) => setInteractiveForm((current) => ({ ...current, option1: value }))}
+                />
+                <TextInput
+                  label="Opcion 2"
+                  value={interactiveForm.option2}
+                  onChange={(value) => setInteractiveForm((current) => ({ ...current, option2: value }))}
+                />
+                <TextInput
+                  label="Opcion 3"
+                  value={interactiveForm.option3}
+                  onChange={(value) => setInteractiveForm((current) => ({ ...current, option3: value }))}
+                />
+                <TextInput
+                  label="Footer (opcional)"
+                  value={interactiveForm.footer_text}
+                  onChange={(value) => setInteractiveForm((current) => ({ ...current, footer_text: value }))}
+                />
+              </div>
+              {interactiveForm.template_type === "list" ? (
+                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                  <TextInput
+                    label="Texto boton lista"
+                    value={interactiveForm.button_text}
+                    onChange={(value) => setInteractiveForm((current) => ({ ...current, button_text: value }))}
+                  />
+                  <TextInput
+                    label="Titulo de seccion"
+                    value={interactiveForm.section_title}
+                    onChange={(value) => setInteractiveForm((current) => ({ ...current, section_title: value }))}
+                  />
                 </div>
-              ))
-            ) : (
-              <p className="text-sm text-slate-500">Sin plantillas interactivas.</p>
-            )}
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  className="h-10 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+                  type="button"
+                  disabled={interactiveSaving}
+                  onClick={() => void saveInteractiveTemplate()}
+                >
+                  {interactiveSaving
+                    ? "Guardando..."
+                    : interactiveEditingId
+                      ? "Actualizar plantilla"
+                      : "Guardar plantilla"}
+                </button>
+                {interactiveEditingId ? (
+                  <button
+                    className="h-10 rounded border border-line px-3 text-sm"
+                    type="button"
+                    onClick={cancelInteractiveEdit}
+                  >
+                    Cancelar edicion
+                  </button>
+                ) : null}
+              </div>
+            </div>
           </div>
         </section>
 

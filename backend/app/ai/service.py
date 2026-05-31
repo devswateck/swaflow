@@ -388,19 +388,24 @@ def list_interactive_templates(db: Session, *, company_id: UUID) -> list[AiInter
 def create_interactive_template(
     db: Session, *, company_id: UUID, payload: AiInteractiveTemplateCreate
 ) -> AiInteractiveTemplate:
-    template = AiInteractiveTemplate(
-        company_id=company_id,
-        name=payload.name,
-        action_key=payload.action_key.strip(),
-        template_type=payload.template_type,
-        body_text=payload.body_text,
-        footer_text=payload.footer_text,
-        button_text=payload.button_text,
-        section_title=payload.section_title,
-        options=[item.model_dump() for item in payload.options],
-        active=payload.active,
+    action_key = payload.action_key.strip().lower()
+    template = db.scalar(
+        select(AiInteractiveTemplate).where(
+            AiInteractiveTemplate.company_id == company_id,
+            AiInteractiveTemplate.action_key == action_key,
+        )
     )
-    db.add(template)
+    if template is None:
+        template = AiInteractiveTemplate(company_id=company_id, action_key=action_key)
+        db.add(template)
+    template.name = payload.name.strip()
+    template.template_type = payload.template_type
+    template.body_text = payload.body_text.strip()
+    template.footer_text = payload.footer_text
+    template.button_text = payload.button_text
+    template.section_title = payload.section_title
+    template.options = [item.model_dump() for item in payload.options]
+    template.active = payload.active
     db.commit()
     db.refresh(template)
     return template
@@ -429,6 +434,20 @@ def update_interactive_template(
 ) -> AiInteractiveTemplate:
     template = get_interactive_template(db, company_id=company_id, template_id=template_id)
     data = payload.model_dump(exclude_unset=True)
+    if "action_key" in data and data["action_key"] is not None:
+        data["action_key"] = data["action_key"].strip().lower()
+        duplicate = db.scalar(
+            select(AiInteractiveTemplate).where(
+                AiInteractiveTemplate.company_id == company_id,
+                AiInteractiveTemplate.action_key == data["action_key"],
+                AiInteractiveTemplate.id != template_id,
+            )
+        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Ya existe una plantilla con ese action_key",
+            )
     if "options" in data and data["options"] is not None:
         data["options"] = [item.model_dump() for item in payload.options or []]
     for field, value in data.items():

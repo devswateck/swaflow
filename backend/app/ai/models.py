@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Boolean, String, Text
+from sqlalchemy import JSON, Boolean, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
@@ -19,6 +19,9 @@ class AiAgent(Base, IdMixin, TenantMixin, TimestampMixin):
 
 class AiInteractiveTemplate(Base, IdMixin, TenantMixin, TimestampMixin):
     __tablename__ = "ai_interactive_templates"
+    __table_args__ = (
+        UniqueConstraint("company_id", "action_key", name="uq_ai_interactive_templates_company_action"),
+    )
 
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     action_key: Mapped[str] = mapped_column(String(120), nullable=False)

@@ -309,7 +309,7 @@ def _send_action_template(
             AiInteractiveTemplate.company_id == account.company_id,
             AiInteractiveTemplate.action_key == action_key,
             AiInteractiveTemplate.active.is_(True),
-        )
+        ).order_by(AiInteractiveTemplate.updated_at.desc())
     )
     if template is None:
         return None
