@@ -2841,7 +2841,7 @@ function AiPage() {
   return (
     <>
       <ToastStack toasts={toasts} />
-      <form className="grid gap-5 xl:grid-cols-[1fr_360px]" onSubmit={saveAgent}>
+      <form className="space-y-5" onSubmit={saveAgent}>
         <div className="min-w-0 space-y-5">
         {error ? <Notice tone="error" message={error} /> : null}
         {notice ? <Notice tone="success" message={notice} /> : null}
@@ -2934,6 +2934,51 @@ function AiPage() {
             </div>
           </div>
         </section>
+
+        <InfoPanel title="Madurez de la IA" icon={Gauge}>
+          <div>
+            <div className="mb-2 flex items-end justify-between">
+              <span className="text-2xl font-semibold text-brand">{maturity}%</span>
+              <span className="text-xs text-slate-500">
+                {completedItems}/{checklist.length}
+              </span>
+            </div>
+            <ProgressBar value={maturity} />
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {checklist.map((item) => (
+              <ChecklistItem key={item.label} label={item.label} done={item.done} />
+            ))}
+          </div>
+        </InfoPanel>
+
+        <InfoPanel title="Modelo de IA" icon={BrainCircuit}>
+          <div className="grid gap-3 md:grid-cols-[minmax(240px,1fr)_180px_180px_180px]">
+            <SelectInput
+              label="Modelo"
+              value={form.model}
+              options={[
+                { value: "gpt-4o-mini", label: "gpt-4o-mini" },
+                { value: "gpt-4o", label: "gpt-4o" },
+                { value: "gpt-4.1-mini", label: "gpt-4.1-mini" },
+              ]}
+              onChange={(value) => updateField("model", value)}
+            />
+            <TextInput
+              label="Temperatura"
+              value={form.temperature}
+              onChange={(value) => updateField("temperature", value)}
+            />
+            <TextInput
+              label="Max tokens"
+              value={form.maxTokens}
+              onChange={(value) => updateField("maxTokens", value)}
+            />
+            <div className="rounded border border-line bg-panel px-3 py-2">
+              <KeyValue label="API global" value="Conectada" strong />
+            </div>
+          </div>
+        </InfoPanel>
 
         <section className="rounded border border-line bg-white p-4 shadow-soft">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -3093,7 +3138,7 @@ function AiPage() {
           <p className="mt-1 text-xs text-slate-500">
             Usa el action_key en el prompt. Ejemplo: {`{"action":"menu_principal"}`}.
           </p>
-          <div className="mt-4 grid gap-4 lg:grid-cols-[280px_1fr]">
+          <div className="mt-4 grid gap-4 lg:grid-cols-[360px_1fr]">
             <div className="rounded border border-line bg-panel p-3">
               <div className="flex items-center justify-between gap-2 text-xs text-slate-500">
                 <span>Plantillas creadas</span>
@@ -3118,6 +3163,20 @@ function AiPage() {
                           <p className="mt-1 text-xs text-slate-500">
                             {item.template_type === "buttons" ? "Botones" : "Lista"} · {item.options.length} opciones
                           </p>
+                          <p className="mt-2 text-xs text-slate-700">{item.body_text}</p>
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {item.options.map((option) => (
+                              <span
+                                key={option.id}
+                                className="inline-flex min-h-7 items-center rounded-full border border-brand bg-[#e5f3ee] px-2.5 py-1 text-xs font-medium text-brand"
+                              >
+                                {option.title}
+                              </span>
+                            ))}
+                          </div>
+                          {item.footer_text ? (
+                            <p className="mt-2 text-xs text-slate-500">{item.footer_text}</p>
+                          ) : null}
                         </div>
                         <div className="flex shrink-0 gap-1">
                           <button
@@ -3244,52 +3303,6 @@ function AiPage() {
         </section>
 
       </div>
-
-        <aside className="space-y-5">
-        <InfoPanel title="Madurez" icon={Gauge}>
-          <div>
-            <div className="mb-2 flex items-end justify-between">
-              <span className="text-2xl font-semibold text-brand">{maturity}%</span>
-              <span className="text-xs text-slate-500">
-                {completedItems}/{checklist.length}
-              </span>
-            </div>
-            <ProgressBar value={maturity} />
-          </div>
-          <div className="space-y-2">
-            {checklist.map((item) => (
-              <ChecklistItem key={item.label} label={item.label} done={item.done} />
-            ))}
-          </div>
-        </InfoPanel>
-
-        <InfoPanel title="Modelo IA" icon={BrainCircuit}>
-          <SelectInput
-            label="Modelo"
-            value={form.model}
-            options={[
-              { value: "gpt-4o-mini", label: "gpt-4o-mini" },
-              { value: "gpt-4o", label: "gpt-4o" },
-              { value: "gpt-4.1-mini", label: "gpt-4.1-mini" },
-            ]}
-            onChange={(value) => updateField("model", value)}
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <TextInput
-              label="Temperatura"
-              value={form.temperature}
-              onChange={(value) => updateField("temperature", value)}
-            />
-            <TextInput
-              label="Max tokens"
-              value={form.maxTokens}
-              onChange={(value) => updateField("maxTokens", value)}
-            />
-          </div>
-          <KeyValue label="API global" value="Conectada" strong />
-        </InfoPanel>
-
-        </aside>
       </form>
     </>
   );
