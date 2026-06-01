@@ -41,6 +41,7 @@ import {
   Trash2,
   UserRound,
   Warehouse,
+  Workflow,
   Moon,
   Sun,
   X,
@@ -93,6 +94,7 @@ type AiAgentResponse = {
   name: string;
   system_prompt: string;
   conversation_objective: string;
+  conversation_guide: string;
   security_rules: string;
   tone: string | null;
   rules: Record<string, unknown>;
@@ -167,6 +169,7 @@ type AiAgentForm = {
   businessDescription: string;
   productsServices: string;
   conversationObjective: string;
+  conversationGuide: string;
   captureFields: string[];
   funnelSteps: string[];
   handoffRule: string;
@@ -481,6 +484,15 @@ const defaultAiAgentForm: AiAgentForm = {
     "Automatizacion comercial por WhatsApp\nInbox para asesores\nAgenda de citas\nLinks de pago\nIntegraciones con n8n, calendario y correo",
   conversationObjective:
     "Calificar leads, resolver preguntas frecuentes, recomendar productos, agendar citas y apoyar el cierre de ventas.",
+  conversationGuide:
+    "1. Primer contacto:\n" +
+    "   Enviar el mensaje de bienvenida y solicitar los datos iniciales definidos.\n\n" +
+    "2. Datos iniciales completos:\n" +
+    "   Enviar el interactivo menu_principal.\n\n" +
+    "3. Seleccion de una opcion:\n" +
+    "   Interpretar la opcion como intencion actual, responder con el contexto del negocio y continuar el flujo.\n\n" +
+    "4. Productos:\n" +
+    "   Consultar catalogo e inventario antes de recomendar. Enviar cards cuando corresponda.",
   captureFields: ["Nombre", "Numero de contacto", "Producto de interes", "Fecha", "Horario"],
   funnelSteps: ["Saludo", "Calificacion", "Recomendacion", "Agendar cita", "Enviar pago"],
   handoffRule:
@@ -731,6 +743,8 @@ function aiFormFromAgent(agent: AiAgentResponse | null): AiAgentForm {
     systemPrompt: agent.system_prompt,
     conversationObjective:
       agent.conversation_objective || readString(rules.conversation_objective, defaultAiAgentForm.conversationObjective),
+    conversationGuide:
+      agent.conversation_guide || readString(rules.conversation_guide, defaultAiAgentForm.conversationGuide),
     securityRules: agent.security_rules || readString(rules.guardrails, defaultAiAgentForm.securityRules),
     personality: readString(rules.personality, defaultAiAgentForm.personality),
     tone: agent.tone ?? readString(rules.tone, defaultAiAgentForm.tone),
@@ -757,6 +771,7 @@ function aiPayloadFromForm(form: AiAgentForm) {
     name: form.name,
     system_prompt: form.systemPrompt,
     conversation_objective: form.conversationObjective,
+    conversation_guide: form.conversationGuide,
     security_rules: form.securityRules,
     tone: form.tone,
     active: form.active,
@@ -775,6 +790,7 @@ function aiPayloadFromForm(form: AiAgentForm) {
       temperature: form.temperature,
       max_tokens: form.maxTokens,
       knowledge_sources: form.knowledgeSources,
+      conversation_guide: form.conversationGuide,
     },
   };
 }
@@ -789,6 +805,7 @@ function aiChecklist(form: AiAgentForm) {
     { label: "Contexto del negocio", done: form.businessDescription.trim().length > 40 },
     { label: "Productos o servicios", done: form.productsServices.trim().length > 20 },
     { label: "Objetivo de conversacion", done: form.conversationObjective.trim().length > 20 },
+    { label: "Guion conversacional", done: form.conversationGuide.trim().length > 40 },
   ];
 }
 
@@ -1883,7 +1900,7 @@ function ProductsPage({
     setNotice("");
     setError("");
     try {
-      const response = await api<{ fetched: number; created: number; updated: number }>(
+      const response = await api<{ fetched: number; created: number; updated: number; warning?: string | null }>(
         "/whatsapp/catalog/sync",
         {
           method: "POST",
@@ -1894,6 +1911,9 @@ function ProductsPage({
       setNotice(
         `Actualizacion completada: ${response.fetched} leidos, ${response.created} creados, ${response.updated} actualizados`,
       );
+      if (response.warning) {
+        setError(response.warning);
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible actualizar el catalogo");
     } finally {
@@ -3026,6 +3046,27 @@ function AiPage() {
               onChange={(value) => updateField("conversationObjective", value)}
             />
           </div>
+        </section>
+
+        <section className="rounded border border-line bg-white p-4 shadow-soft">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <h2 className="text-sm font-semibold">Guion conversacional</h2>
+              <p className="text-xs text-slate-500">
+                Define etapas, condiciones y Action key para que el agente ejecute el siguiente paso en el momento correcto.
+              </p>
+            </div>
+            <Workflow className="h-4 w-4 text-brand" />
+          </div>
+          <textarea
+            className="min-h-52 w-full resize-y rounded border border-line bg-panel p-3 text-sm outline-none focus:border-brand"
+            value={form.conversationGuide}
+            onChange={(event) => updateField("conversationGuide", event.target.value)}
+            placeholder={"1. Datos iniciales completos:\n   Enviar el interactivo menu_principal.\n\n2. Cliente elige productos:\n   Consultar catalogo e inventario y enviar cards."}
+          />
+          <p className="mt-2 text-xs text-slate-500">
+            Para llamar botones o listas escribe el Action key exacto de la biblioteca, por ejemplo: menu_principal.
+          </p>
         </section>
 
         <section className="rounded border border-line bg-white p-4 shadow-soft">

@@ -11,6 +11,7 @@ class AiAgent(Base, IdMixin, TenantMixin, TimestampMixin):
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
     conversation_objective: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    conversation_guide: Mapped[str] = mapped_column(Text, nullable=False, default="")
     security_rules: Mapped[str] = mapped_column(Text, nullable=False, default="")
     tone: Mapped[str | None] = mapped_column(String(100))
     rules: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)

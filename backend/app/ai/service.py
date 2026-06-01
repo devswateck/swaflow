@@ -59,6 +59,7 @@ def create_agent(db: Session, *, company_id: UUID, payload: AiAgentCreate) -> Ai
             name=payload.name,
             system_prompt=payload.system_prompt,
             conversation_objective=payload.conversation_objective,
+            conversation_guide=payload.conversation_guide,
             security_rules=payload.security_rules,
             tone=payload.tone,
             rules=payload.rules,
@@ -70,6 +71,7 @@ def create_agent(db: Session, *, company_id: UUID, payload: AiAgentCreate) -> Ai
         existing.name = payload.name
         existing.system_prompt = payload.system_prompt
         existing.conversation_objective = payload.conversation_objective
+        existing.conversation_guide = payload.conversation_guide
         existing.security_rules = payload.security_rules
         existing.tone = payload.tone
         existing.rules = payload.rules

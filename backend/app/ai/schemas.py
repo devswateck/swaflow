@@ -11,6 +11,7 @@ class AiAgentCreate(BaseModel):
     name: str = Field(min_length=1, max_length=150)
     system_prompt: str = Field(min_length=1)
     conversation_objective: str = Field(default="", max_length=6000)
+    conversation_guide: str = Field(default="", max_length=12000)
     security_rules: str = Field(default="", max_length=6000)
     tone: str | None = Field(default=None, max_length=100)
     rules: dict = Field(default_factory=dict)
@@ -21,6 +22,7 @@ class AiAgentUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=150)
     system_prompt: str | None = Field(default=None, min_length=1)
     conversation_objective: str | None = Field(default=None, max_length=6000)
+    conversation_guide: str | None = Field(default=None, max_length=12000)
     security_rules: str | None = Field(default=None, max_length=6000)
     tone: str | None = Field(default=None, max_length=100)
     rules: dict | None = None
@@ -32,6 +34,7 @@ class AiAgentRead(TimestampedRead):
     name: str
     system_prompt: str
     conversation_objective: str
+    conversation_guide: str
     security_rules: str
     tone: str | None
     rules: dict

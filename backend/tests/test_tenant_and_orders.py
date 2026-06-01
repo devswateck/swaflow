@@ -31,6 +31,7 @@ from app.users.models import User
 from app.users.service import get_user
 from app.whatsapp.models import WhatsAppAccount
 from app.whatsapp.service import (
+    _catalog_link_warning,
     _incoming_message_content,
     _interactive_reply_requests_catalog,
     _list_available_product_ids,
@@ -296,6 +297,39 @@ def test_ai_product_cards_only_use_available_meta_products_in_requested_order(db
     assert _interactive_reply_requests_catalog({"title": "Productos"})
     assert _interactive_reply_requests_catalog({"title": "Ver catálogo"})
     assert not _interactive_reply_requests_catalog({"title": "Agenda tu cita"})
+
+
+def test_whatsapp_catalog_link_warning_detects_catalog_not_connected_to_waba(monkeypatch):
+    account = SimpleNamespace(
+        business_account_id="waba-1",
+        access_token_encrypted="encrypted-token",
+    )
+    monkeypatch.setattr("app.whatsapp.service.decrypt_secret", lambda _value: "token")
+    monkeypatch.setattr(
+        "app.whatsapp.service._meta_request",
+        lambda *_args, **_kwargs: {"data": [{"id": "catalog-connected"}]},
+    )
+
+    warning = _catalog_link_warning(account=account, catalog_id="catalog-missing")
+
+    assert warning is not None
+    assert "catalog-missing" in warning
+    assert "waba-1" in warning
+    assert "WhatsApp Manager" in warning
+
+
+def test_whatsapp_catalog_link_warning_accepts_connected_catalog(monkeypatch):
+    account = SimpleNamespace(
+        business_account_id="waba-1",
+        access_token_encrypted="encrypted-token",
+    )
+    monkeypatch.setattr("app.whatsapp.service.decrypt_secret", lambda _value: "token")
+    monkeypatch.setattr(
+        "app.whatsapp.service._meta_request",
+        lambda *_args, **_kwargs: {"data": [{"id": "catalog-connected"}]},
+    )
+
+    assert _catalog_link_warning(account=account, catalog_id="catalog-connected") is None
 
 
 def test_interactive_template_save_updates_existing_action_key(db):

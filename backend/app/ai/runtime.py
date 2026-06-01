@@ -347,6 +347,10 @@ def generate_auto_reply(
         agent.conversation_objective,
         default=_as_text(rules.get("conversation_objective")),
     )
+    conversation_guide = _as_text(
+        agent.conversation_guide,
+        default=_as_text(rules.get("conversation_guide")),
+    )
     capture_fields = _as_list(rules.get("capture_fields"))
     funnel_steps = _as_list(rules.get("funnel_steps"))
     faq_legacy = _as_text(rules.get("faq"))
@@ -392,6 +396,7 @@ def generate_auto_reply(
         f"system_prompt:\n{agent.system_prompt}\n\n"
         f"tone: {tone}\n"
         f"conversation_objective: {conversation_objective or 'resolver dudas y llevar a conversion'}\n"
+        f"conversation_guide:\n{conversation_guide or 'sin guion conversacional definido'}\n"
         f"security_rules: {security_rules or faq_legacy or 'no inventar datos ni promesas no verificadas'}\n"
         f"rules_json: {_as_json_context(rules)}\n\n"
         "Contexto auxiliar del tenant. Usalo solo cuando ayude a cumplir la configuracion del agente:\n"
@@ -411,7 +416,8 @@ def generate_auto_reply(
         f"{_build_interactive_actions_context(available_action_templates)}\n\n"
         f"{interactive_selection_context}"
         "Reglas de salida:\n"
-        "- Obedece primero system_prompt, tone, rules_json, security_rules y conversation_objective.\n"
+        "- Obedece primero system_prompt, tone, rules_json, security_rules, conversation_objective y conversation_guide.\n"
+        "- Usa conversation_guide como secuencia operativa: evalua sus etapas y condiciones en cada turno. Si una etapa pide un interactivo, devuelve su action_key exacto en action.\n"
         "- Responde siempre en el idioma configurado arriba.\n"
         "- No inventes precios ni stock.\n"
         "- Antes de ofrecer o recomendar cualquier producto, consulta el catalogo e inventario interno incluido arriba.\n"

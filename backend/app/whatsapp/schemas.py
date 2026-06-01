@@ -119,3 +119,4 @@ class WhatsAppCatalogSyncResponse(BaseModel):
     fetched: int
     created: int
     updated: int
+    warning: str | None = None

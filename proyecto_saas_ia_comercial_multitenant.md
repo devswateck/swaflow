@@ -1610,3 +1610,12 @@ Esta sección resume lo que ya quedó construido y operativo en el proyecto, inc
   - `backend`: compile OK + tests `5 passed`,
   - `frontend`: build OK,
   - `git diff --check`: OK.
+
+### 27.17 Guion conversacional y validacion de catalogo WhatsApp
+
+- Se agrego `ai_agents.conversation_guide` como campo independiente del prompt.
+- El agente usa el guion en cada respuesta para evaluar etapas, condiciones y `action_key`.
+- La pantalla de IA permite editar el bloque **Guion conversacional** entre contexto del negocio y prompt del sistema.
+- La sincronizacion de productos valida si el catalogo Meta esta vinculado a la WABA activa.
+- Si Meta permite leer el catalogo pero la WABA no lo tiene asociado, SwaFlow muestra una advertencia clara.
+- El envio de cards tambien valida la asociacion antes de llamar a Meta, evitando exponer el error opaco `(#131009) Parameter value is not valid`.

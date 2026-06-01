@@ -704,6 +704,7 @@ def send_product_cards_message(
     payload: WhatsAppSendProductCardsRequest,
 ) -> WhatsAppSendTextResponse:
     account = get_account(db, company_id=company_id, account_id=payload.account_id)
+    _require_catalog_connected_to_waba(account=account, catalog_id=payload.catalog_id)
     if len(payload.items) == 1:
         interactive_payload = {
             "type": "product",
@@ -785,6 +786,7 @@ def send_product_cards_from_db(
             detail="All selected products must belong to the same WhatsApp catalog_id",
         )
     catalog_id = next(iter(catalog_ids))
+    _require_catalog_connected_to_waba(account=account, catalog_id=catalog_id)
     items = [
         {"product_retailer_id": product.whatsapp_product_retailer_id}
         for product in products
@@ -913,6 +915,46 @@ def _interactive_reply_requests_catalog(interactive_reply: dict | None) -> bool:
     return "producto" in normalized or "catalogo" in normalized
 
 
+def _catalog_link_warning(*, account: WhatsAppAccount, catalog_id: str) -> str | None:
+    try:
+        data = _meta_request(
+            "GET",
+            f"/{account.business_account_id}/product_catalogs",
+            access_token=decrypt_secret(account.access_token_encrypted),
+        )
+    except HTTPException as exc:
+        logger.warning(
+            "Unable to validate WhatsApp catalog link waba_id=%s catalog_id=%s detail=%s",
+            account.business_account_id,
+            catalog_id,
+            exc.detail,
+        )
+        return None
+
+    rows = data.get("data", []) if isinstance(data, dict) else []
+    linked_catalog_ids = {
+        str(row.get("id") or "").strip()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    }
+    if catalog_id in linked_catalog_ids:
+        return None
+    return (
+        f"El catalogo Meta {catalog_id} se puede leer, pero no esta vinculado a la cuenta "
+        f"de WhatsApp Business {account.business_account_id}. Vinculalo en WhatsApp Manager "
+        "antes de enviar cards de productos."
+    )
+
+
+def _require_catalog_connected_to_waba(*, account: WhatsAppAccount, catalog_id: str) -> None:
+    warning = _catalog_link_warning(account=account, catalog_id=catalog_id)
+    if warning:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=warning,
+        )
+
+
 def sync_catalog_products(
     db: Session,
     *,
@@ -995,7 +1037,12 @@ def sync_catalog_products(
             updated += 1
     ensure_inventory_for_products(db, company_id=company_id)
     db.commit()
-    return WhatsAppCatalogSyncResponse(fetched=len(rows), created=created, updated=updated)
+    return WhatsAppCatalogSyncResponse(
+        fetched=len(rows),
+        created=created,
+        updated=updated,
+        warning=_catalog_link_warning(account=account, catalog_id=payload.catalog_id),
+    )
 
 
 def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
