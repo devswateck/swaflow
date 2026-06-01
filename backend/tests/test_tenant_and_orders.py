@@ -32,6 +32,7 @@ from app.users.service import get_user
 from app.whatsapp.models import WhatsAppAccount
 from app.whatsapp.service import (
     _incoming_message_content,
+    _resolve_available_product_ids,
     _resolve_configured_action,
     _should_generate_auto_reply,
 )
@@ -187,6 +188,8 @@ def test_ai_catalog_context_includes_real_inventory_availability(db):
         sku="TOP-250",
         price=Decimal("130000.00"),
         currency="COP",
+        whatsapp_catalog_id="catalog-1",
+        whatsapp_product_retailer_id="top-250-meta",
     )
     db.add(product)
     db.flush()
@@ -203,8 +206,85 @@ def test_ai_catalog_context_includes_real_inventory_availability(db):
     context = _build_catalog_context(db, company_id=company.id)
 
     assert "Top Bronce 250ml" in context
+    assert "Meta retailer_id: top-250-meta" in context
     assert "Stock real disponible: 4" in context
     assert "stock: 6, reservado: 2" in context
+
+
+def test_ai_product_cards_only_use_available_meta_products_in_requested_order(db):
+    company, _ = bootstrap_company(db, "Acme")
+    available_first = Product(
+        company_id=company.id,
+        name="Top Bronce 250ml",
+        price=Decimal("130000.00"),
+        currency="COP",
+        whatsapp_catalog_id="catalog-1",
+        whatsapp_product_retailer_id="top-250-meta",
+    )
+    available_second = Product(
+        company_id=company.id,
+        name="Oleo 220ml",
+        price=Decimal("70000.00"),
+        currency="COP",
+        whatsapp_catalog_id="catalog-1",
+        whatsapp_product_retailer_id="oleo-220-meta",
+    )
+    out_of_stock = Product(
+        company_id=company.id,
+        name="Parafina 900ml",
+        price=Decimal("220000.00"),
+        currency="COP",
+        whatsapp_catalog_id="catalog-1",
+        whatsapp_product_retailer_id="parafina-900-meta",
+    )
+    without_meta_mapping = Product(
+        company_id=company.id,
+        name="Curso presencial",
+        price=Decimal("500000.00"),
+        currency="COP",
+    )
+    db.add_all([available_first, available_second, out_of_stock, without_meta_mapping])
+    db.flush()
+    db.add_all(
+        [
+            Inventory(
+                company_id=company.id,
+                product_id=available_first.id,
+                quantity_available=3,
+            ),
+            Inventory(
+                company_id=company.id,
+                product_id=available_second.id,
+                quantity_available=2,
+            ),
+            Inventory(
+                company_id=company.id,
+                product_id=out_of_stock.id,
+                quantity_available=1,
+                quantity_reserved=1,
+            ),
+            Inventory(
+                company_id=company.id,
+                product_id=without_meta_mapping.id,
+                quantity_available=5,
+            ),
+        ]
+    )
+    db.commit()
+
+    product_ids = _resolve_available_product_ids(
+        db,
+        company_id=company.id,
+        retailer_ids=[
+            "oleo-220-meta",
+            "parafina-900-meta",
+            "top-250-meta",
+            "oleo-220-meta",
+            "inventado",
+        ],
+    )
+
+    assert product_ids == [available_second.id, available_first.id]
 
 
 def test_interactive_template_save_updates_existing_action_key(db):

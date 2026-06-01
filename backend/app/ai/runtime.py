@@ -140,7 +140,9 @@ def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) ->
             if real_available <= 0:
                 stock += " | NO DISPONIBLE: no ofrecer"
         rows.append(
-            f"- {product.name} | SKU: {sku} | Precio: {price} {product.currency} | {stock}"
+            f"- {product.name} | SKU: {sku} | Meta retailer_id: "
+            f"{product.whatsapp_product_retailer_id or 'SIN MAPEO META'} | "
+            f"Precio: {price} {product.currency} | {stock}"
         )
     return (
         "Catalogo e inventario interno para consulta obligatoria de la IA, "
@@ -301,6 +303,7 @@ class AutoReplyResult:
     reply_text: str
     action: str | None = None
     captured_fields: dict[str, str] = field(default_factory=dict)
+    product_retailer_ids: list[str] = field(default_factory=list)
 
 
 def generate_auto_reply(
@@ -418,12 +421,16 @@ def generate_auto_reply(
         "- Cuando el prompt del agente solicite enviar un menu, boton o lista de la biblioteca de interactivos, usa action con su action_key exacto. No redactes manualmente las opciones de esa plantilla en reply_text.\n"
         "- Evalua la regla_de_uso de cada interactivo en cada turno. Si corresponde enviarlo, responde con su action_key exacto.\n"
         "- Cuando uses action, reply_text debe ser una confirmacion breve porque el backend enviara el interactivo correspondiente.\n"
+        "- Cuando el cliente pida productos, detalles o una recomendacion y ya tengas contexto suficiente, usa product_retailer_ids para enviar cards nativas de WhatsApp.\n"
+        "- En product_retailer_ids devuelve unicamente Meta retailer_id copiados literalmente del catalogo interno, maximo 10 y ordenados por relevancia. Nunca inventes IDs.\n"
+        "- Incluye solamente productos con mapeo Meta y Stock real disponible mayor que cero. Si no corresponde enviar cards, devuelve una lista vacia.\n"
+        "- Cuando uses product_retailer_ids, reply_text debe ser una introduccion comercial breve para acompañar las cards.\n"
         "- En captured_fields devuelve solo datos expresamente informados o confirmados por el cliente. Usa claves breves en minuscula, por ejemplo nombre, email y ciudad.\n"
         f"- Primer contacto detectado: {'si' if first_contact else 'no'}.\n"
         f"- Mensaje de saludo detectado: {'si' if greeting_message else 'no'}.\n"
         "- Si es primer contacto, cumple estrictamente el flujo de apertura definido en el prompt del agente.\n"
         "Devuelve SIEMPRE un JSON valido sin texto adicional con este formato:\n"
-        '{"reply_text":"texto para cliente","action":"clave_o_null","captured_fields":{"nombre":"valor_confirmado"}}\n'
+        '{"reply_text":"texto para cliente","action":"clave_o_null","captured_fields":{"nombre":"valor_confirmado"},"product_retailer_ids":["id_meta"]}\n'
         "- action debe ser null o una de estas claves exactas: "
         f"{', '.join(available_actions) if available_actions else 'sin_acciones_disponibles'}.\n"
     )
@@ -489,6 +496,13 @@ def generate_auto_reply(
             if isinstance(captured_fields_raw, dict)
             else {}
         )
+        product_retailer_ids = list(
+            dict.fromkeys(
+                str(retailer_id).strip()
+                for retailer_id in parsed.get("product_retailer_ids", [])
+                if str(retailer_id).strip()
+            )
+        )[:10] if isinstance(parsed.get("product_retailer_ids"), list) else []
         if action and action not in available_actions:
             action = None
         if not action:
@@ -509,6 +523,7 @@ def generate_auto_reply(
                 reply_text=reply_text,
                 action=action or None,
                 captured_fields=captured_fields,
+                product_retailer_ids=product_retailer_ids,
             )
     except json.JSONDecodeError:
         logger.warning("AI auto-reply non-json output company_id=%s", company_id)

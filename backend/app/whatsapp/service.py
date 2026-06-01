@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from decimal import Decimal
+import logging
 import re
 import unicodedata
 from uuid import UUID
@@ -16,6 +17,7 @@ from app.conversations.service import append_message, get_or_create_open_convers
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.events.service import create_event
+from app.inventory.models import Inventory
 from app.inventory.service import ensure_inventory_for_products
 from app.messages.models import Message
 from app.products.models import Product
@@ -34,6 +36,7 @@ from app.whatsapp.schemas import (
 )
 
 GRAPH_API_BASE_URL = "https://graph.facebook.com"
+logger = logging.getLogger(__name__)
 
 
 def _normalize_phone(phone: str) -> str:
@@ -754,6 +757,12 @@ def send_product_cards_from_db(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No active products found for selected ids",
         )
+    products_by_id = {product.id: product for product in products}
+    products = [
+        products_by_id[product_id]
+        for product_id in payload.product_ids
+        if product_id in products_by_id
+    ]
     missing_mapping = [
         product.name
         for product in products
@@ -807,6 +816,51 @@ def send_product_cards_from_db(
         fallback_text=payload.body,
         source="agent_product_cards_db",
     )
+
+
+def _resolve_available_product_ids(
+    db: Session,
+    *,
+    company_id: UUID,
+    retailer_ids: list[str],
+) -> list[UUID]:
+    normalized_ids = list(
+        dict.fromkeys(
+            str(retailer_id).strip()
+            for retailer_id in retailer_ids
+            if str(retailer_id).strip()
+        )
+    )[:10]
+    if not normalized_ids:
+        return []
+
+    rows = list(
+        db.execute(
+            select(Product, Inventory)
+            .join(
+                Inventory,
+                (Inventory.company_id == Product.company_id)
+                & (Inventory.product_id == Product.id),
+            )
+            .where(
+                Product.company_id == company_id,
+                Product.status == "active",
+                Product.whatsapp_catalog_id.is_not(None),
+                Product.whatsapp_product_retailer_id.in_(normalized_ids),
+            )
+        )
+    )
+    product_ids_by_retailer_id = {
+        product.whatsapp_product_retailer_id: product.id
+        for product, inventory in rows
+        if product.whatsapp_product_retailer_id
+        and inventory.quantity_available - inventory.quantity_reserved > 0
+    }
+    return [
+        product_ids_by_retailer_id[retailer_id]
+        for retailer_id in normalized_ids
+        if retailer_id in product_ids_by_retailer_id
+    ]
 
 
 def sync_catalog_products(
@@ -992,6 +1046,7 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                         incoming_interactive_reply=interactive_reply,
                     )
                     if ai_reply:
+                        product_cards_sent = False
                         action_sent = False
                         if isinstance(ai_reply, AutoReplyResult):
                             ai_reply.action = _resolve_configured_action(
@@ -1001,7 +1056,35 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                 contact=contact,
                                 ai_reply=ai_reply,
                             )
-                        if isinstance(ai_reply, AutoReplyResult) and ai_reply.action:
+                            product_ids = _resolve_available_product_ids(
+                                db,
+                                company_id=account.company_id,
+                                retailer_ids=ai_reply.product_retailer_ids,
+                            )
+                            if product_ids:
+                                try:
+                                    send_product_cards_from_db(
+                                        db,
+                                        company_id=account.company_id,
+                                        payload=WhatsAppSendProductCardsFromDbRequest(
+                                            to=customer_phone,
+                                            body=ai_reply.reply_text[:1024],
+                                            product_ids=product_ids,
+                                            account_id=account.id,
+                                        ),
+                                    )
+                                    product_cards_sent = True
+                                except HTTPException as exc:
+                                    logger.warning(
+                                        "AI product cards skipped company_id=%s detail=%s",
+                                        account.company_id,
+                                        exc.detail,
+                                    )
+                        if (
+                            not product_cards_sent
+                            and isinstance(ai_reply, AutoReplyResult)
+                            and ai_reply.action
+                        ):
                             action_sent = (
                                 _send_action_template(
                                     db,
@@ -1012,7 +1095,7 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                 )
                                 is not None
                             )
-                        if not action_sent:
+                        if not product_cards_sent and not action_sent:
                             body = ai_reply.reply_text if isinstance(ai_reply, AutoReplyResult) else str(ai_reply)
                             response = _send_text_with_account(
                                 db,
