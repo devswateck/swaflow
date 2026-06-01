@@ -127,6 +127,7 @@ def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) ->
     for product, inventory in product_rows:
         price = _stringify_price(product.price)
         sku = product.sku or "-"
+        description = " ".join((product.description or "sin descripcion").split())[:500]
         if inventory is None:
             stock = "SIN INVENTARIO CONFIGURADO: no ofrecer"
         else:
@@ -142,7 +143,7 @@ def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) ->
         rows.append(
             f"- {product.name} | SKU: {sku} | Meta retailer_id: "
             f"{product.whatsapp_product_retailer_id or 'SIN MAPEO META'} | "
-            f"Precio: {price} {product.currency} | {stock}"
+            f"Descripcion: {description} | Precio: {price} {product.currency} | {stock}"
         )
     return (
         "Catalogo e inventario interno para consulta obligatoria de la IA, "

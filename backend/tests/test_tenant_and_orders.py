@@ -185,6 +185,7 @@ def test_ai_catalog_context_includes_real_inventory_availability(db):
     product = Product(
         company_id=company.id,
         name="Top Bronce 250ml",
+        description="Bronceador profesional para camara y sol.",
         sku="TOP-250",
         price=Decimal("130000.00"),
         currency="COP",
@@ -207,6 +208,7 @@ def test_ai_catalog_context_includes_real_inventory_availability(db):
 
     assert "Top Bronce 250ml" in context
     assert "Meta retailer_id: top-250-meta" in context
+    assert "Descripcion: Bronceador profesional para camara y sol." in context
     assert "Stock real disponible: 4" in context
     assert "stock: 6, reservado: 2" in context
 
