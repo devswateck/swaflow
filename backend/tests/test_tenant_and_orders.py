@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
 from app.auth.schemas import PasswordChangeRequest
 from app.auth.service import authenticate_user, change_own_password
@@ -31,14 +32,18 @@ from app.users.models import User
 from app.users.service import get_user
 from app.whatsapp.models import WhatsAppAccount
 from app.whatsapp.service import (
+    _build_available_products_fallback,
     _catalog_link_warning,
     _incoming_message_content,
     _interactive_reply_requests_catalog,
     _list_available_product_ids,
+    _message_requests_catalog,
+    _meta_inventory_quantity,
     _meta_request,
     _resolve_available_product_ids,
     _resolve_configured_action,
     _should_generate_auto_reply,
+    _sync_catalog_products_with_account,
 )
 
 
@@ -298,6 +303,123 @@ def test_ai_product_cards_only_use_available_meta_products_in_requested_order(db
     assert _interactive_reply_requests_catalog({"title": "Productos"})
     assert _interactive_reply_requests_catalog({"title": "Ver catálogo"})
     assert not _interactive_reply_requests_catalog({"title": "Agenda tu cita"})
+
+
+def test_product_query_sync_refreshes_catalog_inventory_and_deactivates_removed_products(
+    db, monkeypatch
+):
+    company, _ = bootstrap_company(db, "Acme")
+    removed = Product(
+        company_id=company.id,
+        name="Producto anterior",
+        price=Decimal("90000.00"),
+        currency="COP",
+        whatsapp_catalog_id="catalog-1",
+        whatsapp_product_retailer_id="removed-meta",
+    )
+    db.add(removed)
+    db.flush()
+    db.add(
+        Inventory(
+            company_id=company.id,
+            product_id=removed.id,
+            quantity_available=7,
+        )
+    )
+    db.commit()
+    account = SimpleNamespace(
+        company_id=company.id,
+        business_account_id="waba-1",
+        access_token_encrypted="encrypted-token",
+    )
+    monkeypatch.setattr(
+        "app.whatsapp.service._fetch_catalog_product_rows",
+        lambda **_kwargs: [
+            {
+                "retailer_id": "top-250-meta",
+                "name": "Top Bronce 250ml",
+                "description": "Bronceador profesional.",
+                "price": "$ 130.000",
+                "currency": "COP",
+                "availability": "in stock",
+                "inventory": 4,
+                "image_url": "https://example.com/top.jpg",
+                "url": "https://example.com/top",
+                "visibility": "published",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "app.whatsapp.service._catalog_link_warning",
+        lambda **_kwargs: None,
+    )
+
+    result = _sync_catalog_products_with_account(
+        db,
+        company_id=company.id,
+        account=account,
+        catalog_id="catalog-1",
+    )
+
+    synced = db.scalar(
+        select(Product).where(
+            Product.company_id == company.id,
+            Product.whatsapp_product_retailer_id == "top-250-meta",
+        )
+    )
+    synced_inventory = db.scalar(
+        select(Inventory).where(Inventory.product_id == synced.id)
+    )
+    db.refresh(removed)
+    removed_inventory = db.scalar(
+        select(Inventory).where(Inventory.product_id == removed.id)
+    )
+    assert result.fetched == 1
+    assert result.created == 1
+    assert synced.price == Decimal("130000.00")
+    assert synced_inventory.quantity_available == 4
+    assert synced.metadata_json["image_url"] == "https://example.com/top.jpg"
+    assert removed.status == "inactive"
+    assert removed_inventory.quantity_available == 0
+
+
+def test_product_query_detection_inventory_and_fallback_use_available_catalog_data(db):
+    company, _ = bootstrap_company(db, "Acme")
+    product = Product(
+        company_id=company.id,
+        name="Top Bronce 250ml",
+        description="Bronceador profesional para cámara y sol.",
+        price=Decimal("130000.00"),
+        currency="COP",
+        whatsapp_catalog_id="catalog-1",
+        whatsapp_product_retailer_id="top-250-meta",
+    )
+    db.add(product)
+    db.flush()
+    db.add(
+        Inventory(
+            company_id=company.id,
+            product_id=product.id,
+            quantity_available=5,
+            quantity_reserved=1,
+        )
+    )
+    db.commit()
+
+    body = _build_available_products_fallback(
+        db,
+        company_id=company.id,
+        product_ids=[product.id],
+        intro="Te comparto opciones disponibles.",
+    )
+
+    assert _message_requests_catalog("Quiero ver bronceadores", None)
+    assert _message_requests_catalog("", {"title": "Productos"})
+    assert not _message_requests_catalog("Quiero agendar una cita", None)
+    assert _meta_inventory_quantity({"inventory": "8"}, availability="in stock") == 8
+    assert _meta_inventory_quantity({"inventory": 8}, availability="out of stock") == 0
+    assert "Top Bronce 250ml: $130.000 COP" in body
+    assert "Disponible (4 unidades)" in body
 
 
 def test_whatsapp_catalog_link_warning_detects_catalog_not_connected_to_waba(monkeypatch):

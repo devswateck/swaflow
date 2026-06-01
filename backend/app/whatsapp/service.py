@@ -923,6 +923,75 @@ def _interactive_reply_requests_catalog(interactive_reply: dict | None) -> bool:
     return "producto" in normalized or "catalogo" in normalized
 
 
+def _message_requests_catalog(message_content: str, interactive_reply: dict | None) -> bool:
+    if _interactive_reply_requests_catalog(interactive_reply):
+        return True
+    normalized = (
+        "".join(
+            char
+            for char in unicodedata.normalize("NFKD", message_content)
+            if not unicodedata.combining(char)
+        )
+        .strip()
+        .lower()
+    )
+    return any(keyword in normalized for keyword in ("producto", "catalogo", "bronceador"))
+
+
+def _format_product_price(product: Product) -> str:
+    amount = f"{product.price:,.0f}".replace(",", ".")
+    return f"${amount} {product.currency}"
+
+
+def _build_available_products_fallback(
+    db: Session,
+    *,
+    company_id: UUID,
+    product_ids: list[UUID],
+    intro: str,
+) -> str:
+    if not product_ids:
+        return intro
+    rows = list(
+        db.execute(
+            select(Product, Inventory)
+            .join(
+                Inventory,
+                (Inventory.company_id == Product.company_id)
+                & (Inventory.product_id == Product.id),
+            )
+            .where(
+                Product.company_id == company_id,
+                Product.id.in_(product_ids),
+                Product.status == "active",
+                Inventory.quantity_available > Inventory.quantity_reserved,
+            )
+        )
+    )
+    rows_by_id = {product.id: (product, inventory) for product, inventory in rows}
+    lines: list[str] = []
+    for product_id in product_ids[:5]:
+        row = rows_by_id.get(product_id)
+        if row is None:
+            continue
+        product, inventory = row
+        description = re.sub(r"\s+", " ", product.description or "").strip()
+        details = f" {description[:140]}" if description else ""
+        available = inventory.quantity_available - inventory.quantity_reserved
+        lines.append(
+            f"- {product.name}: {_format_product_price(product)}. "
+            f"Disponible ({available} unidades).{details}"
+        )
+    if not lines:
+        return intro
+    return (
+        f"{intro.strip()}\n\n"
+        "Estos productos tienen disponibilidad confirmada:\n"
+        f"{chr(10).join(lines)}\n\n"
+        "Cuéntame cuál te interesa y te ayudo a elegir."
+    )[:4096]
+
+
 def _catalog_link_warning(*, account: WhatsAppAccount, catalog_id: str) -> str | None:
     try:
         data = _meta_request(
@@ -963,6 +1032,184 @@ def _require_catalog_connected_to_waba(*, account: WhatsAppAccount, catalog_id: 
         )
 
 
+def _fetch_catalog_product_rows(*, account: WhatsAppAccount, catalog_id: str) -> list[dict]:
+    fields = (
+        "retailer_id,name,description,price,currency,availability,inventory,"
+        "image_url,url,visibility"
+    )
+    after: str | None = None
+    rows: list[dict] = []
+    for _page in range(20):
+        params = {"fields": fields, "limit": "100"}
+        if after:
+            params["after"] = after
+        data = _meta_request(
+            "GET",
+            f"/{catalog_id}/products",
+            access_token=decrypt_secret(account.access_token_encrypted),
+            params=params,
+        )
+        batch = data.get("data", []) if isinstance(data, dict) else []
+        if isinstance(batch, list):
+            rows.extend(row for row in batch if isinstance(row, dict))
+        paging = data.get("paging", {}) if isinstance(data, dict) else {}
+        cursors = paging.get("cursors", {}) if isinstance(paging, dict) else {}
+        next_after = str(cursors.get("after") or "").strip()
+        if not paging.get("next") or not next_after or next_after == after:
+            break
+        after = next_after
+    return rows
+
+
+def _meta_inventory_quantity(row: dict, *, availability: str) -> int | None:
+    if availability in {"out of stock", "discontinued"}:
+        return 0
+    raw_inventory = row.get("inventory")
+    if raw_inventory is None:
+        return None
+    try:
+        return max(0, int(raw_inventory))
+    except (TypeError, ValueError):
+        return None
+
+
+def _sync_catalog_products_with_account(
+    db: Session,
+    *,
+    company_id: UUID,
+    account: WhatsAppAccount,
+    catalog_id: str,
+) -> WhatsAppCatalogSyncResponse:
+    rows = _fetch_catalog_product_rows(account=account, catalog_id=catalog_id)
+    created = 0
+    updated = 0
+    inventory_quantities: dict[str, int | None] = {}
+    for row in rows:
+        retailer_id = str(row.get("retailer_id") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if not retailer_id or not name:
+            continue
+        existing = db.scalar(
+            select(Product).where(
+                Product.company_id == company_id,
+                Product.whatsapp_product_retailer_id == retailer_id,
+            )
+        )
+        description = str(row.get("description") or "").strip() or None
+        currency = str(row.get("currency") or "COP").strip() or "COP"
+        availability = str(row.get("availability") or "").strip().lower()
+        status = "inactive" if availability in {"out of stock", "discontinued"} else "active"
+        price = _to_decimal_price(row.get("price"))
+        if price <= 0:
+            price = Decimal("1")
+        metadata = {
+            "source": "meta_catalog_sync",
+            "availability": availability,
+            "image_url": str(row.get("image_url") or "").strip() or None,
+            "product_url": str(row.get("url") or "").strip() or None,
+            "visibility": str(row.get("visibility") or "").strip() or None,
+            "synced_at": datetime.now(UTC).isoformat(),
+        }
+        inventory_quantities[retailer_id] = _meta_inventory_quantity(
+            row, availability=availability
+        )
+
+        if existing is None:
+            db.add(
+                Product(
+                    company_id=company_id,
+                    name=name,
+                    description=description,
+                    sku=None,
+                    price=price,
+                    currency=currency,
+                    status=status,
+                    whatsapp_catalog_id=catalog_id,
+                    whatsapp_product_retailer_id=retailer_id,
+                    metadata_json=metadata,
+                )
+            )
+            created += 1
+        else:
+            existing.name = name
+            existing.description = description
+            existing.price = price
+            existing.currency = currency
+            existing.status = status
+            existing.whatsapp_catalog_id = catalog_id
+            current_metadata = (
+                dict(existing.metadata_json)
+                if isinstance(existing.metadata_json, dict)
+                else {}
+            )
+            current_metadata.update(metadata)
+            existing.metadata_json = current_metadata
+            updated += 1
+
+    db.flush()
+    ensure_inventory_for_products(db, company_id=company_id)
+    db.flush()
+    inventory_rows = list(
+        db.execute(
+            select(Product, Inventory)
+            .join(
+                Inventory,
+                (Inventory.company_id == Product.company_id)
+                & (Inventory.product_id == Product.id),
+            )
+            .where(
+                Product.company_id == company_id,
+                Product.whatsapp_catalog_id == catalog_id,
+            )
+        )
+    )
+    for product, inventory in inventory_rows:
+        retailer_id = product.whatsapp_product_retailer_id or ""
+        if retailer_id not in inventory_quantities:
+            product.status = "inactive"
+            inventory.quantity_available = 0
+            continue
+        quantity = inventory_quantities.get(retailer_id)
+        if quantity is not None:
+            inventory.quantity_available = quantity
+    db.commit()
+    return WhatsAppCatalogSyncResponse(
+        fetched=len(rows),
+        created=created,
+        updated=updated,
+        warning=_catalog_link_warning(account=account, catalog_id=catalog_id),
+    )
+
+
+def _sync_linked_catalogs_for_product_query(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+) -> None:
+    try:
+        data = _meta_request(
+            "GET",
+            f"/{account.business_account_id}/product_catalogs",
+            access_token=decrypt_secret(account.access_token_encrypted),
+        )
+        rows = data.get("data", []) if isinstance(data, dict) else []
+        for row in rows if isinstance(rows, list) else []:
+            catalog_id = str(row.get("id") or "").strip() if isinstance(row, dict) else ""
+            if catalog_id:
+                _sync_catalog_products_with_account(
+                    db,
+                    company_id=account.company_id,
+                    account=account,
+                    catalog_id=catalog_id,
+                )
+    except HTTPException as exc:
+        logger.warning(
+            "Automatic catalog sync skipped company_id=%s detail=%s",
+            account.company_id,
+            exc.detail,
+        )
+
+
 def sync_catalog_products(
     db: Session,
     *,
@@ -971,11 +1218,11 @@ def sync_catalog_products(
 ) -> WhatsAppCatalogSyncResponse:
     account = get_account(db, company_id=company_id, account_id=payload.account_id)
     try:
-        data = _meta_request(
-            "GET",
-            f"/{payload.catalog_id}/products",
-            access_token=decrypt_secret(account.access_token_encrypted),
-            params={"fields": "retailer_id,name,description,price,currency,availability"},
+        return _sync_catalog_products_with_account(
+            db,
+            company_id=company_id,
+            account=account,
+            catalog_id=payload.catalog_id,
         )
     except HTTPException as exc:
         detail = str(exc.detail or "")
@@ -989,68 +1236,6 @@ def sync_catalog_products(
                 ),
             ) from None
         raise
-    rows = data.get("data", []) if isinstance(data, dict) else []
-    if not isinstance(rows, list):
-        rows = []
-
-    created = 0
-    updated = 0
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        retailer_id = str(row.get("retailer_id") or "").strip()
-        name = str(row.get("name") or "").strip()
-        if not retailer_id or not name:
-            continue
-        existing = db.scalar(
-            select(Product).where(
-                Product.company_id == company_id,
-                Product.whatsapp_product_retailer_id == retailer_id,
-            )
-        )
-        description = str(row.get("description") or "").strip() or None
-        currency = str(row.get("currency") or "COP").strip() or "COP"
-        availability = str(row.get("availability") or "").lower()
-        status = "inactive" if availability in {"out of stock", "discontinued"} else "active"
-        price = _to_decimal_price(row.get("price"))
-        if price <= 0:
-            price = Decimal("1")
-
-        if existing is None:
-            db.add(
-                Product(
-                    company_id=company_id,
-                    name=name,
-                    description=description,
-                    sku=None,
-                    price=price,
-                    currency=currency,
-                    status=status,
-                    whatsapp_catalog_id=payload.catalog_id,
-                    whatsapp_product_retailer_id=retailer_id,
-                    metadata_json={"source": "meta_catalog_sync"},
-                )
-            )
-            created += 1
-        else:
-            existing.name = name
-            existing.description = description
-            existing.price = price
-            existing.currency = currency
-            existing.status = status
-            existing.whatsapp_catalog_id = payload.catalog_id
-            meta = existing.metadata_json if isinstance(existing.metadata_json, dict) else {}
-            meta["source"] = "meta_catalog_sync"
-            existing.metadata_json = meta
-            updated += 1
-    ensure_inventory_for_products(db, company_id=company_id)
-    db.commit()
-    return WhatsAppCatalogSyncResponse(
-        fetched=len(rows),
-        created=created,
-        updated=updated,
-        warning=_catalog_link_warning(account=account, catalog_id=payload.catalog_id),
-    )
 
 
 def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
@@ -1143,6 +1328,12 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                     content=message_content,
                     conversation_status=conversation.status,
                 ):
+                    catalog_refreshed = _message_requests_catalog(
+                        message_content or "",
+                        interactive_reply,
+                    )
+                    if catalog_refreshed:
+                        _sync_linked_catalogs_for_product_query(db, account=account)
                     ai_reply = generate_auto_reply(
                         db,
                         company_id=account.company_id,
@@ -1161,6 +1352,9 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                 contact=contact,
                                 ai_reply=ai_reply,
                             )
+                            if ai_reply.product_retailer_ids and not catalog_refreshed:
+                                _sync_linked_catalogs_for_product_query(db, account=account)
+                                catalog_refreshed = True
                             product_ids = _resolve_available_product_ids(
                                 db,
                                 company_id=account.company_id,
@@ -1192,6 +1386,12 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                         "AI product cards skipped company_id=%s detail=%s",
                                         account.company_id,
                                         exc.detail,
+                                    )
+                                    ai_reply.reply_text = _build_available_products_fallback(
+                                        db,
+                                        company_id=account.company_id,
+                                        product_ids=product_ids,
+                                        intro=ai_reply.reply_text,
                                     )
                         if (
                             not product_cards_sent
