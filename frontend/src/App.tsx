@@ -146,6 +146,9 @@ type AiInteractiveTemplate = {
   button_text: string | null;
   section_title: string | null;
   options: AiInteractiveTemplateOption[];
+  usage_instruction: string;
+  trigger_mode: "ai_decides" | "after_capture";
+  trigger_fields: string[];
   active: boolean;
   created_at: string;
   updated_at: string;
@@ -497,6 +500,9 @@ function createInteractiveTemplateForm() {
     footer_text: "",
     button_text: "Ver opciones",
     section_title: "Menu principal",
+    usage_instruction: "Enviar despues de capturar los datos iniciales del cliente.",
+    trigger_mode: "after_capture" as "ai_decides" | "after_capture",
+    trigger_fields: "nombre, email, ciudad",
     option1: "Cursos",
     option2: "Productos",
     option3: "Servicio",
@@ -2669,6 +2675,15 @@ function AiPage() {
           interactiveForm.template_type === "list"
             ? interactiveForm.section_title.trim() || "Opciones"
             : null,
+        usage_instruction: interactiveForm.usage_instruction.trim(),
+        trigger_mode: interactiveForm.trigger_mode,
+        trigger_fields:
+          interactiveForm.trigger_mode === "after_capture"
+            ? interactiveForm.trigger_fields
+                .split(",")
+                .map((field) => field.trim().toLowerCase())
+                .filter(Boolean)
+            : [],
         options,
         active: true,
       };
@@ -2717,6 +2732,9 @@ function AiPage() {
       footer_text: template.footer_text ?? "",
       button_text: template.button_text ?? "Ver opciones",
       section_title: template.section_title ?? "Opciones",
+      usage_instruction: template.usage_instruction ?? "",
+      trigger_mode: template.trigger_mode ?? "ai_decides",
+      trigger_fields: (template.trigger_fields ?? []).join(", "),
       option1: template.options[0]?.title ?? "",
       option2: template.options[1]?.title ?? "",
       option3: template.options[2]?.title ?? "",
@@ -3164,6 +3182,11 @@ function AiPage() {
                             {item.template_type === "buttons" ? "Botones" : "Lista"} · {item.options.length} opciones
                           </p>
                           <p className="mt-2 text-xs text-slate-700">{item.body_text}</p>
+                          <p className="mt-2 text-xs text-slate-500">
+                            {item.trigger_mode === "after_capture"
+                              ? `Automatico al capturar: ${(item.trigger_fields ?? []).join(", ")}`
+                              : item.usage_instruction || "La IA decide segun el contexto"}
+                          </p>
                           <div className="mt-2 flex flex-wrap gap-1.5">
                             {item.options.map((option) => (
                               <span
@@ -3240,6 +3263,28 @@ function AiPage() {
                   value={interactiveForm.body_text}
                   onChange={(value) => setInteractiveForm((current) => ({ ...current, body_text: value }))}
                 />
+                <SelectInput
+                  label="Momento de envio"
+                  value={interactiveForm.trigger_mode}
+                  options={[
+                    { value: "ai_decides", label: "La IA decide segun instruccion" },
+                    { value: "after_capture", label: "Automatico al capturar datos" },
+                  ]}
+                  onChange={(value) =>
+                    setInteractiveForm((current) => ({
+                      ...current,
+                      trigger_mode: value as "ai_decides" | "after_capture",
+                    }))
+                  }
+                />
+                {interactiveForm.trigger_mode === "after_capture" ? (
+                  <TextInput
+                    label="Campos requeridos separados por coma"
+                    value={interactiveForm.trigger_fields}
+                    placeholder="nombre, email, ciudad"
+                    onChange={(value) => setInteractiveForm((current) => ({ ...current, trigger_fields: value }))}
+                  />
+                ) : null}
                 <TextInput
                   label="Opcion 1"
                   value={interactiveForm.option1}
@@ -3259,6 +3304,16 @@ function AiPage() {
                   label="Footer (opcional)"
                   value={interactiveForm.footer_text}
                   onChange={(value) => setInteractiveForm((current) => ({ ...current, footer_text: value }))}
+                />
+              </div>
+              <div className="mt-3">
+                <TextAreaInput
+                  label="Instruccion de uso para la IA"
+                  value={interactiveForm.usage_instruction}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    setInteractiveForm((current) => ({ ...current, usage_instruction: value }))
+                  }
                 />
               </div>
               {interactiveForm.template_type === "list" ? (

@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 import re
+import unicodedata
 from uuid import UUID
 
 import httpx
@@ -37,6 +38,27 @@ GRAPH_API_BASE_URL = "https://graph.facebook.com"
 
 def _normalize_phone(phone: str) -> str:
     return phone.strip().replace("+", "").replace(" ", "").replace("-", "")
+
+
+def _normalize_capture_field(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    field = (
+        "".join(char for char in normalized if not unicodedata.combining(char))
+        .strip()
+        .lower()
+        .replace(" ", "_")
+    )
+    aliases = {
+        "correo": "email",
+        "correo_electronico": "email",
+        "e-mail": "email",
+        "nombre_completo": "nombre",
+        "telefono": "telefono",
+        "numero": "numero_de_contacto",
+        "numero_contacto": "numero_de_contacto",
+        "numero_de_telefono": "numero_de_contacto",
+    }
+    return aliases.get(field, field)
 
 
 def _to_decimal_price(value: object) -> Decimal:
@@ -365,7 +387,7 @@ def _send_action_template(
         account=account,
         to=to,
         interactive_payload=interactive_payload,
-        fallback_text=fallback_text,
+        fallback_text=template.body_text or fallback_text,
         source=f"ai_action:{action_key}",
     )
     sent_message = db.get(Message, response.message_id)
@@ -381,6 +403,102 @@ def _send_action_template(
         sent_message.metadata_json = metadata
         db.commit()
     return response
+
+
+def _action_was_sent(
+    db: Session, *, company_id: UUID, conversation_id: UUID, action_key: str
+) -> bool:
+    messages = db.scalars(
+        select(Message).where(
+            Message.company_id == company_id,
+            Message.conversation_id == conversation_id,
+            Message.sender_type == "agent",
+        )
+    )
+    for message in messages:
+        metadata = message.metadata_json if isinstance(message.metadata_json, dict) else {}
+        if metadata.get("source") == f"ai_action:{action_key}":
+            return True
+        ai_action = metadata.get("ai_action")
+        if isinstance(ai_action, dict) and ai_action.get("action_key") == action_key:
+            return True
+    return False
+
+
+def _capture_ai_fields(contact, captured_fields: dict[str, str]) -> dict[str, str]:
+    metadata = dict(contact.metadata_json) if isinstance(contact.metadata_json, dict) else {}
+    existing = metadata.get("ai_captured_fields")
+    merged = (
+        {
+            _normalize_capture_field(str(key)): str(value).strip()
+            for key, value in existing.items()
+            if str(key).strip() and str(value).strip()
+        }
+        if isinstance(existing, dict)
+        else {}
+    )
+    for key, value in captured_fields.items():
+        normalized_key = _normalize_capture_field(str(key))
+        clean_value = str(value).strip()
+        if normalized_key and clean_value:
+            merged[normalized_key] = clean_value
+
+    if contact.name:
+        merged.setdefault("nombre", contact.name)
+    if contact.email:
+        merged.setdefault("email", contact.email)
+    if contact.phone:
+        merged.setdefault("numero_de_contacto", contact.phone)
+        merged.setdefault("telefono", contact.phone)
+
+    contact.name = merged.get("nombre") or contact.name
+    contact.email = (merged.get("email") or contact.email or "").lower() or None
+    metadata["ai_captured_fields"] = merged
+    contact.metadata_json = metadata
+    return merged
+
+
+def _resolve_configured_action(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    conversation,
+    contact,
+    ai_reply: AutoReplyResult,
+) -> str | None:
+    captured_fields = _capture_ai_fields(contact, ai_reply.captured_fields)
+    db.commit()
+    if ai_reply.action:
+        return ai_reply.action
+
+    templates = db.scalars(
+        select(AiInteractiveTemplate)
+        .where(
+            AiInteractiveTemplate.company_id == account.company_id,
+            AiInteractiveTemplate.active.is_(True),
+            AiInteractiveTemplate.trigger_mode == "after_capture",
+        )
+        .order_by(AiInteractiveTemplate.updated_at.asc())
+    )
+    for template in templates:
+        required_fields = [
+            _normalize_capture_field(str(field))
+            for field in (template.trigger_fields or [])
+            if str(field).strip()
+        ]
+        if not required_fields:
+            continue
+        if not all(captured_fields.get(field) for field in required_fields):
+            continue
+        if _action_was_sent(
+            db,
+            company_id=account.company_id,
+            conversation_id=conversation.id,
+            action_key=template.action_key,
+        ):
+            continue
+        return template.action_key
+    return None
 
 
 def create_account(db: Session, *, company_id: UUID, payload: WhatsAppAccountCreate) -> WhatsAppAccount:
@@ -826,6 +944,14 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                     )
                     if ai_reply:
                         action_sent = False
+                        if isinstance(ai_reply, AutoReplyResult):
+                            ai_reply.action = _resolve_configured_action(
+                                db,
+                                account=account,
+                                conversation=conversation,
+                                contact=contact,
+                                ai_reply=ai_reply,
+                            )
                         if isinstance(ai_reply, AutoReplyResult) and ai_reply.action:
                             action_sent = (
                                 _send_action_template(

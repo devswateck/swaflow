@@ -405,6 +405,11 @@ def create_interactive_template(
     template.button_text = payload.button_text
     template.section_title = payload.section_title
     template.options = [item.model_dump() for item in payload.options]
+    template.usage_instruction = payload.usage_instruction.strip()
+    template.trigger_mode = payload.trigger_mode
+    template.trigger_fields = [
+        field.strip().lower() for field in payload.trigger_fields if field.strip()
+    ]
     template.active = payload.active
     db.commit()
     db.refresh(template)
@@ -450,6 +455,12 @@ def update_interactive_template(
             )
     if "options" in data and data["options"] is not None:
         data["options"] = [item.model_dump() for item in payload.options or []]
+    if "usage_instruction" in data and data["usage_instruction"] is not None:
+        data["usage_instruction"] = data["usage_instruction"].strip()
+    if "trigger_fields" in data and data["trigger_fields"] is not None:
+        data["trigger_fields"] = [
+            field.strip().lower() for field in data["trigger_fields"] if field.strip()
+        ]
     for field, value in data.items():
         setattr(template, field, value)
     db.commit()

@@ -78,6 +78,9 @@ class AiInteractiveTemplateCreate(BaseModel):
     button_text: str | None = Field(default="Ver opciones", max_length=20)
     section_title: str | None = Field(default="Opciones", max_length=24)
     options: list[AiInteractiveTemplateOption] = Field(min_length=1, max_length=10)
+    usage_instruction: str = Field(default="", max_length=500)
+    trigger_mode: str = Field(default="ai_decides", pattern="^(ai_decides|after_capture)$")
+    trigger_fields: list[str] = Field(default_factory=list, max_length=12)
     active: bool = True
 
 
@@ -90,6 +93,9 @@ class AiInteractiveTemplateUpdate(BaseModel):
     button_text: str | None = Field(default=None, max_length=20)
     section_title: str | None = Field(default=None, max_length=24)
     options: list[AiInteractiveTemplateOption] | None = Field(default=None, min_length=1, max_length=10)
+    usage_instruction: str | None = Field(default=None, max_length=500)
+    trigger_mode: str | None = Field(default=None, pattern="^(ai_decides|after_capture)$")
+    trigger_fields: list[str] | None = Field(default=None, max_length=12)
     active: bool | None = None
 
 
@@ -103,6 +109,9 @@ class AiInteractiveTemplateRead(TimestampedRead):
     button_text: str | None
     section_title: str | None
     options: list[AiInteractiveTemplateOption]
+    usage_instruction: str
+    trigger_mode: str
+    trigger_fields: list[str]
     active: bool
 
 

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
+import unicodedata
 from uuid import UUID
 
 import httpx
@@ -67,6 +68,16 @@ def _as_json_context(value: object) -> str:
 
 def _normalize_text(value: str) -> str:
     return " ".join(value.strip().lower().split())
+
+
+def _normalize_search_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    return " ".join(
+        "".join(char for char in normalized if not unicodedata.combining(char))
+        .strip()
+        .lower()
+        .split()
+    )
 
 
 def _is_greeting(text: str) -> bool:
@@ -185,10 +196,12 @@ def _get_active_agent(db: Session, *, company_id: UUID) -> AiAgent | None:
     )
 
 
-def _list_active_actions(db: Session, *, company_id: UUID) -> list[str]:
+def _list_active_action_templates(
+    db: Session, *, company_id: UUID
+) -> list[AiInteractiveTemplate]:
     return list(
         db.scalars(
-            select(AiInteractiveTemplate.action_key).where(
+            select(AiInteractiveTemplate).where(
                 AiInteractiveTemplate.company_id == company_id,
                 AiInteractiveTemplate.active.is_(True),
             )
@@ -196,10 +209,77 @@ def _list_active_actions(db: Session, *, company_id: UUID) -> list[str]:
     )
 
 
+def _build_interactive_actions_context(
+    templates: list[AiInteractiveTemplate],
+) -> str:
+    if not templates:
+        return "Biblioteca de interactivos: sin acciones disponibles."
+
+    rows: list[str] = []
+    for template in templates:
+        options = template.options if isinstance(template.options, list) else []
+        option_titles = [
+            str(option.get("title") or "").strip()
+            for option in options
+            if str(option.get("title") or "").strip()
+        ]
+        rows.append(
+            f"- action_key: {template.action_key} | nombre: {template.name} | "
+            f"tipo: {template.template_type} | texto: {template.body_text} | "
+            f"opciones: {', '.join(option_titles) if option_titles else 'sin opciones'} | "
+            f"regla_de_uso: {template.usage_instruction or 'la IA decide segun el contexto'} | "
+            f"activacion: {template.trigger_mode} | "
+            f"campos_requeridos: {', '.join(template.trigger_fields) if template.trigger_fields else 'ninguno'}"
+        )
+    return "Biblioteca de interactivos disponible:\n" + "\n".join(rows)
+
+
+def _infer_interactive_action(
+    *,
+    reply_text: str,
+    agent_prompt: str,
+    templates: list[AiInteractiveTemplate],
+) -> str | None:
+    normalized_reply = _normalize_search_text(reply_text)
+    normalized_prompt = _normalize_search_text(agent_prompt)
+    if not normalized_reply:
+        return None
+
+    for template in templates:
+        action_key = template.action_key.strip().lower()
+        options = template.options if isinstance(template.options, list) else []
+        option_titles = [
+            _normalize_search_text(str(option.get("title") or ""))
+            for option in options
+            if str(option.get("title") or "").strip()
+        ]
+        matched_options = [
+            title for title in option_titles if title and title in normalized_reply
+        ]
+        normalized_body = _normalize_search_text(template.body_text)
+        normalized_name = _normalize_search_text(template.name)
+        exact_template_match = bool(
+            normalized_body and normalized_body in normalized_reply
+        )
+        multiple_option_match = len(matched_options) >= 2
+        menu_requested_by_agent = (
+            action_key.replace("_", " ") in normalized_prompt
+            or (normalized_name and normalized_name in normalized_prompt)
+        )
+        reply_announces_menu = "opciones" in normalized_reply or "menu" in normalized_reply
+
+        if exact_template_match or multiple_option_match:
+            return action_key
+        if menu_requested_by_agent and reply_announces_menu:
+            return action_key
+    return None
+
+
 @dataclass
 class AutoReplyResult:
     reply_text: str
     action: str | None = None
+    captured_fields: dict[str, str] = field(default_factory=dict)
 
 
 def generate_auto_reply(
@@ -256,7 +336,12 @@ def generate_auto_reply(
 
     first_contact = customer_messages <= 1
     greeting_message = use_welcome_on_greeting and _is_greeting(incoming_text)
-    available_actions = _list_active_actions(db, company_id=company_id)
+    available_action_templates = _list_active_action_templates(
+        db, company_id=company_id
+    )
+    available_actions = [
+        template.action_key for template in available_action_templates
+    ]
 
     system_prompt = (
         "Configuracion obligatoria del agente desde ai_agents. Esta seccion tiene prioridad sobre "
@@ -280,6 +365,7 @@ def generate_auto_reply(
         f"Criterio de handoff: {handoff_rule or 'cuando el cliente pida humano'}\n"
         f"Mensaje de bienvenida recomendado: {welcome_message or 'no definido'}\n"
         f"{_build_catalog_context(db, company_id=company_id)}\n\n"
+        f"{_build_interactive_actions_context(available_action_templates)}\n\n"
         "Reglas de salida:\n"
         "- Obedece primero system_prompt, tone, rules_json, security_rules y conversation_objective.\n"
         "- Responde siempre en el idioma configurado arriba.\n"
@@ -291,11 +377,15 @@ def generate_auto_reply(
         "- Mensajes cortos (maximo 4 lineas) orientados a conversion.\n"
         "- Usa el catalogo solo como fuente interna. No listes productos, precios ni catalogo completo en el saludo.\n"
         "- En primer contacto o saludo, respeta la apertura del prompt del agente y no recomiendes productos hasta que el cliente elija una opcion o pregunte por productos.\n"
+        "- Cuando el prompt del agente solicite enviar un menu, boton o lista de la biblioteca de interactivos, usa action con su action_key exacto. No redactes manualmente las opciones de esa plantilla en reply_text.\n"
+        "- Evalua la regla_de_uso de cada interactivo en cada turno. Si corresponde enviarlo, responde con su action_key exacto.\n"
+        "- Cuando uses action, reply_text debe ser una confirmacion breve porque el backend enviara el interactivo correspondiente.\n"
+        "- En captured_fields devuelve solo datos expresamente informados o confirmados por el cliente. Usa claves breves en minuscula, por ejemplo nombre, email y ciudad.\n"
         f"- Primer contacto detectado: {'si' if first_contact else 'no'}.\n"
         f"- Mensaje de saludo detectado: {'si' if greeting_message else 'no'}.\n"
         "- Si es primer contacto, cumple estrictamente el flujo de apertura definido en el prompt del agente.\n"
         "Devuelve SIEMPRE un JSON valido sin texto adicional con este formato:\n"
-        '{"reply_text":"texto para cliente","action":"clave_o_null"}\n'
+        '{"reply_text":"texto para cliente","action":"clave_o_null","captured_fields":{"nombre":"valor_confirmado"}}\n'
         "- action debe ser null o una de estas claves exactas: "
         f"{', '.join(available_actions) if available_actions else 'sin_acciones_disponibles'}.\n"
     )
@@ -313,6 +403,7 @@ def generate_auto_reply(
         "temperature": max(0.0, min(temperature, 1.0)),
         "max_tokens": max(80, min(max_tokens, 700)),
         "messages": messages,
+        "response_format": {"type": "json_object"},
     }
     headers = {
         "Authorization": f"Bearer {settings.openai_api_key}",
@@ -349,11 +440,31 @@ def generate_auto_reply(
         parsed = json.loads(content)
         reply_text = str(parsed.get("reply_text") or "").strip()
         action_raw = parsed.get("action")
-        action = str(action_raw).strip() if isinstance(action_raw, str) else None
+        action = str(action_raw).strip().lower() if isinstance(action_raw, str) else None
+        captured_fields_raw = parsed.get("captured_fields")
+        captured_fields = (
+            {
+                str(key).strip().lower(): str(value).strip()
+                for key, value in captured_fields_raw.items()
+                if str(key).strip() and str(value).strip()
+            }
+            if isinstance(captured_fields_raw, dict)
+            else {}
+        )
         if action and action not in available_actions:
             action = None
+        if not action:
+            action = _infer_interactive_action(
+                reply_text=reply_text,
+                agent_prompt=agent.system_prompt,
+                templates=available_action_templates,
+            )
         if reply_text:
-            return AutoReplyResult(reply_text=reply_text, action=action or None)
+            return AutoReplyResult(
+                reply_text=reply_text,
+                action=action or None,
+                captured_fields=captured_fields,
+            )
     except json.JSONDecodeError:
         logger.warning("AI auto-reply non-json output company_id=%s", company_id)
 

@@ -1,4 +1,5 @@
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -11,9 +12,11 @@ from app.companies.schemas import CompanyCreate
 from app.companies.service import create_company_with_owner
 from app.contacts.models import Contact
 from app.core.schemas import OwnerCreate
-from app.ai.runtime import _build_catalog_context
+from app.ai.runtime import AutoReplyResult, _build_catalog_context, _infer_interactive_action
+from app.conversations.models import Conversation
 from app.inventory.models import Inventory
 from app.inventory.service import list_inventory
+from app.messages.models import Message
 from app.orders.schemas import OrderCreate, OrderItemCreate
 from app.orders.service import create_order, generate_payment_link, mark_paid_by_reference
 from app.products.models import Product
@@ -21,6 +24,8 @@ from app.products.service import get_product
 from app.core.security import verify_password
 from app.users.models import User
 from app.users.service import get_user
+from app.whatsapp.models import WhatsAppAccount
+from app.whatsapp.service import _resolve_configured_action
 
 
 def bootstrap_company(db, name: str):
@@ -222,3 +227,122 @@ def test_interactive_template_save_updates_existing_action_key(db):
     assert rows[0].id == updated.id
     assert rows[0].name == "Menu actualizado"
     assert rows[0].options[0]["title"] == "Productos"
+
+
+def test_ai_infers_menu_action_when_plain_reply_announces_configured_options():
+    template = SimpleNamespace(
+        action_key="menu_principal",
+        name="Menu principal",
+        body_text="Selecciona una de nuestras opciones",
+        options=[
+            {"id": "menu_principal_opt_1", "title": "Cursos"},
+            {"id": "menu_principal_opt_2", "title": "Productos"},
+            {"id": "menu_principal_opt_3", "title": "Agenda tu cita"},
+        ],
+    )
+
+    action = _infer_interactive_action(
+        reply_text=(
+            "Gracias, Camilo. Ahora que tengo tus datos, aqui tienes las opciones "
+            "que ofrecemos: cursos, productos y servicio de bronceado."
+        ),
+        agent_prompt=(
+            "Despues de capturar nombre, email y ciudad, envia el menu principal "
+            "de la biblioteca de interactivos."
+        ),
+        templates=[template],
+    )
+
+    assert action == "menu_principal"
+
+
+def test_ai_does_not_infer_menu_action_for_unrelated_reply():
+    template = SimpleNamespace(
+        action_key="menu_principal",
+        name="Menu principal",
+        body_text="Selecciona una de nuestras opciones",
+        options=[
+            {"id": "menu_principal_opt_1", "title": "Cursos"},
+            {"id": "menu_principal_opt_2", "title": "Productos"},
+        ],
+    )
+
+    action = _infer_interactive_action(
+        reply_text="Por favor comparteme tu correo para continuar.",
+        agent_prompt="Envia el menu principal despues de capturar los datos.",
+        templates=[template],
+    )
+
+    assert action is None
+
+
+def test_interactive_after_capture_trigger_runs_once_per_conversation(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, phone="573000000000")
+    account = WhatsAppAccount(
+        company_id=company.id,
+        phone_number_id="phone-id",
+        business_account_id="waba-id",
+        access_token_encrypted="not-used",
+        verify_token="verify-token",
+    )
+    db.add_all([contact, account])
+    db.flush()
+    conversation = Conversation(company_id=company.id, contact_id=contact.id)
+    db.add(conversation)
+    db.commit()
+
+    create_interactive_template(
+        db,
+        company_id=company.id,
+        payload=AiInteractiveTemplateCreate(
+            name="Menu principal",
+            action_key="menu_principal",
+            body_text="Selecciona una opcion",
+            options=[AiInteractiveTemplateOption(id="menu_principal_opt_1", title="Cursos")],
+            usage_instruction="Enviar despues de capturar datos iniciales.",
+            trigger_mode="after_capture",
+            trigger_fields=["nombre", "email", "ciudad"],
+        ),
+    )
+
+    action = _resolve_configured_action(
+        db,
+        account=account,
+        conversation=conversation,
+        contact=contact,
+        ai_reply=AutoReplyResult(
+            reply_text="Gracias, Camilo.",
+            captured_fields={
+                "nombre": "Camilo Sanchez",
+                "correo": "cliente@example.com",
+                "ciudad": "La Estrella",
+            },
+        ),
+    )
+
+    assert action == "menu_principal"
+    assert contact.email == "cliente@example.com"
+    assert contact.metadata_json["ai_captured_fields"]["ciudad"] == "La Estrella"
+
+    db.add(
+        Message(
+            company_id=company.id,
+            conversation_id=conversation.id,
+            sender_type="agent",
+            content="Selecciona una opcion",
+            message_type="interactive",
+            metadata_json={"source": "ai_action:menu_principal"},
+        )
+    )
+    db.commit()
+
+    repeated_action = _resolve_configured_action(
+        db,
+        account=account,
+        conversation=conversation,
+        contact=contact,
+        ai_reply=AutoReplyResult(reply_text="Continuemos."),
+    )
+
+    assert repeated_action is None

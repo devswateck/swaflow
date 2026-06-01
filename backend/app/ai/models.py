@@ -31,6 +31,9 @@ class AiInteractiveTemplate(Base, IdMixin, TenantMixin, TimestampMixin):
     button_text: Mapped[str | None] = mapped_column(String(20))
     section_title: Mapped[str | None] = mapped_column(String(24))
     options: Mapped[list[dict]] = mapped_column(JSON, nullable=False, default=list)
+    usage_instruction: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    trigger_mode: Mapped[str] = mapped_column(String(30), nullable=False, default="ai_decides")
+    trigger_fields: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
