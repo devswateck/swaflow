@@ -318,6 +318,50 @@ def _is_duplicate_external_message(
     )
 
 
+def _incoming_message_content(incoming: dict) -> tuple[str | None, dict | None]:
+    message_type = incoming.get("type", "text")
+    if message_type == "text":
+        return incoming.get("text", {}).get("body"), None
+
+    if message_type == "interactive":
+        interactive = incoming.get("interactive", {})
+        interactive_type = interactive.get("type")
+        reply = interactive.get(interactive_type, {})
+        if interactive_type in {"button_reply", "list_reply"} and isinstance(reply, dict):
+            reply_id = str(reply.get("id") or "").strip()
+            title = str(reply.get("title") or "").strip()
+            description = str(reply.get("description") or "").strip()
+            return title or description or reply_id or None, {
+                "type": interactive_type,
+                "id": reply_id or None,
+                "title": title or None,
+                "description": description or None,
+            }
+
+    if message_type == "button":
+        button = incoming.get("button", {})
+        if isinstance(button, dict):
+            text = str(button.get("text") or "").strip()
+            payload = str(button.get("payload") or "").strip()
+            return text or payload or None, {
+                "type": "button",
+                "id": payload or None,
+                "title": text or None,
+            }
+
+    return None, None
+
+
+def _should_generate_auto_reply(
+    *, message_type: str, content: str | None, conversation_status: str
+) -> bool:
+    return (
+        message_type in {"text", "interactive", "button"}
+        and bool(content)
+        and conversation_status in {"open", "waiting_customer"}
+    )
+
+
 def _send_action_template(
     db: Session,
     *,
@@ -884,8 +928,8 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                 ):
                     skipped += 1
                     continue
-                text_body = incoming.get("text", {}).get("body")
                 message_type = incoming.get("type", "text")
+                message_content, interactive_reply = _incoming_message_content(incoming)
                 contact = get_or_create_contact(
                     db,
                     company_id=account.company_id,
@@ -904,10 +948,14 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                     company_id=account.company_id,
                     conversation_id=conversation.id,
                     sender_type="customer",
-                    content=text_body,
+                    content=message_content,
                     message_type=message_type,
                     external_message_id=external_message_id,
-                    metadata={"raw": incoming, "received_at": datetime.now(UTC).isoformat()},
+                    metadata={
+                        "raw": incoming,
+                        "received_at": datetime.now(UTC).isoformat(),
+                        **({"interactive_reply": interactive_reply} if interactive_reply else {}),
+                    },
                 )
                 create_event(
                     db,
@@ -931,16 +979,16 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                         "unread_count": conversation.unread_count,
                     },
                 )
-                if (
-                    message_type == "text"
-                    and text_body
-                    and conversation.status in {"open", "waiting_customer"}
+                if _should_generate_auto_reply(
+                    message_type=message_type,
+                    content=message_content,
+                    conversation_status=conversation.status,
                 ):
                     ai_reply = generate_auto_reply(
                         db,
                         company_id=account.company_id,
                         conversation=conversation,
-                        incoming_text=text_body,
+                        incoming_text=message_content,
                     )
                     if ai_reply:
                         action_sent = False

@@ -25,7 +25,11 @@ from app.core.security import verify_password
 from app.users.models import User
 from app.users.service import get_user
 from app.whatsapp.models import WhatsAppAccount
-from app.whatsapp.service import _resolve_configured_action
+from app.whatsapp.service import (
+    _incoming_message_content,
+    _resolve_configured_action,
+    _should_generate_auto_reply,
+)
 
 
 def bootstrap_company(db, name: str):
@@ -346,3 +350,55 @@ def test_interactive_after_capture_trigger_runs_once_per_conversation(db):
     )
 
     assert repeated_action is None
+
+
+def test_incoming_interactive_button_reply_exposes_visible_title_to_ai():
+    content, reply = _incoming_message_content(
+        {
+            "type": "interactive",
+            "interactive": {
+                "type": "button_reply",
+                "button_reply": {
+                    "id": "menu_principal_opt_3",
+                    "title": "Agenda tu Cita",
+                },
+            },
+        }
+    )
+
+    assert content == "Agenda tu Cita"
+    assert reply == {
+        "type": "button_reply",
+        "id": "menu_principal_opt_3",
+        "title": "Agenda tu Cita",
+        "description": None,
+    }
+    assert _should_generate_auto_reply(
+        message_type="interactive",
+        content=content,
+        conversation_status="open",
+    )
+
+
+def test_incoming_interactive_list_reply_keeps_option_metadata():
+    content, reply = _incoming_message_content(
+        {
+            "type": "interactive",
+            "interactive": {
+                "type": "list_reply",
+                "list_reply": {
+                    "id": "servicios_opt_2",
+                    "title": "Bronceado en camara",
+                    "description": "Consulta planes disponibles",
+                },
+            },
+        }
+    )
+
+    assert content == "Bronceado en camara"
+    assert reply == {
+        "type": "list_reply",
+        "id": "servicios_opt_2",
+        "title": "Bronceado en camara",
+        "description": "Consulta planes disponibles",
+    }
