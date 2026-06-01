@@ -989,6 +989,7 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                         company_id=account.company_id,
                         conversation=conversation,
                         incoming_text=message_content,
+                        incoming_interactive_reply=interactive_reply,
                     )
                     if ai_reply:
                         action_sent = False

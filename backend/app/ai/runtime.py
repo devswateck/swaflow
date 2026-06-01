@@ -275,6 +275,27 @@ def _infer_interactive_action(
     return None
 
 
+def _selected_interactive_source_action(
+    *,
+    templates: list[AiInteractiveTemplate],
+    interactive_reply: dict | None,
+) -> str | None:
+    if not isinstance(interactive_reply, dict):
+        return None
+    reply_id = str(interactive_reply.get("id") or "").strip()
+    reply_title = _normalize_search_text(str(interactive_reply.get("title") or ""))
+    for template in templates:
+        options = template.options if isinstance(template.options, list) else []
+        for option in options:
+            option_id = str(option.get("id") or "").strip()
+            option_title = _normalize_search_text(str(option.get("title") or ""))
+            if reply_id and option_id == reply_id:
+                return template.action_key
+            if reply_title and option_title == reply_title:
+                return template.action_key
+    return None
+
+
 @dataclass
 class AutoReplyResult:
     reply_text: str
@@ -288,6 +309,7 @@ def generate_auto_reply(
     company_id: UUID,
     conversation: Conversation,
     incoming_text: str,
+    incoming_interactive_reply: dict | None = None,
 ) -> AutoReplyResult | None:
     settings = get_settings()
     if not settings.openai_api_key:
@@ -342,6 +364,21 @@ def generate_auto_reply(
     available_actions = [
         template.action_key for template in available_action_templates
     ]
+    selected_source_action = _selected_interactive_source_action(
+        templates=available_action_templates,
+        interactive_reply=incoming_interactive_reply,
+    )
+    interactive_selection_context = (
+        "Seleccion interactiva recibida en este turno:\n"
+        f"- menu_origen: {selected_source_action or 'no_identificado'}\n"
+        f"- opcion_id: {incoming_interactive_reply.get('id') or 'sin_id'}\n"
+        f"- opcion_elegida: {incoming_interactive_reply.get('title') or incoming_text}\n"
+        "- Trata la opcion elegida como la intencion actual del cliente. Responde usando el "
+        "conocimiento del tenant y avanza la conversacion. No vuelvas a enviar el menu de origen "
+        "en este mismo turno. Podras enviarlo de nuevo mas adelante si el cliente pide volver al menu.\n\n"
+        if isinstance(incoming_interactive_reply, dict)
+        else ""
+    )
 
     system_prompt = (
         "Configuracion obligatoria del agente desde ai_agents. Esta seccion tiene prioridad sobre "
@@ -366,6 +403,7 @@ def generate_auto_reply(
         f"Mensaje de bienvenida recomendado: {welcome_message or 'no definido'}\n"
         f"{_build_catalog_context(db, company_id=company_id)}\n\n"
         f"{_build_interactive_actions_context(available_action_templates)}\n\n"
+        f"{interactive_selection_context}"
         "Reglas de salida:\n"
         "- Obedece primero system_prompt, tone, rules_json, security_rules y conversation_objective.\n"
         "- Responde siempre en el idioma configurado arriba.\n"
@@ -459,6 +497,13 @@ def generate_auto_reply(
                 agent_prompt=agent.system_prompt,
                 templates=available_action_templates,
             )
+        if action and selected_source_action and action == selected_source_action:
+            logger.info(
+                "AI auto-reply suppressed repeated source action company_id=%s action=%s",
+                company_id,
+                action,
+            )
+            action = None
         if reply_text:
             return AutoReplyResult(
                 reply_text=reply_text,

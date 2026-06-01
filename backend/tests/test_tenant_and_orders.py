@@ -12,7 +12,12 @@ from app.companies.schemas import CompanyCreate
 from app.companies.service import create_company_with_owner
 from app.contacts.models import Contact
 from app.core.schemas import OwnerCreate
-from app.ai.runtime import AutoReplyResult, _build_catalog_context, _infer_interactive_action
+from app.ai.runtime import (
+    AutoReplyResult,
+    _build_catalog_context,
+    _infer_interactive_action,
+    _selected_interactive_source_action,
+)
 from app.conversations.models import Conversation
 from app.inventory.models import Inventory
 from app.inventory.service import list_inventory
@@ -402,3 +407,25 @@ def test_incoming_interactive_list_reply_keeps_option_metadata():
         "title": "Bronceado en camara",
         "description": "Consulta planes disponibles",
     }
+
+
+def test_selected_interactive_option_resolves_its_source_menu():
+    template = SimpleNamespace(
+        action_key="menu_principal",
+        options=[
+            {"id": "menu_principal_opt_1", "title": "Cursos"},
+            {"id": "menu_principal_opt_2", "title": "Productos"},
+            {"id": "menu_principal_opt_3", "title": "Agenda tu Cita"},
+        ],
+    )
+
+    action_key = _selected_interactive_source_action(
+        templates=[template],
+        interactive_reply={
+            "type": "button_reply",
+            "id": "menu_principal_opt_2",
+            "title": "Productos",
+        },
+    )
+
+    assert action_key == "menu_principal"
