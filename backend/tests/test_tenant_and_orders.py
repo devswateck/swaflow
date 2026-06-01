@@ -35,6 +35,7 @@ from app.whatsapp.service import (
     _incoming_message_content,
     _interactive_reply_requests_catalog,
     _list_available_product_ids,
+    _meta_request,
     _resolve_available_product_ids,
     _resolve_configured_action,
     _should_generate_auto_reply,
@@ -330,6 +331,44 @@ def test_whatsapp_catalog_link_warning_accepts_connected_catalog(monkeypatch):
     )
 
     assert _catalog_link_warning(account=account, catalog_id="catalog-connected") is None
+
+
+def test_meta_request_includes_error_data_details(monkeypatch):
+    class FakeResponse:
+        content = b'{"error":{"message":"(#131009) Parameter value is not valid"}}'
+        status_code = 400
+        text = (
+            '{"error":{"message":"(#131009) Parameter value is not valid",'
+            '"error_data":{"details":"product not found"}}}'
+        )
+
+        def json(self):
+            return {
+                "error": {
+                    "message": "(#131009) Parameter value is not valid",
+                    "error_data": {"details": "product not found"},
+                }
+            }
+
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def request(self, *_args, **_kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.whatsapp.service.httpx.Client", FakeClient)
+
+    with pytest.raises(HTTPException) as error:
+        _meta_request("POST", "/messages", access_token="token")
+
+    assert error.value.detail == "(#131009) Parameter value is not valid: product not found"
 
 
 def test_interactive_template_save_updates_existing_action_key(db):

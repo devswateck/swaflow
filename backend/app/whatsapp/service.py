@@ -127,6 +127,14 @@ def _meta_request(
     if response.status_code >= 400:
         error = data.get("error", {}) if isinstance(data, dict) else {}
         detail = error.get("message") or response.text or "Meta API error"
+        error_data = error.get("error_data") if isinstance(error, dict) else None
+        meta_details = (
+            str(error_data.get("details") or "").strip()
+            if isinstance(error_data, dict)
+            else ""
+        )
+        if meta_details and meta_details not in detail:
+            detail = f"{detail}: {meta_details}"
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=detail)
     return data if isinstance(data, dict) else {"raw": data}
 
