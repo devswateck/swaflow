@@ -3154,8 +3154,22 @@ function AiPage() {
             <MessageSquareText className="h-4 w-4 text-brand" />
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            Usa el action_key en el prompt. Ejemplo: {`{"action":"menu_principal"}`}.
+            SwaFlow entrega estas plantillas al agente y traduce cada Action key al formato tecnico de WhatsApp.
           </p>
+          <div className="mt-3 rounded border border-line bg-panel p-3 text-xs text-slate-700">
+            <p className="font-semibold text-slate-900">Contrato estandar para interactivos</p>
+            <p className="mt-1">
+              Para un envio fijo usa <strong>Automatico al capturar datos</strong>. Para una decision comercial usa
+              <strong> La IA decide segun instruccion</strong> y describe el momento en la regla de uso.
+            </p>
+            <p className="mt-1">
+              En el prompt escribe una instruccion legible, por ejemplo:{" "}
+              <code className="rounded bg-white px-1 py-0.5 text-brand">
+                Despues de capturar nombre, email y ciudad, envia el interactivo menu_principal.
+              </code>
+            </p>
+            <p className="mt-1">No pegues JSON en el prompt. Usa siempre el Action key visible en cada plantilla.</p>
+          </div>
           <div className="mt-4 grid gap-4 lg:grid-cols-[360px_1fr]">
             <div className="rounded border border-line bg-panel p-3">
               <div className="flex items-center justify-between gap-2 text-xs text-slate-500">

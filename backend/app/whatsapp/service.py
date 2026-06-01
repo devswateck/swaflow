@@ -515,8 +515,12 @@ def _resolve_configured_action(
 ) -> str | None:
     captured_fields = _capture_ai_fields(contact, ai_reply.captured_fields)
     db.commit()
+    if ai_reply.is_first_contact:
+        return None
     if ai_reply.action:
         return ai_reply.action
+    if not ai_reply.captured_fields:
+        return None
 
     templates = db.scalars(
         select(AiInteractiveTemplate)
@@ -712,6 +716,7 @@ def send_product_cards_message(
     else:
         interactive_payload = {
             "type": "product_list",
+            "header": {"type": "text", "text": "Productos recomendados"},
             "body": {"text": payload.body},
             "action": {
                 "catalog_id": payload.catalog_id,
@@ -797,6 +802,7 @@ def send_product_cards_from_db(
     else:
         interactive_payload = {
             "type": "product_list",
+            "header": {"type": "text", "text": "Productos recomendados"},
             "body": {"text": payload.body},
             "action": {
                 "catalog_id": catalog_id,
@@ -861,6 +867,50 @@ def _resolve_available_product_ids(
         for retailer_id in normalized_ids
         if retailer_id in product_ids_by_retailer_id
     ]
+
+
+def _list_available_product_ids(
+    db: Session,
+    *,
+    company_id: UUID,
+    limit: int = 10,
+) -> list[UUID]:
+    rows = list(
+        db.execute(
+            select(Product, Inventory)
+            .join(
+                Inventory,
+                (Inventory.company_id == Product.company_id)
+                & (Inventory.product_id == Product.id),
+            )
+            .where(
+                Product.company_id == company_id,
+                Product.status == "active",
+                Product.whatsapp_catalog_id.is_not(None),
+                Product.whatsapp_product_retailer_id.is_not(None),
+                Inventory.quantity_available > Inventory.quantity_reserved,
+            )
+            .order_by(Product.name.asc())
+            .limit(limit)
+        )
+    )
+    return [product.id for product, _inventory in rows]
+
+
+def _interactive_reply_requests_catalog(interactive_reply: dict | None) -> bool:
+    if not isinstance(interactive_reply, dict):
+        return False
+    title = str(interactive_reply.get("title") or "")
+    normalized = (
+        "".join(
+            char
+            for char in unicodedata.normalize("NFKD", title)
+            if not unicodedata.combining(char)
+        )
+        .strip()
+        .lower()
+    )
+    return "producto" in normalized or "catalogo" in normalized
 
 
 def sync_catalog_products(
@@ -1061,6 +1111,14 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                 company_id=account.company_id,
                                 retailer_ids=ai_reply.product_retailer_ids,
                             )
+                            if (
+                                not product_ids
+                                and _interactive_reply_requests_catalog(interactive_reply)
+                            ):
+                                product_ids = _list_available_product_ids(
+                                    db,
+                                    company_id=account.company_id,
+                                )
                             if product_ids:
                                 try:
                                     send_product_cards_from_db(

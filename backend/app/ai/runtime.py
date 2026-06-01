@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 GREETING_HINTS = {
     "hola",
     "buen dia",
+    "buenas",
     "buenos dias",
     "buenas tardes",
     "buenas noches",
@@ -305,6 +306,7 @@ class AutoReplyResult:
     action: str | None = None
     captured_fields: dict[str, str] = field(default_factory=dict)
     product_retailer_ids: list[str] = field(default_factory=list)
+    is_first_contact: bool = False
 
 
 def generate_auto_reply(
@@ -419,7 +421,8 @@ def generate_auto_reply(
         "- Mensajes cortos (maximo 4 lineas) orientados a conversion.\n"
         "- Usa el catalogo solo como fuente interna. No listes productos, precios ni catalogo completo en el saludo.\n"
         "- En primer contacto o saludo, respeta la apertura del prompt del agente y no recomiendes productos hasta que el cliente elija una opcion o pregunte por productos.\n"
-        "- Cuando el prompt del agente solicite enviar un menu, boton o lista de la biblioteca de interactivos, usa action con su action_key exacto. No redactes manualmente las opciones de esa plantilla en reply_text.\n"
+        "- La biblioteca de interactivos es el contrato de acciones del tenant. Cuando el prompt del agente o una regla_de_uso solicite enviar un menu, boton o lista, usa action con su action_key exacto. No redactes manualmente las opciones de esa plantilla en reply_text.\n"
+        "- Interpreta frases como 'envia el interactivo menu_principal' o 'muestra la lista servicios' usando el action_key exacto disponible en la biblioteca.\n"
         "- Evalua la regla_de_uso de cada interactivo en cada turno. Si corresponde enviarlo, responde con su action_key exacto.\n"
         "- Cuando uses action, reply_text debe ser una confirmacion breve porque el backend enviara el interactivo correspondiente.\n"
         "- Cuando el cliente pida productos, detalles o una recomendacion y ya tengas contexto suficiente, usa product_retailer_ids para enviar cards nativas de WhatsApp.\n"
@@ -519,14 +522,20 @@ def generate_auto_reply(
                 action,
             )
             action = None
+        if first_contact and greeting_message:
+            action = None
+            product_retailer_ids = []
+            if welcome_message:
+                reply_text = welcome_message
         if reply_text:
             return AutoReplyResult(
                 reply_text=reply_text,
                 action=action or None,
                 captured_fields=captured_fields,
                 product_retailer_ids=product_retailer_ids,
+                is_first_contact=first_contact,
             )
     except json.JSONDecodeError:
         logger.warning("AI auto-reply non-json output company_id=%s", company_id)
 
-    return AutoReplyResult(reply_text=content, action=None)
+    return AutoReplyResult(reply_text=content, action=None, is_first_contact=first_contact)

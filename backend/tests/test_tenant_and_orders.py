@@ -32,6 +32,8 @@ from app.users.service import get_user
 from app.whatsapp.models import WhatsAppAccount
 from app.whatsapp.service import (
     _incoming_message_content,
+    _interactive_reply_requests_catalog,
+    _list_available_product_ids,
     _resolve_available_product_ids,
     _resolve_configured_action,
     _should_generate_auto_reply,
@@ -287,6 +289,13 @@ def test_ai_product_cards_only_use_available_meta_products_in_requested_order(db
     )
 
     assert product_ids == [available_second.id, available_first.id]
+    assert _list_available_product_ids(db, company_id=company.id) == [
+        available_second.id,
+        available_first.id,
+    ]
+    assert _interactive_reply_requests_catalog({"title": "Productos"})
+    assert _interactive_reply_requests_catalog({"title": "Ver catálogo"})
+    assert not _interactive_reply_requests_catalog({"title": "Agenda tu cita"})
 
 
 def test_interactive_template_save_updates_existing_action_key(db):
@@ -437,6 +446,59 @@ def test_interactive_after_capture_trigger_runs_once_per_conversation(db):
     )
 
     assert repeated_action is None
+
+
+def test_first_contact_does_not_skip_welcome_for_previously_captured_contact(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(
+        company_id=company.id,
+        phone="573000000000",
+        metadata_json={
+            "ai_captured_fields": {
+                "nombre": "Camilo Sanchez",
+                "email": "cliente@example.com",
+                "ciudad": "La Estrella",
+            }
+        },
+    )
+    account = WhatsAppAccount(
+        company_id=company.id,
+        phone_number_id="phone-id",
+        business_account_id="waba-id",
+        access_token_encrypted="not-used",
+        verify_token="verify-token",
+    )
+    db.add_all([contact, account])
+    db.flush()
+    conversation = Conversation(company_id=company.id, contact_id=contact.id)
+    db.add(conversation)
+    db.commit()
+
+    create_interactive_template(
+        db,
+        company_id=company.id,
+        payload=AiInteractiveTemplateCreate(
+            name="Menu principal",
+            action_key="menu_principal",
+            body_text="Selecciona una opcion",
+            options=[AiInteractiveTemplateOption(id="menu_principal_opt_1", title="Productos")],
+            trigger_mode="after_capture",
+            trigger_fields=["nombre", "email", "ciudad"],
+        ),
+    )
+
+    action = _resolve_configured_action(
+        db,
+        account=account,
+        conversation=conversation,
+        contact=contact,
+        ai_reply=AutoReplyResult(
+            reply_text="Hola, soy Andrea.",
+            is_first_contact=True,
+        ),
+    )
+
+    assert action is None
 
 
 def test_incoming_interactive_button_reply_exposes_visible_title_to_ai():
