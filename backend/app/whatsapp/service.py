@@ -1328,11 +1328,12 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                     content=message_content,
                     conversation_status=conversation.status,
                 ):
-                    catalog_refreshed = _message_requests_catalog(
+                    catalog_requested = _message_requests_catalog(
                         message_content or "",
                         interactive_reply,
                     )
-                    if catalog_refreshed:
+                    catalog_refreshed = catalog_requested
+                    if catalog_requested:
                         _sync_linked_catalogs_for_product_query(db, account=account)
                     ai_reply = generate_auto_reply(
                         db,
@@ -1341,9 +1342,22 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                         incoming_text=message_content,
                         incoming_interactive_reply=interactive_reply,
                     )
+                    if ai_reply is None and catalog_requested:
+                        ai_reply = AutoReplyResult(
+                            reply_text=(
+                                "Claro, te comparto productos disponibles para que elijas "
+                                "el que mejor se adapte a lo que buscas."
+                            )
+                        )
                     if ai_reply:
                         product_cards_sent = False
                         action_sent = False
+                        product_ids: list[UUID] = []
+                        reply_text = (
+                            ai_reply.reply_text
+                            if isinstance(ai_reply, AutoReplyResult)
+                            else str(ai_reply)
+                        )
                         if isinstance(ai_reply, AutoReplyResult):
                             ai_reply.action = _resolve_configured_action(
                                 db,
@@ -1360,39 +1374,51 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                 company_id=account.company_id,
                                 retailer_ids=ai_reply.product_retailer_ids,
                             )
-                            if (
-                                not product_ids
-                                and _interactive_reply_requests_catalog(interactive_reply)
-                            ):
-                                product_ids = _list_available_product_ids(
+                        if catalog_requested and not product_ids:
+                            product_ids = _list_available_product_ids(
+                                db,
+                                company_id=account.company_id,
+                            )
+                        if product_ids:
+                            try:
+                                logger.info(
+                                    "AI product cards attempt company_id=%s count=%s catalog_requested=%s",
+                                    account.company_id,
+                                    len(product_ids),
+                                    catalog_requested,
+                                )
+                                send_product_cards_from_db(
                                     db,
                                     company_id=account.company_id,
-                                )
-                            if product_ids:
-                                try:
-                                    send_product_cards_from_db(
-                                        db,
-                                        company_id=account.company_id,
-                                        payload=WhatsAppSendProductCardsFromDbRequest(
-                                            to=customer_phone,
-                                            body=ai_reply.reply_text[:1024],
-                                            product_ids=product_ids,
-                                            account_id=account.id,
-                                        ),
-                                    )
-                                    product_cards_sent = True
-                                except HTTPException as exc:
-                                    logger.warning(
-                                        "AI product cards skipped company_id=%s detail=%s",
-                                        account.company_id,
-                                        exc.detail,
-                                    )
-                                    ai_reply.reply_text = _build_available_products_fallback(
-                                        db,
-                                        company_id=account.company_id,
+                                    payload=WhatsAppSendProductCardsFromDbRequest(
+                                        to=customer_phone,
+                                        body=reply_text[:1024],
                                         product_ids=product_ids,
-                                        intro=ai_reply.reply_text,
-                                    )
+                                        account_id=account.id,
+                                    ),
+                                )
+                                product_cards_sent = True
+                            except HTTPException as exc:
+                                logger.warning(
+                                    "AI product cards skipped company_id=%s detail=%s",
+                                    account.company_id,
+                                    exc.detail,
+                                )
+                                fallback = _build_available_products_fallback(
+                                    db,
+                                    company_id=account.company_id,
+                                    product_ids=product_ids,
+                                    intro=reply_text,
+                                )
+                                if isinstance(ai_reply, AutoReplyResult):
+                                    ai_reply.reply_text = fallback
+                                else:
+                                    ai_reply = fallback
+                        elif catalog_requested:
+                            logger.info(
+                                "AI product cards no available products company_id=%s",
+                                account.company_id,
+                            )
                         if (
                             not product_cards_sent
                             and isinstance(ai_reply, AutoReplyResult)
