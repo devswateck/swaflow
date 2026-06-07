@@ -225,6 +225,101 @@ def _send_text_with_account(
     )
 
 
+def _send_image_with_account(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    to: str,
+    image_url: str,
+    caption: str,
+    source: str,
+    metadata: dict | None = None,
+) -> WhatsAppSendTextResponse:
+    recipient = _normalize_phone(to)
+    meta_payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": recipient,
+        "type": "image",
+        "image": {
+            "link": image_url,
+            "caption": caption[:1024],
+        },
+    }
+    data = _meta_request(
+        "POST",
+        f"/{account.phone_number_id}/messages",
+        access_token=decrypt_secret(account.access_token_encrypted),
+        json_body=meta_payload,
+    )
+    meta_message_id = None
+    if messages := data.get("messages"):
+        meta_message_id = messages[0].get("id")
+
+    contact = get_or_create_contact(
+        db,
+        company_id=account.company_id,
+        phone=recipient,
+        metadata={"whatsapp": {"phone_number_id": account.phone_number_id}},
+    )
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=account.company_id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    message_metadata = {
+        "raw": data,
+        "image_url": image_url,
+        "sent_at": datetime.now(UTC).isoformat(),
+        "source": source,
+    }
+    if metadata:
+        message_metadata.update(metadata)
+    message = append_message(
+        db,
+        company_id=account.company_id,
+        conversation_id=conversation.id,
+        sender_type="agent",
+        content=caption,
+        message_type="image",
+        external_message_id=meta_message_id,
+        metadata=message_metadata,
+    )
+    create_event(
+        db,
+        company_id=account.company_id,
+        event_type="message.sent",
+        payload={
+            "conversation_id": str(conversation.id),
+            "contact_id": str(contact.id),
+            "message_id": str(message.id),
+            "meta_message_id": meta_message_id,
+            "source": source,
+        },
+    )
+    db.commit()
+    realtime_manager.publish(
+        account.company_id,
+        "message.sent",
+        {
+            "conversation_id": str(conversation.id),
+            "contact_id": str(contact.id),
+            "message_id": str(message.id),
+            "meta_message_id": meta_message_id,
+            "source": source,
+        },
+    )
+    return WhatsAppSendTextResponse(
+        ok=True,
+        meta_message_id=meta_message_id,
+        contact_id=contact.id,
+        conversation_id=conversation.id,
+        message_id=message.id,
+        raw=data,
+    )
+
+
 def _send_interactive_with_account(
     db: Session,
     *,
@@ -834,6 +929,86 @@ def send_product_cards_from_db(
     )
 
 
+def _product_card_caption(product: Product, inventory: Inventory) -> str:
+    available = max(0, inventory.quantity_available - inventory.quantity_reserved)
+    description = re.sub(r"\s+", " ", product.description or "").strip()
+    parts = [
+        product.name,
+        _format_product_price(product),
+        f"Disponible: {available} unidades",
+    ]
+    if description:
+        parts.append(description[:700])
+    return "\n".join(parts)
+
+
+def _send_product_image_cards_from_db(
+    db: Session,
+    *,
+    account: WhatsAppAccount,
+    to: str,
+    product_ids: list[UUID],
+    intro: str,
+    limit: int = 5,
+) -> bool:
+    rows = list(
+        db.execute(
+            select(Product, Inventory)
+            .join(
+                Inventory,
+                (Inventory.company_id == Product.company_id)
+                & (Inventory.product_id == Product.id),
+            )
+            .where(
+                Product.company_id == account.company_id,
+                Product.id.in_(product_ids),
+                Product.status == "active",
+                Inventory.quantity_available > Inventory.quantity_reserved,
+            )
+        )
+    )
+    rows_by_id = {product.id: (product, inventory) for product, inventory in rows}
+    sent_any = False
+    for product_id in product_ids[:limit]:
+        row = rows_by_id.get(product_id)
+        if row is None:
+            continue
+        product, inventory = row
+        product_metadata = (
+            product.metadata_json if isinstance(product.metadata_json, dict) else {}
+        )
+        image_url = str(product_metadata.get("image_url") or "").strip()
+        if not image_url:
+            continue
+        _send_image_with_account(
+            db,
+            account=account,
+            to=to,
+            image_url=image_url,
+            caption=_product_card_caption(product, inventory),
+            source="agent_product_image_card",
+            metadata={
+                "product_id": str(product.id),
+                "catalog_id": product.whatsapp_catalog_id,
+                "product_retailer_id": product.whatsapp_product_retailer_id,
+                "fallback_from": "agent_product_cards_db",
+            },
+        )
+        sent_any = True
+    if sent_any and intro.strip():
+        _send_text_with_account(
+            db,
+            account=account,
+            to=to,
+            body=(
+                "Te comparti las opciones disponibles en tarjetas. "
+                "Dime cual te gusta y seguimos con tu compra."
+            ),
+            source="agent_product_image_card_followup",
+        )
+    return sent_any
+
+
 def _resolve_available_product_ids(
     db: Session,
     *,
@@ -1404,16 +1579,31 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                     account.company_id,
                                     exc.detail,
                                 )
-                                fallback = _build_available_products_fallback(
-                                    db,
-                                    company_id=account.company_id,
-                                    product_ids=product_ids,
-                                    intro=reply_text,
-                                )
-                                if isinstance(ai_reply, AutoReplyResult):
-                                    ai_reply.reply_text = fallback
-                                else:
-                                    ai_reply = fallback
+                                try:
+                                    product_cards_sent = _send_product_image_cards_from_db(
+                                        db,
+                                        account=account,
+                                        to=customer_phone,
+                                        product_ids=product_ids,
+                                        intro=reply_text,
+                                    )
+                                except HTTPException as image_exc:
+                                    logger.warning(
+                                        "AI product image cards skipped company_id=%s detail=%s",
+                                        account.company_id,
+                                        image_exc.detail,
+                                    )
+                                if not product_cards_sent:
+                                    fallback = _build_available_products_fallback(
+                                        db,
+                                        company_id=account.company_id,
+                                        product_ids=product_ids,
+                                        intro=reply_text,
+                                    )
+                                    if isinstance(ai_reply, AutoReplyResult):
+                                        ai_reply.reply_text = fallback
+                                    else:
+                                        ai_reply = fallback
                         elif catalog_requested:
                             logger.info(
                                 "AI product cards no available products company_id=%s",

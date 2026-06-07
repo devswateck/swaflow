@@ -514,6 +514,105 @@ def test_webhook_forces_product_cards_when_product_button_selected(db, monkeypat
     assert captured["payload"].to == "573001112233"
 
 
+def test_webhook_sends_product_image_cards_when_meta_catalog_cards_fail(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    account = WhatsAppAccount(
+        company_id=company.id,
+        phone_number_id="phone-1",
+        business_account_id="waba-1",
+        access_token_encrypted="encrypted",
+        verify_token="verify",
+    )
+    product = Product(
+        company_id=company.id,
+        name="Top Bronce 250ml",
+        price=Decimal("130000.00"),
+        currency="COP",
+        whatsapp_catalog_id="catalog-1",
+        whatsapp_product_retailer_id="top-250-meta",
+        metadata_json={"image_url": "https://example.com/top.jpg"},
+    )
+    db.add_all([account, product])
+    db.flush()
+    db.add(
+        Inventory(
+            company_id=company.id,
+            product_id=product.id,
+            quantity_available=3,
+        )
+    )
+    db.commit()
+    captured = {}
+
+    monkeypatch.setattr(
+        "app.whatsapp.service._sync_linked_catalogs_for_product_query",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.whatsapp.service.generate_auto_reply",
+        lambda *_args, **_kwargs: AutoReplyResult(
+            reply_text="Te comparto productos destacados.",
+        ),
+    )
+    monkeypatch.setattr(
+        "app.whatsapp.service.send_product_cards_from_db",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            HTTPException(status_code=502, detail="(#131009) Please check your catalog")
+        ),
+    )
+
+    def fake_send_product_image_cards_from_db(*_args, **kwargs):
+        captured["product_ids"] = kwargs["product_ids"]
+        captured["to"] = kwargs["to"]
+        return True
+
+    monkeypatch.setattr(
+        "app.whatsapp.service._send_product_image_cards_from_db",
+        fake_send_product_image_cards_from_db,
+    )
+    monkeypatch.setattr(
+        "app.whatsapp.service._send_text_with_account",
+        lambda *_args, **_kwargs: pytest.fail("No debe caer a texto si envio tarjetas visuales"),
+    )
+
+    processed, skipped = process_webhook_payload(
+        db,
+        payload={
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "phone-1"},
+                                "contacts": [{"wa_id": "573001112233", "profile": {"name": "Camilo"}}],
+                                "messages": [
+                                    {
+                                        "from": "573001112233",
+                                        "id": "wamid-productos-fallback",
+                                        "type": "interactive",
+                                        "interactive": {
+                                            "type": "button_reply",
+                                            "button_reply": {
+                                                "id": "menu_principal_opt_2",
+                                                "title": "Productos",
+                                            },
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+    )
+
+    assert processed == 1
+    assert skipped == 0
+    assert captured["product_ids"] == [product.id]
+    assert captured["to"] == "573001112233"
+
+
 def test_whatsapp_catalog_link_warning_detects_catalog_not_connected_to_waba(monkeypatch):
     account = SimpleNamespace(
         business_account_id="waba-1",
