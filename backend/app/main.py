@@ -1,7 +1,10 @@
-from fastapi import FastAPI
+from contextlib import asynccontextmanager
+
+from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.ai.routes import router as ai_router
+from app.audit.routes import router as audit_router
 from app.appointments.routes import router as appointments_router
 from app.auth.routes import router as auth_router
 from app.companies.routes import router as companies_router
@@ -26,7 +29,17 @@ cors_allow_origins = [
     if origin.strip()
 ]
 
-app = FastAPI(title=settings.app_name, version="0.1.0")
+api_router = APIRouter(prefix="/api/v1")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    import asyncio
+
+    realtime_manager.set_loop(asyncio.get_running_loop())
+    yield
+
+
+app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -42,26 +55,22 @@ def health() -> dict[str, str]:
     return {"status": "ok", "environment": settings.app_env}
 
 
-@app.on_event("startup")
-async def configure_realtime_loop() -> None:
-    import asyncio
+api_router.include_router(auth_router)
+api_router.include_router(companies_router)
+api_router.include_router(users_router)
+api_router.include_router(contacts_router)
+api_router.include_router(whatsapp_router)
+api_router.include_router(conversations_router)
+api_router.include_router(products_router)
+api_router.include_router(inventory_router)
+api_router.include_router(orders_router)
+api_router.include_router(payments_router)
+api_router.include_router(appointments_router)
+api_router.include_router(ai_router)
+api_router.include_router(audit_router)
+api_router.include_router(funnels_router)
+api_router.include_router(integrations_router)
+api_router.include_router(events_router)
+api_router.include_router(realtime_router)
 
-    realtime_manager.set_loop(asyncio.get_running_loop())
-
-
-app.include_router(auth_router)
-app.include_router(companies_router)
-app.include_router(users_router)
-app.include_router(contacts_router)
-app.include_router(whatsapp_router)
-app.include_router(conversations_router)
-app.include_router(products_router)
-app.include_router(inventory_router)
-app.include_router(orders_router)
-app.include_router(payments_router)
-app.include_router(appointments_router)
-app.include_router(ai_router)
-app.include_router(funnels_router)
-app.include_router(integrations_router)
-app.include_router(events_router)
-app.include_router(realtime_router)
+app.include_router(api_router)

@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.companies.models import Company
 from app.core.database import SessionLocal
 from app.core.security import hash_password
+from app.users.permissions import normalize_module_permissions
 from app.users.models import User
 
 
@@ -39,6 +40,7 @@ def create_superuser(args: argparse.Namespace) -> None:
                 password_hash=hash_password(password),
                 role="superadmin",
                 status="active",
+                module_permissions=normalize_module_permissions(None, role="superadmin"),
             )
             db.add(user)
         else:
@@ -46,6 +48,7 @@ def create_superuser(args: argparse.Namespace) -> None:
             user.password_hash = hash_password(password)
             user.role = "superadmin"
             user.status = "active"
+            user.module_permissions = normalize_module_permissions(None, role="superadmin")
 
         db.commit()
 

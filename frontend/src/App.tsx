@@ -36,7 +36,6 @@ import {
   Settings,
   ShieldCheck,
   ShoppingCart,
-  Sparkles,
   Pencil,
   Trash2,
   UserRound,
@@ -57,6 +56,27 @@ type CurrentUser = {
   email: string;
   role: string;
   status: string;
+  module_permissions: Record<string, boolean>;
+  company_timezone: string | null;
+  company_logo_url: string | null;
+  company_banner_url: string | null;
+  company_profile_url: string | null;
+};
+
+type CompanyProfile = {
+  id: string;
+  name: string;
+  status: string;
+  contact_email: string | null;
+  contact_phone: string | null;
+  currency: string | null;
+  timezone: string | null;
+  business_mode: string | null;
+  logo_url: string | null;
+  banner_url: string | null;
+  profile_url: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type TokenResponse = {
@@ -98,9 +118,94 @@ type AiAgentResponse = {
   security_rules: string;
   tone: string | null;
   rules: Record<string, unknown>;
+  operational_config?: Record<string, unknown>;
   active: boolean;
   created_at: string;
   updated_at: string;
+};
+
+type AiOperationalGuardrails = {
+  tenant_isolation: boolean;
+  payments_locked_to_backend: boolean;
+  inventory_reserved_by_backend: boolean;
+  no_invention: boolean;
+  no_manual_payment_confirmation: boolean;
+};
+
+type AiOperationalSecurity = {
+  mandatory_guardrails: AiOperationalGuardrails;
+  custom_rules: string;
+};
+
+type AiOperationalWindow = {
+  start: string;
+  end: string;
+};
+
+type AiOperationalSchedule = {
+  timezone: string;
+  weekday: AiOperationalWindow;
+  weekend: AiOperationalWindow;
+  outside_hours_behavior: "handoff" | "hold" | "auto_reply";
+  inside_hours_behavior: "normal" | "priority";
+  outside_hours_message: string;
+  handoff_message: string;
+};
+
+type AiOperationalAutonomy = {
+  allow_critical_actions: boolean;
+  critical_intents: string[];
+  min_confidence: string;
+  required_capture_fields: string[];
+};
+
+type AiOperationalEscalation = {
+  low_confidence: boolean;
+  complaint: boolean;
+  payment_failed: boolean;
+  stock_uncertain: boolean;
+  explicit_human_request: boolean;
+  handoff_message: string;
+  clarification_message: string;
+};
+
+type AiOperationalPolicies = {
+  shipping: string;
+  warranty: string;
+  returns: string;
+  payments: string;
+};
+
+type AiOperationalPriorities = {
+  priority_categories: string[];
+  restricted_categories: string[];
+};
+
+type AiOperationalTestMode = {
+  enabled: boolean;
+  simulation_note: string;
+};
+
+type AiOperationalConfig = {
+  status: "draft" | "published";
+  version: number;
+  published_at: string | null;
+  draft: AiOperationalSection;
+  published: AiOperationalSection;
+};
+
+type AiOperationalSection = {
+  security: AiOperationalSecurity;
+  schedule: AiOperationalSchedule;
+  autonomy: AiOperationalAutonomy;
+  escalation: AiOperationalEscalation;
+  policies: AiOperationalPolicies;
+  priorities: AiOperationalPriorities;
+  test_mode: AiOperationalTestMode;
+};
+
+type DefaultSystemPromptResponse = {
+  default_system_prompt: string;
 };
 
 type AiFaqEntry = {
@@ -278,9 +383,13 @@ type ApiFunnel = {
   id: string;
   company_id: string;
   name: string;
+  system_key: string | null;
   description: string | null;
   status: string;
   is_default: boolean;
+  welcome_message: string | null;
+  capture_fields: string[];
+  assignment_criteria: string | null;
   steps: ApiFunnelStep[];
   created_at: string;
   updated_at: string;
@@ -399,19 +508,60 @@ type Appointment = {
   owner: string;
 };
 
-const navItems: Array<{ key: PageKey; label: string; icon: typeof ChartNoAxesCombined }> = [
-  { key: "dashboard", label: "Dashboard", icon: ChartNoAxesCombined },
-  { key: "inbox", label: "Inbox", icon: Inbox },
-  { key: "products", label: "Productos", icon: Package },
-  { key: "inventory", label: "Inventario", icon: Warehouse },
-  { key: "orders", label: "Ordenes", icon: ShoppingCart },
-  { key: "appointments", label: "Citas", icon: CalendarDays },
-  { key: "funnels", label: "Funnels", icon: GitBranchPlus },
-  { key: "ai", label: "IA", icon: Bot },
-  { key: "whatsapp", label: "WhatsApp", icon: MessageSquareText },
-  { key: "integrations", label: "Integraciones", icon: Link2 },
-  { key: "settings", label: "Ajustes", icon: Settings },
+type ModulePermissionOption = {
+  key: string;
+  label: string;
+  description: string;
+  defaultEnabled: boolean;
+};
+
+type TenantUser = {
+  id: string;
+  company_id: string;
+  name: string;
+  email: string;
+  role: string;
+  status: string;
+  module_permissions: Record<string, boolean>;
+  created_at: string;
+  updated_at: string;
+};
+
+type NavItem = { key: PageKey; label: string; icon: typeof ChartNoAxesCombined };
+
+const navGroups: Array<{ label: string; items: NavItem[] }> = [
+  {
+    label: "Operacion",
+    items: [
+      { key: "dashboard", label: "Dashboard", icon: ChartNoAxesCombined },
+      { key: "inbox", label: "Inbox", icon: Inbox },
+    ],
+  },
+  {
+    label: "Comercio",
+    items: [
+      { key: "products", label: "Productos", icon: Package },
+      { key: "inventory", label: "Inventario", icon: Warehouse },
+      { key: "orders", label: "Ordenes", icon: ShoppingCart },
+      { key: "appointments", label: "Citas", icon: CalendarDays },
+    ],
+  },
+  {
+    label: "Automatizacion",
+    items: [
+      { key: "ai", label: "IA", icon: Bot },
+      { key: "funnels", label: "Funnels", icon: GitBranchPlus },
+      { key: "whatsapp", label: "WhatsApp", icon: MessageSquareText },
+      { key: "integrations", label: "Integraciones", icon: Link2 },
+    ],
+  },
+  {
+    label: "Administracion",
+    items: [{ key: "settings", label: "Ajustes", icon: Settings }],
+  },
 ];
+
+const navItems = navGroups.flatMap((group) => group.items);
 
 const pageCopy: Record<PageKey, { title: string; subtitle: string }> = {
   dashboard: {
@@ -460,48 +610,196 @@ const pageCopy: Record<PageKey, { title: string; subtitle: string }> = {
   },
 };
 
+const privilegedRoles = new Set(["owner", "admin", "superadmin"]);
+
+const modulePermissionOptions: ModulePermissionOption[] = [
+  {
+    key: "dashboard",
+    label: "Dashboard",
+    description: "Resumen operativo y métricas del tenant.",
+    defaultEnabled: true,
+  },
+  {
+    key: "inbox",
+    label: "Inbox",
+    description: "Conversaciones, handoff y seguimiento humano.",
+    defaultEnabled: true,
+  },
+  {
+    key: "products",
+    label: "Productos",
+    description: "Catalogo y disponibilidad comercial.",
+    defaultEnabled: true,
+  },
+  {
+    key: "inventory",
+    label: "Inventario",
+    description: "Stock disponible, reservado y ajustes.",
+    defaultEnabled: true,
+  },
+  {
+    key: "orders",
+    label: "Ordenes",
+    description: "Pedidos, estados y links de pago.",
+    defaultEnabled: true,
+  },
+  {
+    key: "appointments",
+    label: "Citas",
+    description: "Agenda operativa del tenant.",
+    defaultEnabled: true,
+  },
+  {
+    key: "whatsapp",
+    label: "WhatsApp",
+    description: "Cuenta Cloud API, webhooks y envios salientes.",
+    defaultEnabled: false,
+  },
+  {
+    key: "ai",
+    label: "IA",
+    description: "Agente, FAQs, templates e intentos.",
+    defaultEnabled: false,
+  },
+  {
+    key: "funnels",
+    label: "Funnels",
+    description: "Configuracion y edicion de embudos.",
+    defaultEnabled: false,
+  },
+  {
+    key: "integrations",
+    label: "Integraciones",
+    description: "Calendario, correo, n8n y webhooks.",
+    defaultEnabled: false,
+  },
+  {
+    key: "settings",
+    label: "Configuracion",
+    description: "Perfil del tenant, usuarios y seguridad.",
+    defaultEnabled: false,
+  },
+];
+
+const pageModuleRequirements: Partial<Record<PageKey, string[]>> = {
+  ai: ["ai"],
+  whatsapp: ["whatsapp"],
+  funnels: ["funnels"],
+  integrations: ["integrations"],
+  settings: ["settings"],
+};
+
+function hasModuleAccess(currentUser: CurrentUser | null, moduleKey: string): boolean {
+  if (!currentUser) {
+    return false;
+  }
+  if (privilegedRoles.has(currentUser.role)) {
+    return true;
+  }
+  return Boolean(currentUser.module_permissions?.[moduleKey]);
+}
+
+function canAccessPage(currentUser: CurrentUser | null, page: PageKey): boolean {
+  const requirements = pageModuleRequirements[page] ?? [];
+  return requirements.every((moduleKey) => hasModuleAccess(currentUser, moduleKey));
+}
+
+function getVisibleNavGroups(currentUser: CurrentUser | null) {
+  return navGroups
+    .map((group) => ({
+      label: group.label,
+      items: group.items.filter((item) => canAccessPage(currentUser, item.key)),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function defaultModulePermissions(role: string): Record<string, boolean> {
+  const allAccess = privilegedRoles.has(role);
+  return Object.fromEntries(
+    modulePermissionOptions.map((option) => [option.key, allAccess || option.defaultEnabled]),
+  ) as Record<string, boolean>;
+}
+
+function normalizeUserModulePermissions(
+  role: string,
+  permissions: Record<string, boolean> | null | undefined,
+): Record<string, boolean> {
+  return {
+    ...defaultModulePermissions(role),
+    ...(permissions ?? {}),
+  };
+}
+
+function buildUserFormFromRole(role: string) {
+  return {
+    name: "",
+    email: "",
+    password: "",
+    role,
+    status: "active",
+    module_permissions: defaultModulePermissions(role),
+  };
+}
+
+function buildUserFormFromUser(user: TenantUser) {
+  return {
+    name: user.name,
+    email: user.email,
+    password: "",
+    role: user.role,
+    status: user.status,
+    module_permissions: normalizeUserModulePermissions(user.role, user.module_permissions),
+  };
+}
+
 const initialAppointments: Appointment[] = [
   { id: "apt-1", contact: "Diana Perez", scheduledAt: "2026-05-20 14:00", status: "scheduled", owner: "Carolina" },
   { id: "apt-2", contact: "Felipe Torres", scheduledAt: "2026-05-21 10:30", status: "confirmed", owner: "Mateo" },
 ];
 
-const defaultAiAgentForm: AiAgentForm = {
-  name: "Asistente comercial SwaFlow",
-  active: true,
-  systemPrompt:
-    "Eres un asistente comercial de WhatsApp. Responde con claridad, valida productos y stock antes de vender, captura datos clave y pasa a un asesor cuando detectes dudas sensibles, quejas o solicitudes fuera de alcance.",
-  securityRules:
-    "No inventar precios, no prometer disponibilidad sin consultar stock, no pedir datos bancarios completos y no responder temas fuera del negocio.",
-  personality: "cercano, confiable, ejecutivo, claro",
-  tone: "comercial y amable",
-  language: "espanol",
-  schedule: "08:00-18:00",
-  welcomeMessage:
-    "Hola, soy el asistente de SwaFlow. Estoy aqui para ayudarte con productos, pagos y citas. En que puedo ayudarte hoy?",
-  businessDescription:
-    "SwaFlow ayuda a empresas a operar ventas por WhatsApp con IA, inventario, agenda, pagos y seguimiento humano.",
-  productsServices:
-    "Automatizacion comercial por WhatsApp\nInbox para asesores\nAgenda de citas\nLinks de pago\nIntegraciones con n8n, calendario y correo",
-  conversationObjective:
-    "Calificar leads, resolver preguntas frecuentes, recomendar productos, agendar citas y apoyar el cierre de ventas.",
-  conversationGuide:
-    "1. Primer contacto:\n" +
-    "   Enviar el mensaje de bienvenida y solicitar los datos iniciales definidos.\n\n" +
-    "2. Datos iniciales completos:\n" +
-    "   Enviar el interactivo menu_principal.\n\n" +
-    "3. Seleccion de una opcion:\n" +
-    "   Interpretar la opcion como intencion actual, responder con el contexto del negocio y continuar el flujo.\n\n" +
-    "4. Productos:\n" +
-    "   Consultar catalogo e inventario antes de recomendar. Enviar cards cuando corresponda.",
-  captureFields: ["Nombre", "Numero de contacto", "Producto de interes", "Fecha", "Horario"],
-  funnelSteps: ["Saludo", "Calificacion", "Recomendacion", "Agendar cita", "Enviar pago"],
-  handoffRule:
-    "Pasar a humano si hay queja, solicitud legal, datos sensibles, negociacion especial o baja confianza de la IA.",
-  model: "gpt-4o-mini",
-  temperature: "0.5",
-  maxTokens: "500",
-  knowledgeSources: "Productos, inventario, ordenes, citas, base de conocimiento y conversaciones del tenant.",
-};
+function buildDefaultAiAgentForm(systemPrompt: string): AiAgentForm {
+  return {
+    name: "Asistente comercial SWAFLOW",
+    active: true,
+    systemPrompt,
+    securityRules:
+      "No inventar precios, no prometer disponibilidad sin consultar stock, no pedir datos bancarios completos y no responder temas fuera del negocio.",
+    personality: "cercano, confiable, ejecutivo, claro",
+    tone: "comercial y amable",
+    language: "espanol",
+    schedule: "08:00-18:00",
+    welcomeMessage:
+      "Hola, soy el asistente de SWAFLOW. Estoy aqui para ayudarte con productos, pagos y citas. En que puedo ayudarte hoy?",
+    businessDescription:
+      "SWAFLOW ayuda a empresas a operar ventas por WhatsApp con IA, inventario, agenda, pagos y seguimiento humano.",
+    productsServices:
+      "Automatizacion comercial por WhatsApp\nInbox para asesores\nAgenda de citas\nLinks de pago\nIntegraciones con n8n, calendario y correo",
+    conversationObjective:
+      "Calificar leads, resolver preguntas frecuentes, recomendar productos, agendar citas y apoyar el cierre de ventas.",
+    conversationGuide:
+      "1. Primer contacto:\n" +
+      "   Enviar el mensaje de bienvenida y solicitar los datos iniciales definidos.\n\n" +
+      "2. Datos iniciales completos:\n" +
+      "   Enviar el interactivo menu_principal.\n\n" +
+      "3. Seleccion de una opcion:\n" +
+      "   Interpretar la opcion como intencion actual, responder con el contexto del negocio y continuar el flujo.\n\n" +
+      "4. Productos:\n" +
+      "   Consultar catalogo e inventario antes de recomendar. Enviar cards cuando corresponda.",
+    captureFields: ["Nombre", "Numero de contacto", "Producto de interes", "Fecha", "Horario"],
+    funnelSteps: ["Saludo", "Calificacion", "Recomendacion", "Agendar cita", "Enviar pago"],
+    handoffRule:
+      "Pasar a humano si hay queja, solicitud legal, datos sensibles, negociacion especial o baja confianza de la IA.",
+    model: "gpt-4o-mini",
+    temperature: "0.5",
+    maxTokens: "500",
+    knowledgeSources: "Productos, inventario, ordenes, citas, base de conocimiento y conversaciones del tenant.",
+  };
+}
+
+const DEFAULT_AI_AGENT_SYSTEM_PROMPT =
+  "Eres un asistente comercial de WhatsApp. Responde con claridad, valida productos y stock antes de vender, captura datos clave y pasa a un asesor cuando detectes dudas sensibles, quejas o solicitudes fuera de alcance.";
+
+const defaultAiAgentForm: AiAgentForm = buildDefaultAiAgentForm(DEFAULT_AI_AGENT_SYSTEM_PROMPT);
 
 function createInteractiveTemplateForm() {
   return {
@@ -536,8 +834,21 @@ function getStoredPage(): PageKey {
 type ThemeMode = "light" | "dark";
 
 function getStoredTheme(): ThemeMode {
-  const value = localStorage.getItem("swaflow_theme");
-  return value === "dark" ? "dark" : "light";
+  try {
+    const value = localStorage.getItem("swaflow_theme");
+    return value === "light" ? "light" : "dark";
+  } catch {
+    return "dark";
+  }
+}
+
+function getStoredCompanyLogoUrl(): string | null {
+  try {
+    const value = localStorage.getItem("swaflow_company_logo_url");
+    return value && value.trim() ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function formatPhone(phone: string) {
@@ -583,7 +894,7 @@ const integrationDefinitions: IntegrationDefinition[] = [
     defaultConfig: {
       provider: "smtp",
       from_email: "notificaciones@swateck.com",
-      from_name: "SwaFlow",
+      from_name: "SWAFLOW",
       reply_to: "comercial@swateck.com",
       smtp_host: "",
       smtp_port: "587",
@@ -600,7 +911,7 @@ const integrationDefinitions: IntegrationDefinition[] = [
         ],
       },
       { key: "from_email", label: "Correo origen", placeholder: "notificaciones@empresa.com" },
-      { key: "from_name", label: "Nombre origen", placeholder: "SwaFlow" },
+      { key: "from_name", label: "Nombre origen", placeholder: "SWAFLOW" },
       { key: "reply_to", label: "Responder a", placeholder: "comercial@empresa.com" },
       { key: "smtp_host", label: "Host SMTP", placeholder: "smtp.empresa.com" },
       { key: "smtp_port", label: "Puerto SMTP", placeholder: "587" },
@@ -732,9 +1043,305 @@ function readStringArray(value: unknown, fallback: string[]) {
   return value.filter((item): item is string => typeof item === "string");
 }
 
-function aiFormFromAgent(agent: AiAgentResponse | null): AiAgentForm {
+function parseStringList(value: string) {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseJsonObject(value: string): Record<string, unknown> {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return {};
+  }
+  const parsed = JSON.parse(trimmed) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("La configuracion del paso debe ser un objeto JSON valido.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function formatJsonObject(value: Record<string, unknown> | null | undefined) {
+  if (!value || Object.keys(value).length === 0) {
+    return "";
+  }
+  return JSON.stringify(value, null, 2);
+}
+
+type FunnelStepDraft = {
+  position: number;
+  name: string;
+  code: string;
+  prompt: string;
+  objectives: string;
+  transitionCriteria: string;
+  status: string;
+  config: string;
+};
+
+function buildEmptyFunnelStep(position: number): FunnelStepDraft {
+  return {
+    position,
+    name: `Paso ${position}`,
+    code: `paso_${position}`,
+    prompt: "",
+    objectives: "",
+    transitionCriteria: "",
+    status: "active",
+    config: "",
+  };
+}
+
+function buildDefaultFunnelSteps(): FunnelStepDraft[] {
+  return [buildEmptyFunnelStep(1), buildEmptyFunnelStep(2), buildEmptyFunnelStep(3)];
+}
+
+function buildDefaultOperationalSection(timezone = "UTC"): AiOperationalSection {
+  return {
+    security: {
+      mandatory_guardrails: {
+        tenant_isolation: true,
+        payments_locked_to_backend: true,
+        inventory_reserved_by_backend: true,
+        no_invention: true,
+        no_manual_payment_confirmation: true,
+      },
+      custom_rules:
+        "No desactivar guardrails obligatorios, no confirmar pagos manualmente y no inventar datos operativos.",
+    },
+    schedule: {
+      timezone,
+      weekday: { start: "08:00", end: "18:00" },
+      weekend: { start: "08:00", end: "14:00" },
+      outside_hours_behavior: "handoff",
+      inside_hours_behavior: "normal",
+      outside_hours_message: "Estamos fuera de horario. Te contactamos apenas retomemos atencion.",
+      handoff_message: "Te paso con una persona del equipo para continuar.",
+    },
+    autonomy: {
+      allow_critical_actions: false,
+      critical_intents: ["buy_product", "schedule_appointment", "request_human", "complaint"],
+      min_confidence: "0.75",
+      required_capture_fields: ["nombre", "correo", "ciudad"],
+    },
+    escalation: {
+      low_confidence: true,
+      complaint: true,
+      payment_failed: true,
+      stock_uncertain: true,
+      explicit_human_request: true,
+      handoff_message: "Te paso con una persona del equipo para continuar.",
+      clarification_message: "Necesito un poco mas de informacion para ayudarte mejor.",
+    },
+    policies: {
+      shipping: "",
+      warranty: "",
+      returns: "",
+      payments: "",
+    },
+    priorities: {
+      priority_categories: [],
+      restricted_categories: [],
+    },
+    test_mode: {
+      enabled: false,
+      simulation_note: "",
+    },
+  };
+}
+
+function cloneOperationalSection(section: AiOperationalSection): AiOperationalSection {
+  return {
+    security: {
+      mandatory_guardrails: { ...section.security.mandatory_guardrails },
+      custom_rules: section.security.custom_rules,
+    },
+    schedule: {
+      ...section.schedule,
+      weekday: { ...section.schedule.weekday },
+      weekend: { ...section.schedule.weekend },
+    },
+    autonomy: {
+      ...section.autonomy,
+      critical_intents: [...section.autonomy.critical_intents],
+      required_capture_fields: [...section.autonomy.required_capture_fields],
+    },
+    escalation: { ...section.escalation },
+    policies: { ...section.policies },
+    priorities: {
+      priority_categories: [...section.priorities.priority_categories],
+      restricted_categories: [...section.priorities.restricted_categories],
+    },
+    test_mode: { ...section.test_mode },
+  };
+}
+
+function readBoolean(value: unknown, fallback = false) {
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function readNumberString(value: unknown, fallback = "0.75") {
+  return typeof value === "number" ? String(value) : readString(value, fallback);
+}
+
+function readOperationalSection(value: unknown, fallback = buildDefaultOperationalSection()): AiOperationalSection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return cloneOperationalSection(fallback);
+  }
+  const source = value as Record<string, unknown>;
+  const security = source.security as Record<string, unknown> | undefined;
+  const guardrails = security?.mandatory_guardrails as Record<string, unknown> | undefined;
+  const schedule = source.schedule as Record<string, unknown> | undefined;
+  const autonomy = source.autonomy as Record<string, unknown> | undefined;
+  const escalation = source.escalation as Record<string, unknown> | undefined;
+  const policies = source.policies as Record<string, unknown> | undefined;
+  const priorities = source.priorities as Record<string, unknown> | undefined;
+  const testMode = source.test_mode as Record<string, unknown> | undefined;
+
+  return {
+    security: {
+      mandatory_guardrails: {
+        tenant_isolation: readBoolean(guardrails?.tenant_isolation, fallback.security.mandatory_guardrails.tenant_isolation),
+        payments_locked_to_backend: readBoolean(
+          guardrails?.payments_locked_to_backend,
+          fallback.security.mandatory_guardrails.payments_locked_to_backend,
+        ),
+        inventory_reserved_by_backend: readBoolean(
+          guardrails?.inventory_reserved_by_backend,
+          fallback.security.mandatory_guardrails.inventory_reserved_by_backend,
+        ),
+        no_invention: readBoolean(guardrails?.no_invention, fallback.security.mandatory_guardrails.no_invention),
+        no_manual_payment_confirmation: readBoolean(
+          guardrails?.no_manual_payment_confirmation,
+          fallback.security.mandatory_guardrails.no_manual_payment_confirmation,
+        ),
+      },
+      custom_rules: readString(security?.custom_rules, fallback.security.custom_rules),
+    },
+    schedule: {
+      timezone: readString(schedule?.timezone, fallback.schedule.timezone),
+      weekday: {
+        start: readString((schedule?.weekday as Record<string, unknown> | undefined)?.start, fallback.schedule.weekday.start),
+        end: readString((schedule?.weekday as Record<string, unknown> | undefined)?.end, fallback.schedule.weekday.end),
+      },
+      weekend: {
+        start: readString((schedule?.weekend as Record<string, unknown> | undefined)?.start, fallback.schedule.weekend.start),
+        end: readString((schedule?.weekend as Record<string, unknown> | undefined)?.end, fallback.schedule.weekend.end),
+      },
+      outside_hours_behavior: (readString(schedule?.outside_hours_behavior, fallback.schedule.outside_hours_behavior) as
+        | "handoff"
+        | "hold"
+        | "auto_reply"),
+      inside_hours_behavior: (readString(schedule?.inside_hours_behavior, fallback.schedule.inside_hours_behavior) as
+        | "normal"
+        | "priority"),
+      outside_hours_message: readString(schedule?.outside_hours_message, fallback.schedule.outside_hours_message),
+      handoff_message: readString(schedule?.handoff_message, fallback.schedule.handoff_message),
+    },
+    autonomy: {
+      allow_critical_actions: readBoolean(autonomy?.allow_critical_actions, fallback.autonomy.allow_critical_actions),
+      critical_intents: readStringArray(autonomy?.critical_intents, fallback.autonomy.critical_intents),
+      min_confidence: readNumberString(autonomy?.min_confidence, fallback.autonomy.min_confidence),
+      required_capture_fields: readStringArray(
+        autonomy?.required_capture_fields,
+        fallback.autonomy.required_capture_fields,
+      ),
+    },
+    escalation: {
+      low_confidence: readBoolean(escalation?.low_confidence, fallback.escalation.low_confidence),
+      complaint: readBoolean(escalation?.complaint, fallback.escalation.complaint),
+      payment_failed: readBoolean(escalation?.payment_failed, fallback.escalation.payment_failed),
+      stock_uncertain: readBoolean(escalation?.stock_uncertain, fallback.escalation.stock_uncertain),
+      explicit_human_request: readBoolean(
+        escalation?.explicit_human_request,
+        fallback.escalation.explicit_human_request,
+      ),
+      handoff_message: readString(escalation?.handoff_message, fallback.escalation.handoff_message),
+      clarification_message: readString(
+        escalation?.clarification_message,
+        fallback.escalation.clarification_message,
+      ),
+    },
+    policies: {
+      shipping: readString(policies?.shipping, fallback.policies.shipping),
+      warranty: readString(policies?.warranty, fallback.policies.warranty),
+      returns: readString(policies?.returns, fallback.policies.returns),
+      payments: readString(policies?.payments, fallback.policies.payments),
+    },
+    priorities: {
+      priority_categories: readStringArray(priorities?.priority_categories, fallback.priorities.priority_categories),
+      restricted_categories: readStringArray(
+        priorities?.restricted_categories,
+        fallback.priorities.restricted_categories,
+      ),
+    },
+    test_mode: {
+      enabled: readBoolean(testMode?.enabled, fallback.test_mode.enabled),
+      simulation_note: readString(testMode?.simulation_note, fallback.test_mode.simulation_note),
+    },
+  };
+}
+
+function buildDefaultOperationalConfig(timezone?: string | null): AiOperationalConfig {
+  const section = buildDefaultOperationalSection(timezone ?? "UTC");
+  return {
+    status: "draft",
+    version: 1,
+    published_at: null,
+    draft: section,
+    published: cloneOperationalSection(section),
+  };
+}
+
+function normalizeOperationalConfig(value: unknown, fallbackTimezone?: string | null): AiOperationalConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return buildDefaultOperationalConfig(fallbackTimezone);
+  }
+  const source = value as Record<string, unknown>;
+  const defaultSection = buildDefaultOperationalSection(fallbackTimezone ?? "UTC");
+  const hasVersionedSections = Boolean(source.draft || source.published);
+  const draftSource = hasVersionedSections ? source.draft : source;
+  const publishedSource = hasVersionedSections ? source.published : source;
+  const status = source.status === "published" ? "published" : "draft";
+  return {
+    status,
+    version: typeof source.version === "number" ? source.version : 1,
+    published_at: typeof source.published_at === "string" ? source.published_at : null,
+    draft: readOperationalSection(draftSource, defaultSection),
+    published: readOperationalSection(publishedSource, defaultSection),
+  };
+}
+
+function operationalConfigFromAgent(
+  agent: AiAgentResponse | null,
+  fallbackTimezone?: string | null,
+): AiOperationalConfig {
   if (!agent) {
-    return { ...defaultAiAgentForm };
+    return buildDefaultOperationalConfig(fallbackTimezone);
+  }
+  const rules = agent.rules ?? {};
+  const operational = agent.operational_config ?? (rules.operational as Record<string, unknown> | undefined);
+  return normalizeOperationalConfig(operational, fallbackTimezone);
+}
+
+function operationalPayloadFromConfig(config: AiOperationalConfig): Record<string, unknown> {
+  return {
+    status: config.status,
+    version: config.version,
+    published_at: config.published_at,
+    draft: config.draft,
+    published: config.published,
+  };
+}
+
+function operationalScheduleSummary(section: AiOperationalSection) {
+  return `L-V ${section.schedule.weekday.start}-${section.schedule.weekday.end} | S-D ${section.schedule.weekend.start}-${section.schedule.weekend.end}`;
+}
+
+function aiFormFromAgent(agent: AiAgentResponse | null, defaultSystemPrompt: string): AiAgentForm {
+  if (!agent) {
+    return buildDefaultAiAgentForm(defaultSystemPrompt);
   }
   const rules = agent.rules ?? {};
   return {
@@ -766,7 +1373,7 @@ function aiFormFromAgent(agent: AiAgentResponse | null): AiAgentForm {
   };
 }
 
-function aiPayloadFromForm(form: AiAgentForm) {
+function aiPayloadFromForm(form: AiAgentForm, operationalConfig: AiOperationalConfig) {
   return {
     name: form.name,
     system_prompt: form.systemPrompt,
@@ -791,7 +1398,9 @@ function aiPayloadFromForm(form: AiAgentForm) {
       max_tokens: form.maxTokens,
       knowledge_sources: form.knowledgeSources,
       conversation_guide: form.conversationGuide,
+      operational: operationalPayloadFromConfig(operationalConfig),
     },
+    operational_config: operationalPayloadFromConfig(operationalConfig),
   };
 }
 
@@ -903,6 +1512,7 @@ function App() {
   const [theme, setTheme] = useState<ThemeMode>(getStoredTheme);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [accessNotice, setAccessNotice] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationMessages, setConversationMessages] = useState<InboxMessage[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
@@ -913,9 +1523,12 @@ function App() {
   const [appointments, setAppointments] = useState(initialAppointments);
   const [funnels, setFunnels] = useState<ApiFunnel[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [inboxFunnelFilterId, setInboxFunnelFilterId] = useState<string>("");
+  const [inboxStepFilterId, setInboxStepFilterId] = useState<string>("");
   const selectedConversationIdRef = useRef<string | null>(null);
 
-  const page = pageCopy[activePage];
+  const visibleActivePage = currentUser && canAccessPage(currentUser, activePage) ? activePage : "dashboard";
+  const page = pageCopy[visibleActivePage];
   const selectedConversation = selectedConversationId
     ? conversations.find((item) => item.id === selectedConversationId) ?? null
     : null;
@@ -929,21 +1542,74 @@ function App() {
   }, [activePage]);
 
   useEffect(() => {
-    localStorage.setItem("swaflow_theme", theme);
+    if (!currentUser) {
+      return;
+    }
+    if (!canAccessPage(currentUser, activePage) && activePage !== "dashboard") {
+      setActivePage("dashboard");
+      setAccessNotice("No tienes acceso a ese modulo");
+    }
+  }, [activePage, currentUser]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("swaflow_theme", theme);
+    } catch {
+      // Theme still applies through document classes when storage is unavailable.
+    }
     document.documentElement.classList.toggle("theme-dark", theme === "dark");
+    document.documentElement.classList.toggle("theme-light", theme === "light");
   }, [theme]);
+
+  useEffect(() => {
+    try {
+      if (currentUser?.company_logo_url) {
+        localStorage.setItem("swaflow_company_logo_url", currentUser.company_logo_url);
+      } else {
+        localStorage.removeItem("swaflow_company_logo_url");
+      }
+    } catch {
+      // Branding cache is best-effort only.
+    }
+  }, [currentUser?.company_logo_url]);
+
+  useEffect(() => {
+    if (!accessNotice) {
+      return;
+    }
+    const timer = window.setTimeout(() => setAccessNotice(""), 4000);
+    return () => window.clearTimeout(timer);
+  }, [accessNotice]);
 
   useEffect(() => {
     selectedConversationIdRef.current = selectedConversationId;
   }, [selectedConversationId]);
 
-  const loadInbox = useCallback(async ({ showLoading = false }: { showLoading?: boolean } = {}) => {
+  const loadInbox = useCallback(
+    async (
+      {
+        showLoading = false,
+        funnelId = inboxFunnelFilterId || null,
+        funnelStepId = inboxStepFilterId || null,
+      }: {
+        showLoading?: boolean;
+        funnelId?: string | null;
+        funnelStepId?: string | null;
+      } = {},
+    ) => {
     if (showLoading) {
       setInboxLoading(true);
     }
     setInboxError("");
     try {
-      const response = await api<ApiConversation[]>("/conversations");
+      const params = new URLSearchParams();
+      if (funnelId) {
+        params.set("funnel_id", funnelId);
+      }
+      if (funnelStepId) {
+        params.set("funnel_step_id", funnelStepId);
+      }
+      const response = await api<ApiConversation[]>(`/conversations${params.toString() ? `?${params.toString()}` : ""}`);
       const mapped = response.map(mapApiConversation);
       setConversations(mapped);
       const currentSelected = selectedConversationIdRef.current;
@@ -962,7 +1628,7 @@ function App() {
         setInboxLoading(false);
       }
     }
-  }, []);
+  }, [inboxFunnelFilterId, inboxStepFilterId]);
 
   const loadConversationDetail = useCallback(async (conversationId: string, markRead = true) => {
     setInboxError("");
@@ -1048,10 +1714,16 @@ function App() {
       return;
     }
 
-    void loadInbox({ showLoading: true });
     void loadCatalogData();
     void loadOrders();
-  }, [currentUser, loadCatalogData, loadInbox, loadOrders]);
+  }, [currentUser, loadCatalogData, loadOrders]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      return;
+    }
+    void loadInbox({ showLoading: true });
+  }, [currentUser, inboxFunnelFilterId, inboxStepFilterId, loadInbox]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -1149,6 +1821,12 @@ function App() {
   }, [activePage, products, query]);
 
   function goToPage(key: PageKey) {
+    if (currentUser && !canAccessPage(currentUser, key)) {
+      setAccessNotice("No tienes acceso a ese modulo");
+      setActivePage("dashboard");
+      setMobileMenuOpen(false);
+      return;
+    }
     setActivePage(key);
     setMobileMenuOpen(false);
   }
@@ -1227,6 +1905,15 @@ function App() {
     }
   }
 
+  function updateInboxFunnelFilter(nextFunnelId: string) {
+    setInboxFunnelFilterId(nextFunnelId);
+    setInboxStepFilterId("");
+  }
+
+  function updateInboxStepFilter(nextStepId: string) {
+    setInboxStepFilterId(nextStepId);
+  }
+
   function requestHuman() {
     if (!selectedConversation) {
       return;
@@ -1250,37 +1937,42 @@ function App() {
   }
 
   if (authLoading || !currentUser) {
-    return <LoadingScreen />;
+    return <LoadingScreen logoUrl={getStoredCompanyLogoUrl()} />;
   }
 
   return (
-    <div className="min-h-screen bg-[#edf3ef] text-ink">
+    <div className="min-h-screen bg-background text-ink">
       <div className="flex min-h-screen">
-        <Sidebar activePage={activePage} onNavigate={goToPage} />
+        <Sidebar
+          activePage={activePage}
+          logoUrl={currentUser.company_logo_url}
+          currentUser={currentUser}
+          onNavigate={goToPage}
+        />
 
         {mobileMenuOpen ? (
-          <div className="fixed inset-0 z-40 bg-ink/30 lg:hidden">
-            <div className="h-full w-80 max-w-[88vw] bg-white px-4 py-5">
+          <div className="fixed inset-0 z-40 bg-brandNight/70 backdrop-blur-sm lg:hidden">
+            <div className="h-full w-80 max-w-[88vw] border-r border-line bg-brandNight px-4 py-5 text-brandOnDark shadow-glow">
               <div className="mb-5 flex items-center justify-between">
-                <Brand />
+                <Brand inverted logoUrl={currentUser.company_logo_url} />
                 <button
-                  className="grid h-9 w-9 place-items-center rounded border border-line"
+                  className="grid h-9 w-9 place-items-center rounded border border-line text-brandOnDark hover:bg-brandPanel"
                   onClick={() => setMobileMenuOpen(false)}
                   title="Cerrar menu"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
-              <NavList activePage={activePage} onNavigate={goToPage} />
+              <NavList activePage={activePage} currentUser={currentUser} onNavigate={goToPage} />
             </div>
           </div>
         ) : null}
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <header className="flex min-h-16 items-center justify-between border-b border-line bg-white px-4 py-3 lg:px-8">
+          <header className="flex min-h-16 items-center justify-between border-b border-line bg-surface px-4 py-3 lg:px-8">
             <div className="flex min-w-0 items-center gap-3">
               <button
-                className="grid h-9 w-9 shrink-0 place-items-center rounded border border-line bg-white text-slate-600 lg:hidden"
+                className="grid h-9 w-9 shrink-0 place-items-center rounded border border-line bg-surface text-slate-600 shadow-soft lg:hidden"
                 title="Abrir menu"
                 onClick={() => setMobileMenuOpen(true)}
               >
@@ -1293,13 +1985,13 @@ function App() {
             </div>
             <div className="flex items-center gap-2">
               <button
-                className="grid h-9 w-9 place-items-center rounded border border-line bg-white text-slate-600 shadow-soft"
+                className="grid h-9 w-9 place-items-center rounded border border-line bg-surface text-slate-600 shadow-soft"
                 title={theme === "dark" ? "Activar modo claro" : "Activar modo oscuro"}
                 onClick={() => setTheme((current) => (current === "dark" ? "light" : "dark"))}
               >
                 {theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
               </button>
-              <label className="hidden h-9 items-center gap-2 rounded border border-line bg-white px-3 text-sm text-slate-600 shadow-soft md:flex">
+              <label className="hidden h-9 items-center gap-2 rounded border border-line bg-surface px-3 text-sm text-slate-600 shadow-soft md:flex">
                 <Search className="h-4 w-4" />
                 <input
                   className="w-40 bg-transparent outline-none"
@@ -1309,7 +2001,7 @@ function App() {
                 />
               </label>
               <button
-                className="relative grid h-9 w-9 place-items-center rounded border border-line bg-white text-slate-600 shadow-soft"
+                className="relative grid h-9 w-9 place-items-center rounded border border-line bg-surface text-slate-600 shadow-soft"
                 title={
                   totalUnread
                     ? `${totalUnread} mensajes sin leer`
@@ -1324,7 +2016,7 @@ function App() {
                 ) : null}
               </button>
               <button
-                className="hidden h-9 items-center gap-2 rounded border border-line bg-white px-3 text-sm text-slate-600 shadow-soft sm:inline-flex"
+                className="hidden h-9 items-center gap-2 rounded border border-line bg-surface px-3 text-sm text-slate-600 shadow-soft sm:inline-flex"
                 title="Cuenta"
                 onClick={() => setActivePage("settings")}
               >
@@ -1342,15 +2034,16 @@ function App() {
           </header>
 
           <div className="p-4 lg:p-8">
-            {activePage === "dashboard" ? (
+            {accessNotice ? <Notice tone="error" message={accessNotice} /> : null}
+            {visibleActivePage === "dashboard" ? (
               <DashboardPage
                 conversations={conversations}
                 orders={orders}
                 appointments={appointments}
-                onNavigate={setActivePage}
+                onNavigate={goToPage}
               />
             ) : null}
-            {activePage === "inbox" ? (
+            {visibleActivePage === "inbox" ? (
               <InboxPage
                 conversations={conversations}
                 selectedConversation={selectedConversation}
@@ -1364,25 +2057,29 @@ function App() {
                 onAddAppointment={addAppointment}
                 funnels={funnels}
                 onAssignFunnel={assignConversationFunnel}
+                funnelFilterId={inboxFunnelFilterId}
+                funnelStepFilterId={inboxStepFilterId}
+                onChangeFunnelFilter={updateInboxFunnelFilter}
+                onChangeStepFilter={updateInboxStepFilter}
               />
             ) : null}
-            {activePage === "products" ? (
+            {visibleActivePage === "products" ? (
               <ProductsPage products={filteredProducts} inventory={inventory} onRefreshProducts={loadCatalogData} />
             ) : null}
-            {activePage === "inventory" ? (
+            {visibleActivePage === "inventory" ? (
               <InventoryPage products={products} inventory={inventory} onAdjust={adjustInventory} />
             ) : null}
-            {activePage === "orders" ? (
+            {visibleActivePage === "orders" ? (
               <OrdersPage
                 orders={orders}
                 onCreatePaymentLink={createPaymentLink}
                 onRefresh={loadOrders}
               />
             ) : null}
-            {activePage === "appointments" ? (
+            {visibleActivePage === "appointments" ? (
               <AppointmentsPage appointments={appointments} onAddAppointment={addAppointment} />
             ) : null}
-            {activePage === "funnels" ? (
+            {visibleActivePage === "funnels" ? (
               <FunnelsPage
                 onUpdated={async () => {
                   const nextFunnels = await api<ApiFunnel[]>("/funnels");
@@ -1391,10 +2088,27 @@ function App() {
                 }}
               />
             ) : null}
-            {activePage === "ai" ? <AiPage /> : null}
-            {activePage === "whatsapp" ? <WhatsAppPage /> : null}
-            {activePage === "integrations" ? <IntegrationsPage /> : null}
-            {activePage === "settings" ? <SettingsPage currentUser={currentUser} /> : null}
+            {visibleActivePage === "ai" ? <AiPage currentUser={currentUser} /> : null}
+            {visibleActivePage === "whatsapp" ? <WhatsAppPage /> : null}
+            {visibleActivePage === "integrations" ? <IntegrationsPage /> : null}
+            {visibleActivePage === "settings" ? (
+              <SettingsPage
+                currentUser={currentUser}
+                onCompanyProfileUpdated={(profile) =>
+                  setCurrentUser((user) =>
+                    user
+                        ? {
+                          ...user,
+                          company_timezone: profile.timezone,
+                          company_logo_url: profile.logo_url,
+                          company_banner_url: profile.banner_url,
+                          company_profile_url: profile.profile_url,
+                        }
+                      : user,
+                  )
+                }
+              />
+            ) : null}
           </div>
         </main>
       </div>
@@ -1428,12 +2142,12 @@ function LoginPage() {
   }
 
   return (
-    <main className="grid min-h-screen bg-[#edf3ef] px-4 py-8 text-ink lg:grid-cols-[1fr_420px]">
-      <section className="flex min-h-[420px] flex-col justify-between rounded border border-line bg-white p-6 shadow-soft lg:rounded-r-none lg:border-r-0 lg:p-10">
+    <main className="grid min-h-screen bg-background px-4 py-8 text-ink lg:grid-cols-[1fr_420px]">
+      <section className="flex min-h-[420px] flex-col justify-between rounded border border-line bg-surface p-6 shadow-soft lg:rounded-r-none lg:border-r-0 lg:p-10">
         <Brand />
         <div className="max-w-2xl">
           <p className="text-sm font-medium text-brand">Plataforma multitenant</p>
-          <h1 className="mt-3 text-3xl font-semibold md:text-5xl">SwaFlow</h1>
+          <h1 className="mt-3 text-3xl font-semibold md:text-5xl">SWAFLOW</h1>
           <p className="mt-4 max-w-xl text-sm leading-6 text-slate-600">
             Operacion comercial por WhatsApp con usuarios por empresa, acceso administrador y
             superusuario Swateck para soporte transversal.
@@ -1446,7 +2160,7 @@ function LoginPage() {
         </div>
       </section>
 
-      <section className="flex items-center rounded border border-line bg-white p-6 shadow-soft lg:rounded-l-none lg:p-8">
+      <section className="flex items-center rounded border border-line bg-surface p-6 shadow-soft lg:rounded-l-none lg:p-8">
         <form className="w-full space-y-5" onSubmit={submit}>
           <div>
             <h2 className="text-xl font-semibold">Ingreso</h2>
@@ -1491,70 +2205,116 @@ function LoginPage() {
   );
 }
 
-function LoadingScreen() {
+function LoadingScreen({ logoUrl }: { logoUrl: string | null }) {
   return (
-    <main className="grid min-h-screen place-items-center bg-[#edf3ef] text-ink">
-      <div className="rounded border border-line bg-white px-5 py-4 text-sm shadow-soft">
-        Validando sesion
+    <main className="grid min-h-screen place-items-center bg-background text-ink">
+      <div className="flex items-center gap-3 rounded border border-line bg-surface px-5 py-4 text-sm shadow-soft">
+        <BrandMark size="sm" logoUrl={logoUrl} />
+        <span>Validando sesion</span>
       </div>
     </main>
   );
 }
 
-function Brand() {
+function Brand({ inverted = false, logoUrl = null }: { inverted?: boolean; logoUrl?: string | null }) {
+  const subtitleClass = inverted ? "text-brandOnDark/65" : "text-slate-500";
   return (
     <div className="flex items-center gap-3">
-      <div className="grid h-10 w-10 place-items-center rounded bg-brand text-white">
-        <Sparkles className="h-5 w-5" />
-      </div>
+      <BrandMark logoUrl={logoUrl} />
       <div>
-        <p className="text-sm font-semibold">Swatek Flow AI</p>
-        <p className="text-xs text-slate-500">Ventas por WhatsApp</p>
+        <p className="text-sm font-semibold tracking-normal">SWAFLOW</p>
+        <p className={`text-xs ${subtitleClass}`}>Ventas por WhatsApp</p>
       </div>
+    </div>
+  );
+}
+
+function BrandMark({ size = "md", logoUrl = null }: { size?: "sm" | "md"; logoUrl?: string | null }) {
+  const sizeClass = size === "sm" ? "h-8 w-8 text-sm" : "h-10 w-10 text-base";
+  const [logoErrored, setLogoErrored] = useState(false);
+
+  useEffect(() => {
+    setLogoErrored(false);
+  }, [logoUrl]);
+
+  const showLogo = Boolean(logoUrl) && !logoErrored;
+  return (
+    <div
+      className={`${sizeClass} grid shrink-0 place-items-center rounded border border-brandAccent bg-brandNight font-bold text-brandOnDark shadow-soft`}
+      aria-hidden="true"
+    >
+      {showLogo && logoUrl ? (
+        <img
+          alt="Logo del tenant"
+          className="h-full w-full rounded object-contain p-1"
+          loading="lazy"
+          src={logoUrl}
+          onError={() => setLogoErrored(true)}
+        />
+      ) : (
+        <span className="relative leading-none">
+          S
+          <span className="absolute -bottom-1 left-1 h-1 w-4 rounded-full bg-brandAccent" />
+        </span>
+      )}
     </div>
   );
 }
 
 function Sidebar({
   activePage,
+  logoUrl,
+  currentUser,
   onNavigate,
 }: {
   activePage: PageKey;
+  logoUrl?: string | null;
+  currentUser: CurrentUser;
   onNavigate: (page: PageKey) => void;
 }) {
   return (
-    <aside className="hidden w-72 shrink-0 border-r border-line bg-white px-4 py-5 lg:block">
+    <aside className="hidden w-72 shrink-0 border-r border-line bg-brandNight px-4 py-5 text-brandOnDark lg:block">
       <div className="mb-7 px-2">
-        <Brand />
+        <Brand inverted logoUrl={logoUrl} />
       </div>
-      <NavList activePage={activePage} onNavigate={onNavigate} />
+      <NavList activePage={activePage} currentUser={currentUser} onNavigate={onNavigate} />
     </aside>
   );
 }
 
 function NavList({
   activePage,
+  currentUser,
   onNavigate,
 }: {
   activePage: PageKey;
+  currentUser: CurrentUser;
   onNavigate: (page: PageKey) => void;
 }) {
+  const groups = getVisibleNavGroups(currentUser);
   return (
-    <nav className="space-y-1">
-      {navItems.map((item) => (
-        <button
-          key={item.key}
-          className={`flex h-10 w-full items-center gap-3 rounded px-3 text-left text-sm transition ${
-            item.key === activePage
-              ? "bg-[#e5f3ee] font-medium text-brand"
-              : "text-slate-600 hover:bg-panel hover:text-ink"
-          }`}
-          title={item.label}
-          onClick={() => onNavigate(item.key)}
-        >
-          <item.icon className="h-4 w-4" />
-          <span>{item.label}</span>
-        </button>
+    <nav className="space-y-5">
+      {groups.map((group) => (
+        <div key={group.label}>
+          <p className="mb-2 px-3 text-[11px] font-semibold uppercase text-brandOnDark/55">{group.label}</p>
+          <div className="space-y-1">
+            {group.items.map((item) => (
+              <button
+                key={item.key}
+                className={`flex h-10 w-full items-center gap-3 rounded border-l-2 px-3 text-left text-sm transition ${
+                  item.key === activePage
+                    ? "border-brandAccent bg-brandPanel font-medium text-brandOnDark"
+                    : "border-transparent text-brandOnDark/65 hover:bg-brandPanel hover:text-brandOnDark"
+                }`}
+                title={item.label}
+                onClick={() => onNavigate(item.key)}
+              >
+                <item.icon className="h-4 w-4" />
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
       ))}
     </nav>
   );
@@ -1666,6 +2426,10 @@ function InboxPage({
   onAddAppointment,
   funnels,
   onAssignFunnel,
+  funnelFilterId,
+  funnelStepFilterId,
+  onChangeFunnelFilter,
+  onChangeStepFilter,
 }: {
   conversations: Conversation[];
   selectedConversation: Conversation | null;
@@ -1684,11 +2448,17 @@ function InboxPage({
     funnelStepId: string | null,
     currentStep: string | null,
   ) => Promise<void>;
+  funnelFilterId: string;
+  funnelStepFilterId: string;
+  onChangeFunnelFilter: (funnelId: string) => void;
+  onChangeStepFilter: (stepId: string) => void;
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
   const [assigningFunnel, setAssigningFunnel] = useState(false);
+  const selectedFilterFunnel = funnels.find((funnel) => funnel.id === funnelFilterId) ?? null;
+  const selectedFilterSteps = selectedFilterFunnel?.steps ?? [];
 
   async function submitMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1720,6 +2490,39 @@ function InboxPage({
             </IconButton>
           }
         />
+        <div className="grid gap-2 border-b border-line px-4 py-3 md:grid-cols-2">
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Filtrar por funnel</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={funnelFilterId}
+              onChange={(event) => onChangeFunnelFilter(event.target.value)}
+            >
+              <option value="">Todos los funnels</option>
+              {funnels.map((funnel) => (
+                <option key={funnel.id} value={funnel.id}>
+                  {funnel.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Filtrar por paso</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+              value={funnelStepFilterId}
+              disabled={!selectedFilterFunnel || selectedFilterSteps.length === 0}
+              onChange={(event) => onChangeStepFilter(event.target.value)}
+            >
+              <option value="">Todos los pasos</option>
+              {selectedFilterSteps.map((step) => (
+                <option key={step.id} value={step.id}>
+                  {step.position}. {step.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         {error ? <div className="border-b border-line px-4 py-3 text-sm text-red-600">{error}</div> : null}
         <div className="min-h-0 flex-1 divide-y divide-line overflow-y-auto">
           {conversations.length ? (
@@ -1727,7 +2530,7 @@ function InboxPage({
               <button
                 key={conversation.id}
                 className={`block w-full px-4 py-4 text-left transition ${
-                  selectedConversation?.id === conversation.id ? "bg-[#e5f3ee]" : "hover:bg-panel"
+                  selectedConversation?.id === conversation.id ? "bg-brandAccentSoft" : "hover:bg-panel"
                 }`}
                 onClick={() => onSelect(conversation.id)}
               >
@@ -1939,7 +2742,7 @@ function ProductsPage({
             {syncing ? "Actualizando..." : "Actualizar catalogo"}
           </button>
         </div>
-        {notice ? <p className="mt-3 text-sm text-emerald-700">{notice}</p> : null}
+        {notice ? <p className="mt-3 text-sm text-success">{notice}</p> : null}
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
       </section>
 
@@ -2203,67 +3006,85 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [selectedFunnelId, setSelectedFunnelId] = useState<string | null>(null);
-  const [name, setName] = useState("Funnel principal");
-  const [description, setDescription] = useState("Embudo comercial para WhatsApp.");
-  const [steps, setSteps] = useState<
-    Array<{ position: number; name: string; code: string; prompt: string; transition_criteria: string }>
-  >([
-    {
-      position: 1,
-      name: "Bienvenida",
-      code: "bienvenida",
-      prompt: "Da la bienvenida al cliente y detecta su interes principal.",
-      transition_criteria: "Cliente expresa necesidad o interes concreto.",
-    },
-    {
-      position: 2,
-      name: "Detectar intencion",
-      code: "detectar_intencion",
-      prompt: "Clasifica la intencion: compra, soporte, agenda o humano.",
-      transition_criteria: "Intencion principal identificada.",
-    },
-    {
-      position: 3,
-      name: "Propuesta",
-      code: "propuesta",
-      prompt: "Presenta la mejor recomendacion y siguiente paso.",
-      transition_criteria: "Cliente confirma accion siguiente.",
-    },
-  ]);
+  const [selectedFunnelSystemKey, setSelectedFunnelSystemKey] = useState<string | null>(null);
+  const [name, setName] = useState("Funnel de bienvenida");
+  const [description, setDescription] = useState("Punto de entrada comercial del tenant.");
+  const [welcomeMessage, setWelcomeMessage] = useState(
+    "Hola, gracias por escribir. Cuéntame tu nombre, correo y ciudad para ayudarte mejor.",
+  );
+  const [captureFields, setCaptureFields] = useState("Nombre\nCorreo\nCiudad");
+  const [assignmentCriteria, setAssignmentCriteria] = useState(
+    "Conversaciones nuevas o sin clasificacion comercial previa.",
+  );
+  const [isDefault, setIsDefault] = useState(false);
+  const [steps, setSteps] = useState<FunnelStepDraft[]>(buildDefaultFunnelSteps());
   const [sampleMessage, setSampleMessage] = useState(
     "Quiero comprar una camiseta negra y agendar una cita",
   );
   const [intent, setIntent] = useState<AiClassifyResponse | null>(null);
   const [classifying, setClassifying] = useState(false);
   const [classifyError, setClassifyError] = useState("");
+  const isWelcomeFunnel = selectedFunnelSystemKey === "welcome";
 
-  const loadFunnels = useCallback(async () => {
+  const setFormFromFunnel = useCallback((funnel: ApiFunnel | null) => {
+    if (!funnel) {
+      setSelectedFunnelId(null);
+      setSelectedFunnelSystemKey(null);
+      setName("Funnel de bienvenida");
+      setDescription("Punto de entrada comercial del tenant.");
+      setWelcomeMessage(
+        "Hola, gracias por escribir. Cuéntame tu nombre, correo y ciudad para ayudarte mejor.",
+      );
+      setCaptureFields("Nombre\nCorreo\nCiudad");
+      setAssignmentCriteria("Conversaciones nuevas o sin clasificacion comercial previa.");
+      setIsDefault(false);
+      setSteps(buildDefaultFunnelSteps());
+      return;
+    }
+
+    setSelectedFunnelId(funnel.id);
+    setSelectedFunnelSystemKey(funnel.system_key);
+    setName(funnel.name);
+    setDescription(funnel.description ?? "");
+    setWelcomeMessage(funnel.welcome_message ?? "");
+    setCaptureFields((funnel.capture_fields ?? []).join("\n"));
+    setAssignmentCriteria(funnel.assignment_criteria ?? "");
+    setIsDefault(funnel.system_key === "welcome");
+    setSteps(
+      funnel.steps.length > 0
+        ? funnel.steps.map((step) => ({
+            position: step.position,
+            name: step.name,
+            code: step.code,
+            prompt: step.prompt,
+            objectives: (step.objectives ?? []).join("\n"),
+            transitionCriteria: step.transition_criteria,
+            status: step.status,
+            config: formatJsonObject(step.config),
+          }))
+        : buildDefaultFunnelSteps(),
+    );
+  }, []);
+
+  const loadFunnels = useCallback(async (focusFunnelId: string | null = null) => {
     setLoading(true);
     setError("");
     try {
       const response = await api<ApiFunnel[]>("/funnels");
       setFunnels(response);
-      const selected = response[0] ?? null;
-      setSelectedFunnelId(selected?.id ?? null);
-      if (selected) {
-        setName(selected.name);
-        setDescription(selected.description ?? "");
-        setSteps(
-          selected.steps.map((step) => ({
-            position: step.position,
-            name: step.name,
-            code: step.code,
-            prompt: step.prompt,
-            transition_criteria: step.transition_criteria,
-          })),
-        );
-      }
+      setFormFromFunnel(
+        response.find((funnel) => funnel.id === focusFunnelId)
+          ?? response.find((funnel) => funnel.system_key === "welcome")
+          ?? response.find((funnel) => funnel.is_default)
+          ?? response[0]
+          ?? null,
+      );
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible cargar funnels");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [setFormFromFunnel]);
 
   useEffect(() => {
     void loadFunnels();
@@ -2279,31 +3100,36 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
         name,
         description,
         status: "active",
-        is_default: true,
+        is_default: isDefault,
+        welcome_message: welcomeMessage.trim() || null,
+        capture_fields: parseStringList(captureFields),
+        assignment_criteria: assignmentCriteria.trim() || null,
         steps: steps.map((step) => ({
           position: step.position,
           name: step.name,
           code: step.code,
           prompt: step.prompt,
-          objectives: [],
-          transition_criteria: step.transition_criteria,
-          status: "active",
-          config: {},
+          objectives: parseStringList(step.objectives),
+          transition_criteria: step.transitionCriteria,
+          status: step.status || "active",
+          config: parseJsonObject(step.config),
         })),
       };
       if (selectedFunnelId) {
-        await api<ApiFunnel>(`/funnels/${selectedFunnelId}`, {
+        const saved = await api<ApiFunnel>(`/funnels/${selectedFunnelId}`, {
           method: "PUT",
           body: JSON.stringify(payload),
         });
+        await loadFunnels(saved.id);
       } else {
-        await api<ApiFunnel>("/funnels", {
+        const saved = await api<ApiFunnel>("/funnels", {
           method: "POST",
           body: JSON.stringify(payload),
         });
+        setSelectedFunnelId(saved.id);
+        await loadFunnels(saved.id);
       }
       setNotice("Funnel guardado");
-      await loadFunnels();
       await onUpdated();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible guardar funnel");
@@ -2343,10 +3169,9 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
           action={
             <button
               className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white"
+              type="button"
               onClick={() => {
-                setSelectedFunnelId(null);
-                setName("Nuevo funnel");
-                setDescription("");
+                setFormFromFunnel(null);
               }}
             >
               <Plus className="h-4 w-4" />
@@ -2355,31 +3180,32 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
           }
         />
         <div className="divide-y divide-line">
-          {funnels.map((funnel) => (
-            <button
-              key={funnel.id}
-              className={`block w-full px-4 py-3 text-left ${
-                funnel.id === selectedFunnelId ? "bg-[#e5f3ee]" : "hover:bg-panel"
-              }`}
-              onClick={() => {
-                setSelectedFunnelId(funnel.id);
-                setName(funnel.name);
-                setDescription(funnel.description ?? "");
-                setSteps(
-                  funnel.steps.map((step) => ({
-                    position: step.position,
-                    name: step.name,
-                    code: step.code,
-                    prompt: step.prompt,
-                    transition_criteria: step.transition_criteria,
-                  })),
-                );
-              }}
-            >
-              <p className="text-sm font-semibold">{funnel.name}</p>
-              <p className="text-xs text-slate-500">{funnel.steps.length} pasos</p>
-            </button>
-          ))}
+          {funnels.length > 0 ? (
+            funnels.map((funnel) => (
+              <button
+                key={funnel.id}
+                className={`block w-full px-4 py-3 text-left ${
+                  funnel.id === selectedFunnelId ? "bg-brandAccentSoft" : "hover:bg-panel"
+                }`}
+                type="button"
+                onClick={() => setFormFromFunnel(funnel)}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold">{funnel.name}</p>
+                  {funnel.system_key === "welcome" ? (
+                    <span className="rounded border border-brand/20 bg-brandAccentSoft px-2 py-0.5 text-[11px] font-medium text-brand">
+                      Bienvenida fija
+                    </span>
+                  ) : null}
+                </div>
+                <p className="mt-1 text-xs text-slate-500">{funnel.steps.length} pasos</p>
+              </button>
+            ))
+          ) : (
+            <div className="px-4 py-5 text-sm text-slate-500">
+              No hay funnels configurados. Crea el funnel de bienvenida para empezar.
+            </div>
+          )}
         </div>
       </section>
 
@@ -2391,24 +3217,55 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
             <TextInput label="Nombre funnel" value={name} onChange={setName} />
             <TextInput label="Descripcion" value={description} onChange={setDescription} />
           </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <TextAreaInput
+              label="Mensaje inicial"
+              value={welcomeMessage}
+              minHeight="min-h-24"
+              onChange={setWelcomeMessage}
+            />
+            <TextAreaInput
+              label="Campos a capturar"
+              value={captureFields}
+              minHeight="min-h-24"
+              onChange={setCaptureFields}
+            />
+            <TextAreaInput
+              label="Criterios de asignacion"
+              value={assignmentCriteria}
+              minHeight="min-h-24"
+              onChange={setAssignmentCriteria}
+            />
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-4">
+            <label className="inline-flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={isDefault}
+                disabled
+              />
+              Funnel de bienvenida por defecto
+            </label>
+            <p className="text-xs text-slate-500">
+              {isWelcomeFunnel
+                ? "El funnel de bienvenida es el unico funnel que puede permanecer como default del tenant."
+                : "Los funnels adicionales no pueden tomar el rol de default."}
+            </p>
+          </div>
         </section>
         <section className="rounded border border-line bg-white p-4 shadow-soft">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Pasos del funnel</h2>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Pasos del funnel</h2>
+              <p className="text-xs text-slate-500">
+                Cada paso admite prompt, objetivos, criterio de transicion, estado y configuracion.
+              </p>
+            </div>
             <button
               className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
               type="button"
               onClick={() =>
-                setSteps((current) => [
-                  ...current,
-                  {
-                    position: current.length + 1,
-                    name: `Paso ${current.length + 1}`,
-                    code: `paso_${current.length + 1}`,
-                    prompt: "",
-                    transition_criteria: "",
-                  },
-                ])
+                setSteps((current) => [...current, buildEmptyFunnelStep(current.length + 1)])
               }
             >
               <Plus className="h-4 w-4" />
@@ -2418,7 +3275,7 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
           <div className="space-y-3">
             {steps.map((step, index) => (
               <article key={`${step.code}-${index}`} className="rounded border border-line bg-panel p-3">
-                <div className="grid gap-3 md:grid-cols-3">
+                <div className="grid gap-3 md:grid-cols-4">
                   <TextInput
                     label="Paso"
                     value={String(step.position)}
@@ -2452,6 +3309,17 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
                       )
                     }
                   />
+                  <TextInput
+                    label="Estado"
+                    value={step.status}
+                    onChange={(value) =>
+                      setSteps((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, status: value } : item,
+                        ),
+                      )
+                    }
+                  />
                 </div>
                 <div className="mt-3 grid gap-3">
                   <TextAreaInput
@@ -2467,13 +3335,37 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
                     }
                   />
                   <TextAreaInput
-                    label="Criterio de transicion"
-                    value={step.transition_criteria}
+                    label="Objetivos"
+                    value={step.objectives}
                     minHeight="min-h-16"
                     onChange={(value) =>
                       setSteps((current) =>
                         current.map((item, itemIndex) =>
-                          itemIndex === index ? { ...item, transition_criteria: value } : item,
+                          itemIndex === index ? { ...item, objectives: value } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <TextAreaInput
+                    label="Criterio de transicion"
+                    value={step.transitionCriteria}
+                    minHeight="min-h-16"
+                    onChange={(value) =>
+                      setSteps((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, transitionCriteria: value } : item,
+                        ),
+                      )
+                    }
+                  />
+                  <TextAreaInput
+                    label="Configuracion JSON"
+                    value={step.config}
+                    minHeight="min-h-16"
+                    onChange={(value) =>
+                      setSteps((current) =>
+                        current.map((item, itemIndex) =>
+                          itemIndex === index ? { ...item, config: value } : item,
                         ),
                       )
                     }
@@ -2530,12 +3422,18 @@ function FunnelsPage({ onUpdated }: { onUpdated: () => Promise<void> }) {
   );
 }
 
-function AiPage() {
+function AiPage({ currentUser }: { currentUser: CurrentUser }) {
   const [agents, setAgents] = useState<AiAgentResponse[]>([]);
   const [activeAgentId, setActiveAgentId] = useState<string | null>(null);
   const [form, setForm] = useState<AiAgentForm>({ ...defaultAiAgentForm });
+  const [operationalConfig, setOperationalConfig] = useState<AiOperationalConfig>(
+    buildDefaultOperationalConfig(currentUser.company_timezone),
+  );
+  const [defaultSystemPrompt, setDefaultSystemPrompt] = useState(DEFAULT_AI_AGENT_SYSTEM_PROMPT);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [operationalSaving, setOperationalSaving] = useState(false);
+  const [operationalSimulation, setOperationalSimulation] = useState<string>("");
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [toasts, setToasts] = useState<ToastState[]>([]);
@@ -2561,19 +3459,36 @@ function AiPage() {
     ? agents.find((agent) => agent.id === activeAgentId) ?? null
     : null;
 
-  const loadAgents = useCallback(async () => {
+  const loadAgents = useCallback(async (systemPrompt: string) => {
     setLoading(true);
     setError("");
     try {
       const nextAgents = await api<AiAgentResponse[]>("/ai/agents");
       const selected = nextAgents.find((agent) => agent.active) ?? nextAgents[0] ?? null;
+      const nextOperationalConfig = operationalConfigFromAgent(selected, currentUser.company_timezone);
       setAgents(nextAgents);
       setActiveAgentId(selected?.id ?? null);
-      setForm(aiFormFromAgent(selected));
+      setForm(aiFormFromAgent(selected, systemPrompt));
+      setOperationalConfig(nextOperationalConfig);
+      setForm((current) => ({
+        ...current,
+        schedule: operationalScheduleSummary(nextOperationalConfig.draft),
+      }));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible cargar el agente");
     } finally {
       setLoading(false);
+    }
+  }, [currentUser.company_timezone]);
+
+  const loadDefaultSystemPrompt = useCallback(async () => {
+    try {
+      const response = await api<DefaultSystemPromptResponse>("/ai/prompts/default-system-prompt");
+      setDefaultSystemPrompt(response.default_system_prompt);
+      return response.default_system_prompt;
+    } catch {
+      setDefaultSystemPrompt(DEFAULT_AI_AGENT_SYSTEM_PROMPT);
+      return DEFAULT_AI_AGENT_SYSTEM_PROMPT;
     }
   }, []);
 
@@ -2595,9 +3510,21 @@ function AiPage() {
     }
   }, []);
 
+  const loadAiPageData = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const systemPrompt = await loadDefaultSystemPrompt();
+      await loadAgents(systemPrompt);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible cargar el agente");
+      setLoading(false);
+    }
+  }, [loadAgents, loadDefaultSystemPrompt]);
+
   useEffect(() => {
-    void loadAgents();
-  }, [loadAgents]);
+    void loadAiPageData();
+  }, [loadAiPageData]);
 
   useEffect(() => {
     void loadInteractiveTemplates();
@@ -2635,10 +3562,31 @@ function AiPage() {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
+  function updateOperationalDraft(updater: (current: AiOperationalSection) => AiOperationalSection) {
+    setOperationalConfig((current) => {
+      const draft = updater(current.draft);
+      setForm((currentForm) => ({
+        ...currentForm,
+        schedule: operationalScheduleSummary(draft),
+      }));
+      return {
+        ...current,
+        status: "draft",
+        draft,
+      };
+    });
+  }
+
   function selectAgent(agentId: string) {
     const selected = agents.find((agent) => agent.id === agentId) ?? null;
+    const nextOperationalConfig = operationalConfigFromAgent(selected, currentUser.company_timezone);
     setActiveAgentId(selected?.id ?? null);
-    setForm(aiFormFromAgent(selected));
+    setForm(aiFormFromAgent(selected, defaultSystemPrompt));
+    setOperationalConfig(nextOperationalConfig);
+    setForm((current) => ({
+      ...current,
+      schedule: operationalScheduleSummary(nextOperationalConfig.draft),
+    }));
     setNotice("");
     setError("");
   }
@@ -2649,7 +3597,7 @@ function AiPage() {
     setNotice("");
     setError("");
     try {
-      const payload = aiPayloadFromForm(form);
+      const payload = aiPayloadFromForm(form, operationalConfig);
       const saved = activeAgent
         ? await api<AiAgentResponse>(`/ai/agents/${activeAgent.id}`, {
             method: "PUT",
@@ -2661,11 +3609,124 @@ function AiPage() {
           });
       setNotice("Agente guardado");
       setActiveAgentId(saved.id);
-      await loadAgents();
+      await loadAgents(defaultSystemPrompt);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible guardar el agente");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveOperationalConfig(nextStatus: AiOperationalConfig["status"] = "draft") {
+    if (!activeAgent) {
+      return;
+    }
+    setOperationalSaving(true);
+    setNotice("");
+    setError("");
+    try {
+      if (nextStatus === "published") {
+        await publishOperationalConfig();
+        return;
+      }
+      const payload = operationalPayloadFromConfig({
+        ...operationalConfig,
+        status: nextStatus,
+      });
+      const saved = await api<AiAgentResponse>(`/ai/agents/${activeAgent.id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          ...aiPayloadFromForm(form, {
+            ...operationalConfig,
+            status: nextStatus,
+          }),
+          operational_config: payload,
+        }),
+      });
+      setAgents((current) => current.map((agent) => (agent.id === saved.id ? saved : agent)));
+      setActiveAgentId(saved.id);
+      const nextOperational = operationalConfigFromAgent(saved, currentUser.company_timezone);
+      setForm({
+        ...aiFormFromAgent(saved, defaultSystemPrompt),
+        schedule: operationalScheduleSummary(nextOperational.draft),
+      });
+      setOperationalConfig(nextOperational);
+      setNotice("Borrador guardado");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible guardar la configuracion operativa");
+    } finally {
+      setOperationalSaving(false);
+    }
+  }
+
+  async function publishOperationalConfig() {
+    if (!activeAgent) {
+      return;
+    }
+    setOperationalSaving(true);
+    setNotice("");
+    setError("");
+    try {
+      const saved = await api<AiAgentResponse>(`/ai/agents/${activeAgent.id}/operational-config/publish`, {
+        method: "POST",
+      });
+      setAgents((current) => current.map((agent) => (agent.id === saved.id ? saved : agent)));
+      setActiveAgentId(saved.id);
+      const nextOperational = operationalConfigFromAgent(saved, currentUser.company_timezone);
+      setForm({
+        ...aiFormFromAgent(saved, defaultSystemPrompt),
+        schedule: operationalScheduleSummary(nextOperational.draft),
+      });
+      setOperationalConfig(nextOperational);
+      setNotice("Configuracion operativa publicada");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible publicar la configuracion operativa");
+    } finally {
+      setOperationalSaving(false);
+    }
+  }
+
+  async function simulateOperationalConfig() {
+    if (!activeAgent) {
+      return;
+    }
+    setOperationalSimulation("");
+    setError("");
+    try {
+      const response = await api<{
+        within_hours: boolean;
+        day_type: string;
+        timezone: string;
+        status: string;
+        intent: string;
+        confidence: number;
+        requires_handoff: boolean;
+        reason: string;
+        suggested_reply: string;
+        min_confidence: number;
+        critical_intents: string[];
+      }>(`/ai/agents/${activeAgent.id}/operational-config/simulate`, {
+        method: "POST",
+        body: JSON.stringify({
+          message:
+            operationalConfig.draft.test_mode.simulation_note.trim() ||
+            "Quiero comprar y agendar una cita.",
+          operational_config: operationalConfig.draft,
+        }),
+      });
+      setOperationalSimulation(
+        [
+          `estado: ${response.status}`,
+          `franja: ${response.day_type} / ${response.within_hours ? "dentro" : "fuera"} de horario`,
+          `confianza: ${Math.round(response.confidence * 100)}%`,
+          `requiere_handoff: ${response.requires_handoff ? "si" : "no"}`,
+          `razon: ${response.reason || "sin bloqueo"}`,
+          `sugerencia: ${response.suggested_reply}`,
+        ].join(" | "),
+      );
+      setNotice("Simulacion operativa ejecutada");
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "No fue posible simular la configuracion operativa");
     }
   }
 
@@ -2880,14 +3941,14 @@ function AiPage() {
     <>
       <ToastStack toasts={toasts} />
       <form className="space-y-5" onSubmit={saveAgent}>
-        <div className="min-w-0 space-y-5">
+        <fieldset disabled={loading} className="min-w-0 space-y-5 border-0 p-0">
         {error ? <Notice tone="error" message={error} /> : null}
         {notice ? <Notice tone="success" message={notice} /> : null}
 
         <section className="rounded border border-line bg-white p-4 shadow-soft">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-3">
-              <div className="grid h-12 w-12 shrink-0 place-items-center rounded bg-[#e5f3ee] text-brand">
+              <div className="grid h-12 w-12 shrink-0 place-items-center rounded bg-brandAccentSoft text-brand">
                 <BrainCircuit className="h-6 w-6" />
               </div>
               <div className="min-w-0">
@@ -2915,9 +3976,16 @@ function AiPage() {
               <button
                 className="inline-flex h-10 items-center gap-2 rounded border border-line px-3 text-sm"
                 type="button"
+                disabled={loading}
                 onClick={() => {
                   setActiveAgentId(null);
-                  setForm({ ...defaultAiAgentForm, name: "Nuevo agente comercial" });
+                  const nextOperationalConfig = buildDefaultOperationalConfig(currentUser.company_timezone);
+                  setOperationalConfig(nextOperationalConfig);
+                  setForm({
+                    ...buildDefaultAiAgentForm(defaultSystemPrompt),
+                    name: "Nuevo agente comercial",
+                    schedule: operationalScheduleSummary(nextOperationalConfig.draft),
+                  });
                 }}
               >
                 <Plus className="h-4 w-4" />
@@ -2965,9 +4033,9 @@ function AiPage() {
                 onChange={(value) => updateField("language", value)}
               />
               <TextInput
-                label="Horario"
+                label="Horario resumen"
                 value={form.schedule}
-                onChange={(value) => updateField("schedule", value)}
+                readOnly
               />
             </div>
           </div>
@@ -3102,6 +4170,464 @@ function AiPage() {
         </section>
 
         <section className="rounded border border-line bg-white p-4 shadow-soft">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Seguridad y comportamiento operativo</h2>
+              <p className="text-xs text-slate-500">
+                Borrador editable, version publicada y simulacion antes de activar cambios.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge value={`${operationalConfig.status} · v${operationalConfig.version}`} />
+              <button
+                className="h-9 rounded border border-line px-3 text-sm disabled:opacity-60"
+                type="button"
+                disabled={!activeAgent || operationalSaving || loading}
+                onClick={() => void simulateOperationalConfig()}
+              >
+                Simular
+              </button>
+              <button
+                className="h-9 rounded border border-line px-3 text-sm disabled:opacity-60"
+                type="button"
+                disabled={!activeAgent || operationalSaving || loading}
+                onClick={() => void saveOperationalConfig("draft")}
+              >
+                {operationalSaving && operationalConfig.status === "draft" ? "Guardando..." : "Guardar borrador"}
+              </button>
+              <button
+                className="h-9 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+                type="button"
+                disabled={!activeAgent || operationalSaving || loading}
+                onClick={() => void publishOperationalConfig()}
+              >
+                {operationalSaving && operationalConfig.status === "published" ? "Publicando..." : "Publicar"}
+              </button>
+            </div>
+          </div>
+          {operationalSimulation ? (
+            <p className="mt-3 rounded border border-line bg-panel px-3 py-2 text-xs text-slate-600">
+              {operationalSimulation}
+            </p>
+          ) : null}
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-2">
+            <div className="rounded border border-line bg-panel p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase text-slate-500">Guardrails obligatorios</h3>
+                <ShieldCheck className="h-4 w-4 text-brand" />
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Si un admin intenta desactivarlos, el backend debe rechazar la configuracion.
+              </p>
+              <div className="mt-3 grid gap-2">
+                {(
+                  [
+                    ["tenant_isolation", "Aislamiento por tenant"],
+                    ["payments_locked_to_backend", "Pagos solo en backend"],
+                    ["inventory_reserved_by_backend", "Inventario reservado por backend"],
+                    ["no_invention", "No invencion"],
+                    ["no_manual_payment_confirmation", "No confirmar pagos manualmente"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <label key={key} className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={operationalConfig.draft.security.mandatory_guardrails[key]}
+                      onChange={(event) =>
+                        updateOperationalDraft((current) => ({
+                          ...current,
+                          security: {
+                            ...current.security,
+                            mandatory_guardrails: {
+                              ...current.security.mandatory_guardrails,
+                              [key]: event.target.checked,
+                            },
+                          },
+                        }))
+                      }
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+              <div className="mt-3">
+                <TextAreaInput
+                  label="Reglas de seguridad personalizadas"
+                  value={operationalConfig.draft.security.custom_rules}
+                  minHeight="min-h-28"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      security: {
+                        ...current.security,
+                        custom_rules: value,
+                      },
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="rounded border border-line bg-panel p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase text-slate-500">Horario operativo</h3>
+                <CalendarDays className="h-4 w-4 text-brand" />
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Usa la zona horaria del tenant para decidir el comportamiento dentro y fuera de horario.
+              </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <TextInput
+                  label="Zona horaria"
+                  value={operationalConfig.draft.schedule.timezone}
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: { ...current.schedule, timezone: value },
+                    }))
+                  }
+                />
+                <SelectInput
+                  label="Fuera de horario"
+                  value={operationalConfig.draft.schedule.outside_hours_behavior}
+                  options={[
+                    { value: "handoff", label: "Pasar a humano" },
+                    { value: "hold", label: "Retener y esperar" },
+                    { value: "auto_reply", label: "Auto-responder" },
+                  ]}
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: {
+                        ...current.schedule,
+                        outside_hours_behavior: value as AiOperationalSchedule["outside_hours_behavior"],
+                      },
+                    }))
+                  }
+                />
+                <TextInput
+                  label="L-V inicio"
+                  value={operationalConfig.draft.schedule.weekday.start}
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: {
+                        ...current.schedule,
+                        weekday: { ...current.schedule.weekday, start: value },
+                      },
+                    }))
+                  }
+                />
+                <TextInput
+                  label="L-V fin"
+                  value={operationalConfig.draft.schedule.weekday.end}
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: {
+                        ...current.schedule,
+                        weekday: { ...current.schedule.weekday, end: value },
+                      },
+                    }))
+                  }
+                />
+                <TextInput
+                  label="S-D inicio"
+                  value={operationalConfig.draft.schedule.weekend.start}
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: {
+                        ...current.schedule,
+                        weekend: { ...current.schedule.weekend, start: value },
+                      },
+                    }))
+                  }
+                />
+                <TextInput
+                  label="S-D fin"
+                  value={operationalConfig.draft.schedule.weekend.end}
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: {
+                        ...current.schedule,
+                        weekend: { ...current.schedule.weekend, end: value },
+                      },
+                    }))
+                  }
+                />
+              </div>
+              <div className="mt-3 grid gap-3">
+                <TextAreaInput
+                  label="Mensaje fuera de horario"
+                  value={operationalConfig.draft.schedule.outside_hours_message}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: {
+                        ...current.schedule,
+                        outside_hours_message: value,
+                      },
+                    }))
+                  }
+                />
+                <TextAreaInput
+                  label="Mensaje de handoff"
+                  value={operationalConfig.draft.schedule.handoff_message}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: {
+                        ...current.schedule,
+                        handoff_message: value,
+                      },
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="rounded border border-line bg-panel p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase text-slate-500">Autonomia y escalamiento</h3>
+                <Bot className="h-4 w-4 text-brand" />
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <label className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={operationalConfig.draft.autonomy.allow_critical_actions}
+                    onChange={(event) =>
+                      updateOperationalDraft((current) => ({
+                        ...current,
+                        autonomy: { ...current.autonomy, allow_critical_actions: event.target.checked },
+                      }))
+                    }
+                  />
+                  <span>Permitir acciones criticas</span>
+                </label>
+                <TextInput
+                  label="Confianza minima"
+                  value={operationalConfig.draft.autonomy.min_confidence}
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      autonomy: { ...current.autonomy, min_confidence: value },
+                    }))
+                  }
+                />
+                <TextAreaInput
+                  label="Intenciones criticas"
+                  value={operationalConfig.draft.autonomy.critical_intents.join(", ")}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      autonomy: {
+                        ...current.autonomy,
+                        critical_intents: parseStringList(value),
+                      },
+                    }))
+                  }
+                />
+                <TextAreaInput
+                  label="Campos requeridos"
+                  value={operationalConfig.draft.autonomy.required_capture_fields.join(", ")}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      autonomy: {
+                        ...current.autonomy,
+                        required_capture_fields: parseStringList(value),
+                      },
+                    }))
+                  }
+                />
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <label className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={operationalConfig.draft.escalation.low_confidence}
+                    onChange={(event) =>
+                      updateOperationalDraft((current) => ({
+                        ...current,
+                        escalation: { ...current.escalation, low_confidence: event.target.checked },
+                      }))
+                    }
+                  />
+                  <span>Escalar baja confianza</span>
+                </label>
+                <label className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={operationalConfig.draft.escalation.explicit_human_request}
+                    onChange={(event) =>
+                      updateOperationalDraft((current) => ({
+                        ...current,
+                        escalation: { ...current.escalation, explicit_human_request: event.target.checked },
+                      }))
+                    }
+                  />
+                  <span>Escalar peticion humana</span>
+                </label>
+              </div>
+              <div className="mt-3 grid gap-3">
+                <TextAreaInput
+                  label="Mensaje de handoff"
+                  value={operationalConfig.draft.escalation.handoff_message}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      escalation: { ...current.escalation, handoff_message: value },
+                    }))
+                  }
+                />
+                <TextAreaInput
+                  label="Mensaje de aclaracion"
+                  value={operationalConfig.draft.escalation.clarification_message}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      escalation: { ...current.escalation, clarification_message: value },
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="rounded border border-line bg-panel p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase text-slate-500">Politicas y prioridades</h3>
+                <ShieldCheck className="h-4 w-4 text-brand" />
+              </div>
+              <div className="mt-3 grid gap-3">
+                <TextAreaInput
+                  label="Politica de envios"
+                  value={operationalConfig.draft.policies.shipping}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      policies: { ...current.policies, shipping: value },
+                    }))
+                  }
+                />
+                <TextAreaInput
+                  label="Garantias"
+                  value={operationalConfig.draft.policies.warranty}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      policies: { ...current.policies, warranty: value },
+                    }))
+                  }
+                />
+                <TextAreaInput
+                  label="Cambios y devoluciones"
+                  value={operationalConfig.draft.policies.returns}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      policies: { ...current.policies, returns: value },
+                    }))
+                  }
+                />
+                <TextAreaInput
+                  label="Medios de pago"
+                  value={operationalConfig.draft.policies.payments}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      policies: { ...current.policies, payments: value },
+                    }))
+                  }
+                />
+              </div>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <TextAreaInput
+                  label="Categorias prioritarias"
+                  value={operationalConfig.draft.priorities.priority_categories.join(", ")}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      priorities: {
+                        ...current.priorities,
+                        priority_categories: parseStringList(value),
+                      },
+                    }))
+                  }
+                />
+                <TextAreaInput
+                  label="Categorias restringidas"
+                  value={operationalConfig.draft.priorities.restricted_categories.join(", ")}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      priorities: {
+                        ...current.priorities,
+                        restricted_categories: parseStringList(value),
+                      },
+                    }))
+                  }
+                />
+              </div>
+            </div>
+
+            <div className="rounded border border-line bg-panel p-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold uppercase text-slate-500">Modo de prueba</h3>
+                <Inbox className="h-4 w-4 text-brand" />
+              </div>
+              <p className="mt-1 text-xs text-slate-500">
+                Simula cambios sin tocar la publicacion activa.
+              </p>
+              <div className="mt-3 grid gap-3 md:grid-cols-2">
+                <label className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={operationalConfig.draft.test_mode.enabled}
+                    onChange={(event) =>
+                      updateOperationalDraft((current) => ({
+                        ...current,
+                        test_mode: { ...current.test_mode, enabled: event.target.checked },
+                      }))
+                    }
+                  />
+                  <span>Modo de prueba activo</span>
+                </label>
+                <TextAreaInput
+                  label="Nota de simulacion"
+                  value={operationalConfig.draft.test_mode.simulation_note}
+                  minHeight="min-h-20"
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      test_mode: { ...current.test_mode, simulation_note: value },
+                    }))
+                  }
+                />
+              </div>
+              <p className="mt-3 text-xs text-slate-500">
+                Horario actual: {operationalScheduleSummary(operationalConfig.draft)}
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded border border-line bg-white p-4 shadow-soft">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-sm font-semibold">Preguntas frecuentes</h2>
@@ -3195,7 +4721,7 @@ function AiPage() {
             <MessageSquareText className="h-4 w-4 text-brand" />
           </div>
           <p className="mt-1 text-xs text-slate-500">
-            SwaFlow entrega estas plantillas al agente y traduce cada Action key al formato tecnico de WhatsApp.
+            SWAFLOW entrega estas plantillas al agente y traduce cada Action key al formato tecnico de WhatsApp.
           </p>
           <div className="mt-3 rounded border border-line bg-panel p-3 text-xs text-slate-700">
             <p className="font-semibold text-slate-900">Contrato estandar para interactivos</p>
@@ -3225,7 +4751,7 @@ function AiPage() {
                       key={item.id}
                       className={`rounded border p-3 text-sm transition-colors ${
                         item.id === interactiveHighlightedId
-                          ? "border-brand bg-[#e5f3ee]"
+                          ? "border-brandAccent bg-brandAccentSoft"
                           : "border-line bg-white"
                       }`}
                     >
@@ -3246,7 +4772,7 @@ function AiPage() {
                             {item.options.map((option) => (
                               <span
                                 key={option.id}
-                                className="inline-flex min-h-7 items-center rounded-full border border-brand bg-[#e5f3ee] px-2.5 py-1 text-xs font-medium text-brand"
+                                className="inline-flex min-h-7 items-center rounded-full border border-brandAccent bg-brandAccentSoft px-2.5 py-1 text-xs font-medium text-brand"
                               >
                                 {option.title}
                               </span>
@@ -3412,7 +4938,7 @@ function AiPage() {
           </div>
         </section>
 
-      </div>
+        </fieldset>
       </form>
     </>
   );
@@ -3421,52 +4947,87 @@ function AiPage() {
 function WhatsAppPage() {
   const [setup, setSetup] = useState<WhatsAppSetup | null>(null);
   const [accounts, setAccounts] = useState<WhatsAppAccount[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [phoneNumberId, setPhoneNumberId] = useState("");
   const [businessAccountId, setBusinessAccountId] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [verifyToken, setVerifyToken] = useState("");
   const [testPhone, setTestPhone] = useState("");
-  const [testBody, setTestBody] = useState("Hola, esta es una prueba de SwaFlow.");
+  const [testBody, setTestBody] = useState("Hola, esta es una prueba de SWAFLOW.");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [sending, setSending] = useState(false);
 
-  const activeAccount = accounts[0];
+  const selectedAccount = useMemo(
+    () => accounts.find((account) => account.id === selectedAccountId) ?? null,
+    [accounts, selectedAccountId],
+  );
+  const verifyTokenLocked = Boolean(setup?.verify_token);
+
+  function loadAccountIntoForm(account: WhatsAppAccount | null) {
+    setSelectedAccountId(account?.id ?? null);
+    setPhoneNumberId(account?.phone_number_id ?? "");
+    setBusinessAccountId(account?.business_account_id ?? "");
+    setVerifyToken(setup?.verify_token ?? account?.verify_token ?? "");
+    setAccessToken("");
+  }
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([api<WhatsAppSetup>("/whatsapp/setup"), api<WhatsAppAccount[]>("/whatsapp/accounts")])
-      .then(([setupResponse, accountsResponse]) => {
+    async function loadWhatsAppData() {
+      setLoading(true);
+      try {
+        const [setupResponse, accountsResponse] = await Promise.all([
+          api<WhatsAppSetup>("/whatsapp/setup"),
+          api<WhatsAppAccount[]>("/whatsapp/accounts"),
+        ]);
         if (cancelled) {
           return;
         }
         setSetup(setupResponse);
         setAccounts(accountsResponse);
-        const account = accountsResponse[0];
-        if (account) {
-          setPhoneNumberId(account.phone_number_id);
-          setBusinessAccountId(account.business_account_id ?? "");
-          setVerifyToken(account.verify_token);
-        } else {
-          setVerifyToken(setupResponse.verify_token ?? "");
-        }
-      })
-      .catch((caught) => {
+        const firstAccount = accountsResponse[0] ?? null;
+        setSelectedAccountId(firstAccount?.id ?? null);
+        setPhoneNumberId(firstAccount?.phone_number_id ?? "");
+        setBusinessAccountId(firstAccount?.business_account_id ?? "");
+        setVerifyToken(setupResponse.verify_token ?? firstAccount?.verify_token ?? "");
+        setAccessToken("");
+      } catch (caught) {
         if (!cancelled) {
           setError(caught instanceof Error ? caught.message : "No fue posible cargar WhatsApp");
         }
-      });
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadWhatsAppData();
 
     return () => {
       cancelled = true;
     };
   }, []);
 
-  async function refreshAccounts() {
+  async function refreshAccounts(nextSelectedId?: string | null) {
     const nextAccounts = await api<WhatsAppAccount[]>("/whatsapp/accounts");
     setAccounts(nextAccounts);
+    const chosenAccount =
+      nextAccounts.find((account) => account.id === nextSelectedId) ??
+      nextAccounts.find((account) => account.id === selectedAccountId) ??
+      nextAccounts[0] ??
+      null;
+    if (chosenAccount) {
+      setSelectedAccountId(chosenAccount.id);
+      setPhoneNumberId(chosenAccount.phone_number_id);
+      setBusinessAccountId(chosenAccount.business_account_id ?? "");
+      setVerifyToken(setup?.verify_token ?? chosenAccount.verify_token);
+      setAccessToken("");
+    }
     return nextAccounts;
   }
 
@@ -3487,9 +5048,14 @@ function WhatsAppPage() {
         }),
       });
       const nextAccounts = await refreshAccounts();
-      setAccessToken("");
-      setVerifyToken(nextAccounts[0]?.verify_token ?? webhookVerifyToken ?? "");
-      setMessage(nextAccounts[0] ? "Cuenta guardada" : "Cuenta creada");
+      const savedAccount =
+        nextAccounts.find((account) => account.phone_number_id === phoneNumberId) ??
+        nextAccounts[0] ??
+        null;
+      if (savedAccount) {
+        loadAccountIntoForm(savedAccount);
+      }
+      setMessage("Configuracion de WhatsApp guardada");
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible guardar la cuenta");
     } finally {
@@ -3497,8 +5063,8 @@ function WhatsAppPage() {
     }
   }
 
-  async function testAccount() {
-    if (!activeAccount) {
+  async function testAccount(accountId: string | null = selectedAccount?.id ?? null) {
+    if (!accountId) {
       setError("Guarda primero la cuenta");
       return;
     }
@@ -3506,7 +5072,7 @@ function WhatsAppPage() {
     setMessage("");
     setTesting(true);
     try {
-      const response = await api<WhatsAppAccountTest>(`/whatsapp/accounts/${activeAccount.id}/test`, {
+      const response = await api<WhatsAppAccountTest>(`/whatsapp/accounts/${accountId}/test`, {
         method: "POST",
       });
       setMessage(
@@ -3530,7 +5096,7 @@ function WhatsAppPage() {
         body: JSON.stringify({
           to: testPhone,
           body: testBody,
-          account_id: activeAccount?.id ?? null,
+          account_id: selectedAccount?.id ?? null,
         }),
       });
       setMessage(`Mensaje enviado${response.meta_message_id ? `: ${response.meta_message_id}` : ""}`);
@@ -3546,18 +5112,55 @@ function WhatsAppPage() {
       <div className="space-y-5">
         {error ? <Notice tone="error" message={error} /> : null}
         {message ? <Notice tone="success" message={message} /> : null}
+        {loading ? (
+          <div className="rounded border border-dashed border-line bg-panel p-4 text-sm text-slate-600">
+            Cargando la configuracion de WhatsApp...
+          </div>
+        ) : null}
 
         <section className="rounded border border-line bg-white p-4 shadow-soft">
-          <h2 className="text-sm font-semibold">Cuenta Cloud API</h2>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-sm font-semibold">Cuenta Cloud API</h2>
+              <p className="text-xs text-slate-500">
+                Registra una cuenta nueva o selecciona una existente para editarla. El access token se cifra al guardar.
+              </p>
+            </div>
+            <span className="rounded border border-line bg-panel px-2 py-1 text-xs text-slate-600">
+              {selectedAccount ? "Edicion" : "Alta"}
+            </span>
+          </div>
           <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={saveAccount}>
-            <TextInput label="Phone number ID" value={phoneNumberId} onChange={setPhoneNumberId} />
-            <TextInput label="Business account ID" value={businessAccountId} onChange={setBusinessAccountId} />
-            <TextInput label="Verify token SwaFlow" value={verifyToken} readOnly />
-            <PasswordInput label="Access token" value={accessToken} onChange={setAccessToken} />
+            <TextInput
+              label="Phone number ID"
+              value={phoneNumberId}
+              onChange={setPhoneNumberId}
+              disabled={loading}
+            />
+            <TextInput
+              label="Business account ID"
+              value={businessAccountId}
+              onChange={setBusinessAccountId}
+              disabled={loading}
+            />
+            <TextInput
+              label="Verify token"
+              value={verifyToken}
+              onChange={verifyTokenLocked ? undefined : setVerifyToken}
+              readOnly={verifyTokenLocked}
+              disabled={loading}
+              placeholder={verifyTokenLocked ? "Token global configurado" : "Define un token para esta cuenta"}
+            />
+            <PasswordInput label="Access token" value={accessToken} onChange={setAccessToken} disabled={loading} />
             <div className="md:col-span-2">
+              <p className="mb-2 text-xs text-slate-500">
+                {verifyTokenLocked
+                  ? "El verify token global ya esta configurado para el webhook."
+                  : "Si no existe un token global, define aqui el verify token de esta cuenta."}
+              </p>
               <button
                 className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
-                disabled={saving}
+                disabled={saving || loading}
               >
                 <Save className="h-4 w-4" />
                 {saving ? "Guardando" : "Guardar"}
@@ -3571,19 +5174,24 @@ function WhatsAppPage() {
             <h2 className="text-sm font-semibold">Prueba de envio</h2>
             <button
               className="h-9 rounded border border-line px-3 text-sm disabled:opacity-60"
-              disabled={testing || !activeAccount}
-              onClick={testAccount}
+              disabled={testing || loading || !selectedAccount}
+              onClick={() => void testAccount()}
             >
-              {testing ? "Probando" : "Probar Meta"}
+              {testing ? "Probando" : "Probar cuenta"}
             </button>
           </div>
+          <p className="mt-2 text-xs text-slate-500">
+            {selectedAccount
+              ? `Se probará la cuenta ${selectedAccount.phone_number_id}.`
+              : "Selecciona una cuenta para ejecutar la prueba contra Meta."}
+          </p>
           <form className="mt-4 grid gap-3 md:grid-cols-[220px_1fr_auto]" onSubmit={sendTestMessage}>
-            <TextInput label="Destino" value={testPhone} onChange={setTestPhone} />
-            <TextInput label="Mensaje" value={testBody} onChange={setTestBody} />
+            <TextInput label="Destino" value={testPhone} onChange={setTestPhone} disabled={loading} />
+            <TextInput label="Mensaje" value={testBody} onChange={setTestBody} disabled={loading} />
             <div className="flex items-end">
               <button
                 className="h-10 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
-                disabled={sending || !activeAccount}
+                disabled={sending || loading || !selectedAccount}
               >
                 {sending ? "Enviando" : "Enviar"}
               </button>
@@ -3592,24 +5200,72 @@ function WhatsAppPage() {
         </section>
 
         <section className="rounded border border-line bg-white shadow-soft">
-          <SectionHeader title="Cuentas" subtitle="Numeros activos por tenant" />
-          <DataTable
-            headers={["Phone ID", "WABA", "Estado"]}
-            rows={accounts.map((account) => [
-              account.phone_number_id,
-              account.business_account_id ?? "-",
-              account.status,
-            ])}
-          />
+          <SectionHeader title="Cuentas" subtitle="Lista de cuentas Cloud API del tenant" />
+          <div className="space-y-3 p-4">
+            {accounts.length ? (
+              accounts.map((account) => {
+                const isSelected = account.id === selectedAccount?.id;
+                return (
+                  <article
+                    key={account.id}
+                    className={`rounded border p-3 ${
+                      isSelected ? "border-brand bg-brand/5" : "border-line bg-panel"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium text-slate-800">{account.phone_number_id}</p>
+                          <StatusBadge value={account.status} />
+                          {isSelected ? (
+                            <span className="rounded border border-brand/20 bg-brand/10 px-2 py-1 text-xs font-medium text-brand">
+                              Seleccionada
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {account.business_account_id ?? "Sin Business Account ID"}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="inline-flex h-8 items-center gap-2 rounded border border-line bg-white px-3 text-xs font-medium text-slate-700"
+                          disabled={loading}
+                          onClick={() => loadAccountIntoForm(account)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          className="inline-flex h-8 items-center gap-2 rounded border border-line bg-white px-3 text-xs font-medium text-slate-700"
+                          disabled={loading}
+                          onClick={() => void testAccount(account.id)}
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Probar
+                        </button>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })
+            ) : (
+              <p className="text-sm text-slate-500">
+                Aun no hay cuentas Cloud API registradas para este tenant. Crea la primera para habilitar el webhook.
+              </p>
+            )}
+          </div>
         </section>
       </div>
 
       <div className="space-y-5">
         <InfoPanel title="Webhook" icon={MessageSquareText}>
-          <KeyValue label="Callback" value={setup?.callback_url ?? "-"} />
-          <KeyValue label="Verify token" value={setup?.verify_token ?? "-"} />
-          <KeyValue label="Graph" value={setup?.graph_api_version ?? "-"} />
-          <KeyValue label="Firma" value={setup?.app_secret_configured ? "Activa" : "Pendiente"} />
+          <KeyValue label="Callback URL" value={setup?.callback_url ?? "-"} />
+          <KeyValue label="Verify token" value={setup?.verify_token ?? "Por cuenta"} />
+          <KeyValue label="Graph API" value={setup?.graph_api_version ?? "-"} />
+          <KeyValue label="Firma de webhook" value={setup?.app_secret_configured ? "Activa" : "Sin configurar"} />
         </InfoPanel>
         <InfoPanel title="Eventos" icon={CheckCircle2}>
           <KeyValue label="Entrantes" value="messages" strong />
@@ -3899,7 +5555,7 @@ function IntegrationsPage() {
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-start gap-3">
-                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded bg-[#e5f3ee] text-brand">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded bg-brandAccentSoft text-brand">
                       <Icon className="h-5 w-5" />
                     </div>
                     <div className="min-w-0">
@@ -4060,13 +5716,212 @@ function IntegrationsPage() {
   );
 }
 
-function SettingsPage({ currentUser }: { currentUser: CurrentUser }) {
+function SettingsPage({
+  currentUser,
+  onCompanyProfileUpdated,
+}: {
+  currentUser: CurrentUser;
+  onCompanyProfileUpdated: (profile: CompanyProfile) => void;
+}) {
+  const canManageCompanyProfile = hasModuleAccess(currentUser, "settings");
+  const canManageUsers = privilegedRoles.has(currentUser.role);
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [passwordMessage, setPasswordMessage] = useState("");
   const [passwordError, setPasswordError] = useState("");
   const [savingPassword, setSavingPassword] = useState(false);
+  const [companyProfile, setCompanyProfile] = useState<CompanyProfile | null>(null);
+  const [companyName, setCompanyName] = useState("");
+  const [companyContactEmail, setCompanyContactEmail] = useState("");
+  const [companyContactPhone, setCompanyContactPhone] = useState("");
+  const [companyCurrency, setCompanyCurrency] = useState("");
+  const [companyTimezone, setCompanyTimezone] = useState("");
+  const [companyBusinessMode, setCompanyBusinessMode] = useState("");
+  const [companyBusinessModeLegacy, setCompanyBusinessModeLegacy] = useState("");
+  const [companyLogoUrl, setCompanyLogoUrl] = useState("");
+  const [companyBannerUrl, setCompanyBannerUrl] = useState("");
+  const [companyProfileUrl, setCompanyProfileUrl] = useState("");
+  const [companyMessage, setCompanyMessage] = useState("");
+  const [companyLoadError, setCompanyLoadError] = useState("");
+  const [companySaveError, setCompanySaveError] = useState("");
+  const [loadingCompany, setLoadingCompany] = useState(true);
+  const [savingCompany, setSavingCompany] = useState(false);
+  const companyFormLocked = loadingCompany || savingCompany || !companyProfile;
+
+  const businessModeOptions = [
+    { value: "", label: "Sin configurar" },
+    { value: "products", label: "Venta de productos" },
+    { value: "appointments", label: "Agendamiento de citas" },
+    { value: "mixed", label: "Mixto" },
+  ];
+  const businessModeSelectOptions = companyBusinessModeLegacy
+    ? [{ value: companyBusinessModeLegacy, label: `Heredado: ${companyBusinessModeLegacy}` }, ...businessModeOptions]
+    : businessModeOptions;
+
+  function renderAssetPreview(
+    title: string,
+    url: string,
+    emptyMessage: string,
+    imageClassName: string,
+  ) {
+    return (
+      <div className="rounded border border-line bg-panel p-3">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</h3>
+          {url ? (
+            <span className="text-[11px] font-medium text-brand">URL guardada</span>
+          ) : (
+            <span className="text-[11px] font-medium text-slate-400">Vacío</span>
+          )}
+        </div>
+        {url ? (
+          <div className="space-y-2">
+            <div className="overflow-hidden rounded border border-line bg-white">
+              <img
+                alt={title}
+                className={imageClassName}
+                loading="lazy"
+                src={url}
+              />
+            </div>
+            <a
+              className="block break-all text-xs text-brand underline decoration-brand/40 underline-offset-2"
+              href={url}
+              rel="noreferrer"
+              target="_blank"
+            >
+              {url}
+            </a>
+          </div>
+        ) : (
+          <div className="grid min-h-28 place-items-center rounded border border-dashed border-line bg-white px-3 text-center text-sm text-slate-500">
+            {emptyMessage}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  useEffect(() => {
+    if (!canManageCompanyProfile) {
+      setCompanyProfile(null);
+      setCompanyName("");
+      setCompanyContactEmail("");
+      setCompanyContactPhone("");
+      setCompanyCurrency("");
+      setCompanyTimezone("");
+      setCompanyBusinessMode("");
+      setCompanyBusinessModeLegacy("");
+      setCompanyLogoUrl("");
+      setCompanyBannerUrl("");
+      setCompanyProfileUrl("");
+      setCompanyLoadError("");
+      setCompanySaveError("");
+      setLoadingCompany(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadCompanyProfile() {
+      setLoadingCompany(true);
+      setCompanyLoadError("");
+      try {
+        const profile = await api<CompanyProfile>(`/companies/${currentUser.company_id}`);
+        if (!cancelled) {
+          setCompanyProfile(profile);
+          setCompanyName(profile.name ?? "");
+          setCompanyContactEmail(profile.contact_email ?? "");
+          setCompanyContactPhone(profile.contact_phone ?? "");
+          setCompanyCurrency(profile.currency ?? "");
+          setCompanyTimezone(profile.timezone ?? "");
+          setCompanyLogoUrl(profile.logo_url ?? "");
+          setCompanyBannerUrl(profile.banner_url ?? "");
+          setCompanyProfileUrl(profile.profile_url ?? "");
+          if (
+            profile.business_mode === "products" ||
+            profile.business_mode === "appointments" ||
+            profile.business_mode === "mixed"
+          ) {
+            setCompanyBusinessMode(profile.business_mode);
+            setCompanyBusinessModeLegacy("");
+          } else {
+            setCompanyBusinessMode(profile.business_mode ?? "");
+            setCompanyBusinessModeLegacy(profile.business_mode ?? "");
+          }
+        }
+      } catch (caught) {
+        if (!cancelled) {
+          setCompanyLoadError(caught instanceof Error ? caught.message : "No fue posible cargar la empresa");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingCompany(false);
+        }
+      }
+    }
+
+    void loadCompanyProfile();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [canManageCompanyProfile, currentUser.company_id]);
+
+  async function submitCompany(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setCompanyMessage("");
+    setCompanySaveError("");
+    if (!companyName.trim()) {
+      setCompanySaveError("El nombre comercial es obligatorio");
+      return;
+    }
+
+    setSavingCompany(true);
+    try {
+      const updated = await api<CompanyProfile>(`/companies/${currentUser.company_id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          name: companyName.trim(),
+          contact_email: companyContactEmail.trim() ? companyContactEmail.trim() : null,
+          contact_phone: companyContactPhone.trim() ? companyContactPhone.trim() : null,
+          currency: companyCurrency.trim() ? companyCurrency.trim().toUpperCase() : null,
+          timezone: companyTimezone.trim() ? companyTimezone.trim() : null,
+          business_mode: companyBusinessMode || null,
+          logo_url: companyLogoUrl.trim() ? companyLogoUrl.trim() : null,
+          banner_url: companyBannerUrl.trim() ? companyBannerUrl.trim() : null,
+          profile_url: companyProfileUrl.trim() ? companyProfileUrl.trim() : null,
+        }),
+      });
+      setCompanyProfile(updated);
+      onCompanyProfileUpdated(updated);
+      setCompanyName(updated.name ?? "");
+      setCompanyContactEmail(updated.contact_email ?? "");
+      setCompanyContactPhone(updated.contact_phone ?? "");
+      setCompanyCurrency(updated.currency ?? "");
+      setCompanyTimezone(updated.timezone ?? "");
+      setCompanyLogoUrl(updated.logo_url ?? "");
+      setCompanyBannerUrl(updated.banner_url ?? "");
+      setCompanyProfileUrl(updated.profile_url ?? "");
+      if (
+        updated.business_mode === "products" ||
+        updated.business_mode === "appointments" ||
+        updated.business_mode === "mixed"
+      ) {
+        setCompanyBusinessMode(updated.business_mode);
+        setCompanyBusinessModeLegacy("");
+      } else {
+        setCompanyBusinessMode(updated.business_mode ?? "");
+        setCompanyBusinessModeLegacy(updated.business_mode ?? "");
+      }
+      setCompanyMessage("Perfil del tenant actualizado");
+    } catch (caught) {
+      setCompanySaveError(caught instanceof Error ? caught.message : "No fue posible actualizar la empresa");
+    } finally {
+      setSavingCompany(false);
+    }
+  }
 
   async function submitPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -4100,6 +5955,156 @@ function SettingsPage({ currentUser }: { currentUser: CurrentUser }) {
     <div className="grid gap-5 xl:grid-cols-[1fr_360px]">
       <div className="space-y-5">
         <section className="rounded border border-line bg-white p-4 shadow-soft">
+          <h2 className="text-sm font-semibold">Empresa</h2>
+          {canManageCompanyProfile ? (
+            <form className="mt-4 space-y-4" onSubmit={submitCompany}>
+              {companyLoadError ? <Notice tone="error" message={companyLoadError} /> : null}
+              {companySaveError ? <Notice tone="error" message={companySaveError} /> : null}
+              {companyMessage ? <Notice tone="success" message={companyMessage} /> : null}
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">Nombre comercial</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder="Nombre visible del tenant"
+                    value={companyName}
+                    disabled={companyFormLocked}
+                    onChange={(event) => setCompanyName(event.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">Correo de contacto</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder="contacto@empresa.com"
+                    type="email"
+                    value={companyContactEmail}
+                    disabled={companyFormLocked}
+                    onChange={(event) => setCompanyContactEmail(event.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">Teléfono de contacto</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder="+57 300 000 0000"
+                    value={companyContactPhone}
+                    disabled={companyFormLocked}
+                    onChange={(event) => setCompanyContactPhone(event.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">Moneda principal</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder="COP"
+                    maxLength={10}
+                    value={companyCurrency}
+                    disabled={companyFormLocked}
+                    onChange={(event) => setCompanyCurrency(event.target.value)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">Zona horaria</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+                    placeholder="America/Bogota"
+                    value={companyTimezone}
+                    disabled={companyFormLocked}
+                    onChange={(event) => setCompanyTimezone(event.target.value)}
+                  />
+                </label>
+                <SelectInput
+                  label="Modo de negocio"
+                  options={businessModeSelectOptions}
+                  value={companyBusinessMode}
+                  disabled={companyFormLocked}
+                  onChange={setCompanyBusinessMode}
+                />
+              </div>
+              <div className="space-y-3 rounded border border-line bg-panel p-4">
+                <div>
+                  <h3 className="text-sm font-semibold">Branding visual</h3>
+                  <p className="text-xs text-slate-500">
+                    Guarda URLs reales del logo, banner y perfil. Si un campo está vacío, la UI
+                    lo mostrará como pendiente sin inventar recursos.
+                  </p>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-500">Logo visible del shell</span>
+                    <input
+                      className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+                      placeholder="https://cdn.ejemplo.com/logo.svg"
+                      value={companyLogoUrl}
+                      disabled={companyFormLocked}
+                      onChange={(event) => setCompanyLogoUrl(event.target.value)}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-500">Banner para comunicaciones</span>
+                    <input
+                      className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+                      placeholder="https://cdn.ejemplo.com/banner.png"
+                      value={companyBannerUrl}
+                      disabled={companyFormLocked}
+                      onChange={(event) => setCompanyBannerUrl(event.target.value)}
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-500">Perfil para comunicaciones</span>
+                    <input
+                      className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
+                      placeholder="https://cdn.ejemplo.com/profile.jpg"
+                      value={companyProfileUrl}
+                      disabled={companyFormLocked}
+                      onChange={(event) => setCompanyProfileUrl(event.target.value)}
+                    />
+                  </label>
+                </div>
+                <div className="grid gap-3 xl:grid-cols-3">
+                  {renderAssetPreview(
+                    "Logo",
+                    companyLogoUrl.trim(),
+                    "Sin logo configurado para el shell.",
+                    "h-28 w-full object-contain object-center bg-white p-3",
+                  )}
+                  {renderAssetPreview(
+                    "Banner",
+                    companyBannerUrl.trim(),
+                    "Sin banner configurado para comunicaciones operativas.",
+                    "h-28 w-full object-cover object-center",
+                  )}
+                  {renderAssetPreview(
+                    "Perfil",
+                    companyProfileUrl.trim(),
+                    "Sin perfil visual configurado para comunicaciones operativas.",
+                    "h-28 w-full object-cover object-center rounded-none",
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-slate-500">
+                  Si un campo queda vacio, la UI lo muestra como pendiente de configurar.
+                </p>
+                <button
+                  className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+                  disabled={savingCompany || companyFormLocked}
+                >
+                  <Save className="h-4 w-4" />
+                  {savingCompany ? "Guardando" : loadingCompany ? "Cargando" : !companyProfile ? "No disponible" : "Guardar perfil"}
+                </button>
+              </div>
+            </form>
+          ) : (
+            <p className="mt-4 rounded border border-line bg-panel px-4 py-3 text-sm text-slate-600">
+              Tu rol no puede editar el perfil del tenant. Puedes cambiar tu contrasena en la
+              seccion de seguridad.
+            </p>
+          )}
+        </section>
+
+        <section className="rounded border border-line bg-white p-4 shadow-soft">
           <h2 className="text-sm font-semibold">Cuenta</h2>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
             <Input label="Nombre" defaultValue={currentUser.name} />
@@ -4126,7 +6131,7 @@ function SettingsPage({ currentUser }: { currentUser: CurrentUser }) {
             <div className="md:col-span-3">
               {passwordError ? <p className="mb-3 text-sm text-red-600">{passwordError}</p> : null}
               {passwordMessage ? (
-                <p className="mb-3 text-sm text-emerald-700">{passwordMessage}</p>
+                <p className="mb-3 text-sm text-success">{passwordMessage}</p>
               ) : null}
               <button
                 className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
@@ -4138,13 +6143,79 @@ function SettingsPage({ currentUser }: { currentUser: CurrentUser }) {
             </div>
           </form>
         </section>
+
+        {canManageUsers ? <UserManagementSection /> : null}
       </div>
 
       <div className="space-y-5">
+        <InfoPanel title="Perfil del tenant" icon={BookOpen}>
+          {canManageCompanyProfile ? (
+            loadingCompany ? (
+              <p className="text-sm text-slate-500">Cargando perfil del tenant...</p>
+            ) : companyLoadError ? (
+              <p className="text-sm text-slate-500">{companyLoadError}</p>
+            ) : (
+            <>
+              <KeyValue
+                label="Nombre comercial"
+                value={companyProfile?.name ?? "Sin configurar"}
+                strong
+              />
+              <KeyValue
+                label="Correo"
+                value={companyProfile?.contact_email ?? "Sin configurar"}
+              />
+              <KeyValue
+                label="Moneda"
+                value={companyProfile?.currency ?? "Sin configurar"}
+              />
+              <KeyValue
+                label="Zona horaria"
+                value={companyProfile?.timezone ?? "Sin configurar"}
+              />
+              <KeyValue
+                label="Modo de negocio"
+                value={
+                  companyProfile?.business_mode === "products"
+                    ? "Productos"
+                    : companyProfile?.business_mode === "appointments"
+                      ? "Citas"
+                      : companyProfile?.business_mode === "mixed"
+                        ? "Mixto"
+                        : companyProfile?.business_mode
+                          ? `Heredado: ${companyProfile.business_mode}`
+                        : "Sin configurar"
+                }
+              />
+            </>
+            )
+          ) : (
+            <p className="text-sm text-slate-500">
+              Sin acceso al perfil del tenant para este rol.
+            </p>
+          )}
+        </InfoPanel>
         <InfoPanel title="Base de datos" icon={CheckCircle2}>
           <KeyValue label="Motor" value="MariaDB 10.6" strong />
-          <KeyValue label="Migracion" value="20260518_0001" />
+          <KeyValue label="Migracion" value="20260610_0012" />
           <KeyValue label="Tenant" value="company_id obligatorio" />
+        </InfoPanel>
+        <InfoPanel title="Branding visual" icon={Pencil}>
+          <KeyValue
+            label="Logo"
+            value={companyProfile?.logo_url ? "Configurado" : "Sin configurar"}
+            strong={Boolean(companyProfile?.logo_url)}
+          />
+          <KeyValue
+            label="Banner"
+            value={companyProfile?.banner_url ? "Configurado" : "Sin configurar"}
+            strong={Boolean(companyProfile?.banner_url)}
+          />
+          <KeyValue
+            label="Perfil"
+            value={companyProfile?.profile_url ? "Configurado" : "Sin configurar"}
+            strong={Boolean(companyProfile?.profile_url)}
+          />
         </InfoPanel>
         <InfoPanel title="Acceso" icon={UserRound}>
           <KeyValue
@@ -4157,6 +6228,527 @@ function SettingsPage({ currentUser }: { currentUser: CurrentUser }) {
         </InfoPanel>
       </div>
     </div>
+  );
+}
+
+function UserManagementSection() {
+  const [users, setUsers] = useState<TenantUser[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(true);
+  const [usersError, setUsersError] = useState("");
+  const [usersMessage, setUsersMessage] = useState("");
+  const [savingUser, setSavingUser] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const [userForm, setUserForm] = useState(() => buildUserFormFromRole("agent"));
+  const [resetTargetId, setResetTargetId] = useState<string | null>(null);
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
+  const [resetMessage, setResetMessage] = useState("");
+  const [resetError, setResetError] = useState("");
+  const [resetSaving, setResetSaving] = useState(false);
+
+  const roleOptions: IntegrationOption[] = [
+    { value: "agent", label: "Agente" },
+    { value: "viewer", label: "Lector" },
+  ];
+  const privilegedRoleOptions: IntegrationOption[] = [
+    { value: "admin", label: "Administrador" },
+    { value: "owner", label: "Propietario" },
+  ];
+  const baseModules = modulePermissionOptions.filter((option) => option.defaultEnabled);
+  const restrictedModules = modulePermissionOptions.filter((option) => !option.defaultEnabled);
+  const editingUser = editingUserId ? users.find((user) => user.id === editingUserId) ?? null : null;
+  const resetTarget = resetTargetId ? users.find((user) => user.id === resetTargetId) ?? null : null;
+  const visibleRoleOptions =
+    editingUser && privilegedRoles.has(editingUser.role)
+      ? [...roleOptions, ...privilegedRoleOptions]
+      : roleOptions;
+  const formRoleIsPrivileged = privilegedRoles.has(userForm.role);
+
+  const loadUsers = useCallback(async () => {
+    setLoadingUsers(true);
+    setUsersError("");
+    try {
+      const rows = await api<TenantUser[]>("/users");
+      setUsers(rows);
+      if (editingUserId && !rows.some((user) => user.id === editingUserId)) {
+        setEditingUserId(null);
+        setUserForm(buildUserFormFromRole("agent"));
+      }
+      if (resetTargetId && !rows.some((user) => user.id === resetTargetId)) {
+        setResetTargetId(null);
+      }
+    } catch (caught) {
+      setUsersError(caught instanceof Error ? caught.message : "No fue posible cargar los usuarios");
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, [editingUserId, resetTargetId]);
+
+  useEffect(() => {
+    void loadUsers();
+  }, [loadUsers]);
+
+  function startCreateUser() {
+    setEditingUserId(null);
+    setUserForm(buildUserFormFromRole("agent"));
+    setResetTargetId(null);
+    setUsersMessage("");
+    setUsersError("");
+  }
+
+  function startEditUser(user: TenantUser) {
+    setEditingUserId(user.id);
+    setUserForm(buildUserFormFromUser(user));
+    setUsersMessage("");
+    setUsersError("");
+    setResetTargetId(null);
+  }
+
+  function updateUserForm(field: "name" | "email" | "password" | "role" | "status", value: string) {
+    setUserForm((current) => {
+      if (field === "role") {
+        return {
+          ...current,
+          role: value,
+          module_permissions: defaultModulePermissions(value),
+        };
+      }
+      return { ...current, [field]: value };
+    });
+  }
+
+  function updateModulePermission(moduleKey: string, enabled: boolean) {
+    setUserForm((current) => ({
+      ...current,
+      module_permissions: {
+        ...current.module_permissions,
+        [moduleKey]: enabled,
+      },
+    }));
+  }
+
+  async function submitUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setUsersMessage("");
+    setUsersError("");
+    if (!userForm.name.trim()) {
+      setUsersError("El nombre del usuario es obligatorio");
+      return;
+    }
+    if (!userForm.email.trim()) {
+      setUsersError("El correo del usuario es obligatorio");
+      return;
+    }
+    if (!editingUserId && !userForm.password.trim()) {
+      setUsersError("La contrasena es obligatoria para crear el usuario");
+      return;
+    }
+
+    setSavingUser(true);
+    try {
+      const payload = {
+        name: userForm.name.trim(),
+        email: userForm.email.trim(),
+        role: userForm.role,
+        status: userForm.status,
+        module_permissions: userForm.module_permissions,
+        ...(editingUserId ? {} : { password: userForm.password.trim() }),
+      };
+      if (editingUserId) {
+        await api<TenantUser>(`/users/${editingUserId}`, {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        setUsersMessage("Usuario actualizado");
+      } else {
+        await api<TenantUser>("/users", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        setUsersMessage("Usuario creado");
+      }
+      setEditingUserId(null);
+      setUserForm(buildUserFormFromRole("agent"));
+      await loadUsers();
+    } catch (caught) {
+      setUsersError(caught instanceof Error ? caught.message : "No fue posible guardar el usuario");
+    } finally {
+      setSavingUser(false);
+    }
+  }
+
+  async function toggleUserStatus(user: TenantUser) {
+    setUsersError("");
+    setUsersMessage("");
+    const nextStatus = user.status === "active" ? "inactive" : "active";
+    try {
+      const updated = await api<TenantUser>(`/users/${user.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ status: nextStatus }),
+      });
+      setUsers((current) => current.map((candidate) => (candidate.id === updated.id ? updated : candidate)));
+      if (editingUserId === user.id) {
+        setUserForm(buildUserFormFromUser(updated));
+      }
+      setUsersMessage(nextStatus === "active" ? "Usuario reactivado" : "Usuario desactivado");
+    } catch (caught) {
+      setUsersError(caught instanceof Error ? caught.message : "No fue posible cambiar el estado");
+    }
+  }
+
+  function startResetPassword(user: TenantUser) {
+    setResetTargetId(user.id);
+    setResetPassword("");
+    setResetPasswordConfirm("");
+    setResetMessage("");
+    setResetError("");
+  }
+
+  async function submitResetPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setResetMessage("");
+    setResetError("");
+    if (!resetTarget) {
+      setResetError("Selecciona un usuario para continuar");
+      return;
+    }
+    if (resetPassword !== resetPasswordConfirm) {
+      setResetError("La confirmacion no coincide");
+      return;
+    }
+    setResetSaving(true);
+    try {
+      await api<{ detail: string }>(`/users/${resetTarget.id}/reset-password`, {
+        method: "POST",
+        body: JSON.stringify({ password: resetPassword }),
+      });
+      setResetPassword("");
+      setResetPasswordConfirm("");
+      setResetMessage("Contrasena restablecida");
+      await loadUsers();
+    } catch (caught) {
+      setResetError(caught instanceof Error ? caught.message : "No fue posible restablecer la contrasena");
+    } finally {
+      setResetSaving(false);
+    }
+  }
+
+  const visibleModuleChips = (user: TenantUser) =>
+    modulePermissionOptions
+      .filter((option) => user.module_permissions?.[option.key])
+      .map((option) => option.label);
+
+  return (
+    <section className="rounded border border-line bg-white p-4 shadow-soft">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Usuarios del tenant</h2>
+          <p className="text-xs text-slate-500">Alta, edicion, desactivacion y permisos por modulo.</p>
+        </div>
+        <button
+          className="inline-flex h-9 items-center gap-2 rounded border border-line bg-panel px-3 text-sm"
+          type="button"
+          onClick={startCreateUser}
+        >
+          <Plus className="h-4 w-4" />
+          Nuevo usuario
+        </button>
+      </div>
+
+      <div className="mt-4 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+        Crear o habilitar usuarios adicionales puede aumentar el costo mensual. El rol base no
+        cambia; solo ajustas accesos por modulo.
+      </div>
+
+      <div className="mt-4 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <form className="space-y-4 rounded border border-line bg-panel p-4" onSubmit={submitUser}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold">{editingUser ? "Editar usuario" : "Crear usuario"}</h3>
+              <p className="text-xs text-slate-500">
+                El rol base permanece intacto mientras habilitas accesos por modulo.
+              </p>
+            </div>
+            {editingUser ? (
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded border border-line bg-white px-3 text-sm"
+                type="button"
+                onClick={startCreateUser}
+              >
+                Cancelar
+              </button>
+            ) : null}
+          </div>
+
+          {usersError ? <Notice tone="error" message={usersError} /> : null}
+          {usersMessage ? <Notice tone="success" message={usersMessage} /> : null}
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <TextInput
+              label="Nombre"
+              value={userForm.name}
+              onChange={(value) => updateUserForm("name", value)}
+              placeholder="Nombre del usuario"
+            />
+            <TextInput
+              label="Correo"
+              value={userForm.email}
+              onChange={(value) => updateUserForm("email", value)}
+              placeholder="usuario@empresa.com"
+            />
+            <SelectInput
+              label="Rol"
+              options={visibleRoleOptions}
+              value={userForm.role}
+              onChange={(value) => updateUserForm("role", value)}
+            />
+            {!editingUser ? (
+              <p className="md:col-span-2 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                Los roles privilegiados quedan reservados para el bootstrap interno de Swateck.
+              </p>
+            ) : null}
+            <SelectInput
+              label="Estado"
+              options={[
+                { value: "active", label: "Activo" },
+                { value: "inactive", label: "Inactivo" },
+              ]}
+              value={userForm.status}
+              onChange={(value) => updateUserForm("status", value)}
+            />
+          </div>
+
+          {!editingUser ? (
+            <PasswordInput
+              label="Contrasena inicial"
+              value={userForm.password}
+              onChange={(value) => updateUserForm("password", value)}
+            />
+          ) : (
+            <p className="rounded border border-line bg-white px-3 py-2 text-xs text-slate-500">
+              El cambio de contrasena se hace desde el panel de reseteo.
+            </p>
+          )}
+
+          <div className="space-y-3 rounded border border-line bg-white p-3">
+            <div className="flex items-center justify-between">
+              <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                Acceso base
+              </h4>
+              {formRoleIsPrivileged ? (
+                <span className="text-[11px] font-medium text-brand">Rol con acceso total</span>
+              ) : (
+                <span className="text-[11px] font-medium text-slate-500">
+                  Se activa por defecto al crear usuarios adicionales
+                </span>
+              )}
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {baseModules.map((option) => (
+                <label
+                  key={option.key}
+                  className="flex items-start gap-3 rounded border border-line bg-panel px-3 py-2 text-sm"
+                >
+                  <input
+                    checked={Boolean(userForm.module_permissions[option.key])}
+                    className="mt-1 h-4 w-4"
+                    disabled={formRoleIsPrivileged}
+                    type="checkbox"
+                    onChange={(event) => updateModulePermission(option.key, event.target.checked)}
+                  />
+                  <span>
+                    <span className="block font-medium">{option.label}</span>
+                    <span className="block text-xs text-slate-500">{option.description}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-3 rounded border border-line bg-white p-3">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+              Acceso restringido
+            </h4>
+            <div className="grid gap-2 md:grid-cols-2">
+              {restrictedModules.map((option) => (
+                <label
+                  key={option.key}
+                  className="flex items-start gap-3 rounded border border-line bg-panel px-3 py-2 text-sm"
+                >
+                  <input
+                    checked={Boolean(userForm.module_permissions[option.key])}
+                    className="mt-1 h-4 w-4"
+                    disabled={formRoleIsPrivileged}
+                    type="checkbox"
+                    onChange={(event) => updateModulePermission(option.key, event.target.checked)}
+                  />
+                  <span>
+                    <span className="block font-medium">{option.label}</span>
+                    <span className="block text-xs text-slate-500">{option.description}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-slate-500">
+              Si cambias a un rol privilegiado, el backend conserva acceso total por diseno.
+            </p>
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+              disabled={savingUser}
+            >
+              <Save className="h-4 w-4" />
+              {savingUser ? "Guardando" : editingUser ? "Actualizar usuario" : "Crear usuario"}
+            </button>
+          </div>
+        </form>
+
+        <div className="space-y-4">
+          <section className="rounded border border-line bg-panel p-4">
+            <h3 className="text-sm font-semibold">Resumen de acceso</h3>
+            <div className="mt-3 grid gap-2 text-sm">
+              <KeyValue label="Usuarios activos" value={String(users.filter((user) => user.status === "active").length)} />
+              <KeyValue label="Usuarios inactivos" value={String(users.filter((user) => user.status !== "active").length)} />
+              <KeyValue label="Roles privilegiados" value="Owner, admin, superadmin" />
+            </div>
+          </section>
+
+          <section className="rounded border border-line bg-white p-4 shadow-soft">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">Listado</h3>
+              <button
+                className="inline-flex h-8 items-center gap-2 rounded border border-line bg-panel px-3 text-xs"
+                type="button"
+                onClick={() => void loadUsers()}
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+                Refrescar
+              </button>
+            </div>
+            {loadingUsers ? (
+              <p className="mt-4 text-sm text-slate-500">Cargando usuarios...</p>
+            ) : usersError ? (
+              <p className="mt-4 text-sm text-red-600">{usersError}</p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                {users.map((user) => (
+                  <article key={user.id} className="rounded border border-line bg-panel p-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-semibold">{user.name}</p>
+                          <StatusBadge value={user.status} />
+                        </div>
+                        <p className="text-xs text-slate-500">{user.email}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Rol base: <span className="font-medium text-ink">{user.role}</span>
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          className="inline-flex h-8 items-center gap-2 rounded border border-line bg-white px-3 text-xs"
+                          type="button"
+                          onClick={() => startEditUser(user)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Editar
+                        </button>
+                        <button
+                          className="inline-flex h-8 items-center gap-2 rounded border border-line bg-white px-3 text-xs"
+                          type="button"
+                          onClick={() => startResetPassword(user)}
+                        >
+                          <ShieldCheck className="h-3.5 w-3.5" />
+                          Reset password
+                        </button>
+                        <button
+                          className="inline-flex h-8 items-center gap-2 rounded border border-line bg-white px-3 text-xs"
+                          type="button"
+                          onClick={() => void toggleUserStatus(user)}
+                        >
+                          {user.status === "active" ? (
+                            <>
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Desactivar
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              Reactivar
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {visibleModuleChips(user).map((label) => (
+                        <span
+                          key={`${user.id}-${label}`}
+                          className="inline-flex items-center rounded-full border border-brand/20 bg-white px-2 py-1 text-[11px] font-medium text-brand"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                  </article>
+                ))}
+                {!users.length ? <p className="text-sm text-slate-500">Aun no hay usuarios creados.</p> : null}
+              </div>
+            )}
+          </section>
+
+          <section className="rounded border border-line bg-white p-4 shadow-soft">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold">Restablecer contrasena</h3>
+              {resetTarget ? <StatusBadge value={resetTarget.status} /> : null}
+            </div>
+            {resetTarget ? (
+              <form className="mt-4 space-y-3" onSubmit={submitResetPassword}>
+                <p className="text-sm text-slate-500">
+                  Usuario seleccionado: <span className="font-medium text-ink">{resetTarget.name}</span>
+                </p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <PasswordInput
+                    label="Nueva contrasena"
+                    value={resetPassword}
+                    onChange={setResetPassword}
+                  />
+                  <PasswordInput
+                    label="Confirmar"
+                    value={resetPasswordConfirm}
+                    onChange={setResetPasswordConfirm}
+                  />
+                </div>
+                {resetError ? <Notice tone="error" message={resetError} /> : null}
+                {resetMessage ? <Notice tone="success" message={resetMessage} /> : null}
+                <div className="flex items-center justify-between gap-3">
+                  <button
+                    className="inline-flex h-9 items-center gap-2 rounded border border-line bg-panel px-3 text-sm"
+                    type="button"
+                    onClick={() => setResetTargetId(null)}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+                    disabled={resetSaving}
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    {resetSaving ? "Restableciendo" : "Restablecer"}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">
+                Selecciona un usuario del listado para restablecer su contrasena.
+              </p>
+            )}
+          </section>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -4200,7 +6792,7 @@ function StatusBadge({ value }: { value: string }) {
   const normalized = value.toLowerCase();
   const tone =
     normalized.includes("paid") || normalized.includes("active") || normalized.includes("compra")
-      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+      ? "border-cyan-200 bg-cyan-50 text-cyan-700"
       : normalized.includes("handoff") || normalized.includes("waiting")
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : "border-line bg-panel text-slate-600";
@@ -4309,7 +6901,7 @@ function Notice({ tone, message }: { tone: "error" | "success"; message: string 
       className={`flex items-start gap-2 rounded border p-3 text-sm ${
         isError
           ? "border-red-200 bg-red-50 text-red-700"
-          : "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : "border-cyan-200 bg-cyan-50 text-cyan-700"
       }`}
       role={isError ? "alert" : "status"}
     >
@@ -4332,7 +6924,7 @@ function ToastStack({ toasts }: { toasts: ToastState[] }) {
           <div
             key={toast.id}
             className={`pointer-events-auto flex items-start gap-2 rounded border px-3 py-2 text-sm shadow-soft ${
-              isError ? "border-red-200 bg-red-50 text-red-700" : "border-emerald-200 bg-emerald-50 text-emerald-700"
+              isError ? "border-red-200 bg-red-50 text-red-700" : "border-cyan-200 bg-cyan-50 text-cyan-700"
             }`}
             role={isError ? "alert" : "status"}
           >
@@ -4391,21 +6983,24 @@ function TextInput({
   onChange,
   placeholder,
   readOnly = false,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange?: (value: string) => void;
   placeholder?: string;
   readOnly?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <label className="block">
       <span className="text-xs font-medium text-slate-500">{label}</span>
       <input
-        className={`mt-1 h-10 w-full rounded border border-line px-3 text-sm outline-none focus:border-brand ${
+        className={`mt-1 h-10 w-full rounded border border-line px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel disabled:text-slate-600 ${
           readOnly ? "bg-panel text-slate-600" : "bg-white"
         }`}
         readOnly={readOnly}
+        disabled={disabled}
         value={value}
         placeholder={placeholder}
         onChange={(event) => onChange?.(event.target.value)}
@@ -4419,18 +7014,21 @@ function SelectInput({
   value,
   options,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   options: IntegrationOption[];
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <label className="block">
       <span className="text-xs font-medium text-slate-500">{label}</span>
       <select
-        className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+        className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:opacity-60"
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       >
         {options.map((option) => (
@@ -4447,18 +7045,21 @@ function PasswordInput({
   label,
   value,
   onChange,
+  disabled = false,
 }: {
   label: string;
   value: string;
   onChange: (value: string) => void;
+  disabled?: boolean;
 }) {
   return (
     <label className="block">
       <span className="text-xs font-medium text-slate-500">{label}</span>
       <input
-        className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+        className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:bg-panel disabled:text-slate-600"
         type="password"
         value={value}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
     </label>

@@ -6,8 +6,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.crypto import decrypt_secret
 from app.contacts.service import get_contact
+from app.audit.service import record_audit
 from app.conversations.service import get_conversation
 from app.events.service import create_event
 from app.inventory.models import Inventory
@@ -15,9 +15,12 @@ from app.inventory.service import available_units, get_inventory_by_product
 from app.integrations.models import CompanyIntegration
 from app.orders.models import Order, OrderItem
 from app.orders.schemas import OrderCreate
+from app.payments.contract import (
+    get_payment_adapter,
+    normalize_payment_provider,
+    payment_credentials_raw,
+)
 from app.payments.notifications import notify_order_paid
-from app.payments.providers.wompi import create_payment_link as create_wompi_payment_link
-from app.payments.providers.wompi import parse_credentials as parse_wompi_credentials
 from app.products.models import Product
 from app.products.service import get_product
 
@@ -55,7 +58,13 @@ def _load_product_for_order(db: Session, *, company_id: UUID, product_id: UUID) 
     return product
 
 
-def create_order(db: Session, *, company_id: UUID, payload: OrderCreate) -> Order:
+def create_order(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: OrderCreate,
+    actor_user=None,
+) -> Order:
     get_contact(db, company_id=company_id, contact_id=payload.contact_id)
     if payload.conversation_id is not None:
         get_conversation(db, company_id=company_id, conversation_id=payload.conversation_id)
@@ -125,6 +134,16 @@ def create_order(db: Session, *, company_id: UUID, payload: OrderCreate) -> Orde
         event_type="order.created",
         payload={"order_id": str(order.id), "total": str(order.total), "currency": order.currency},
     )
+    record_audit(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="order.created",
+        entity_type="order",
+        entity_id=order.id,
+        summary="Order created",
+        metadata={"total": str(order.total), "currency": order.currency},
+    )
     db.commit()
     db.refresh(order)
     return get_order(db, company_id=company_id, order_id=order.id)
@@ -142,14 +161,13 @@ def _get_payment_integration(db: Session, *, company_id: UUID) -> CompanyIntegra
     )
 
 
-def _payment_link_ttl_minutes(config: dict) -> int:
-    try:
-        return int(config.get("payment_link_ttl_minutes") or 120)
-    except (TypeError, ValueError):
-        return 120
-
-
-def generate_payment_link(db: Session, *, company_id: UUID, order_id: UUID) -> Order:
+def generate_payment_link(
+    db: Session,
+    *,
+    company_id: UUID,
+    order_id: UUID,
+    actor_user=None,
+) -> Order:
     order = get_order(db, company_id=company_id, order_id=order_id)
     if order.status not in {"pending", "waiting_payment"}:
         raise HTTPException(
@@ -159,39 +177,41 @@ def generate_payment_link(db: Session, *, company_id: UUID, order_id: UUID) -> O
 
     reference = order.payment_reference or f"swaflow_{uuid4().hex[:28]}"
     integration = _get_payment_integration(db, company_id=company_id)
-    provider = (
-        str((integration.config or {}).get("provider") or "mock").lower()
-        if integration is not None
-        else "mock"
-    )
-
-    if provider == "wompi" and integration is not None and integration.credentials_encrypted:
-        config = integration.config if isinstance(integration.config, dict) else {}
-        credentials = parse_wompi_credentials(decrypt_secret(integration.credentials_encrypted))
-        link = create_wompi_payment_link(
-            credentials=credentials,
-            environment=str(config.get("environment") or "sandbox"),
+    config = integration.config if integration and isinstance(integration.config, dict) else {}
+    provider = normalize_payment_provider(config)
+    credentials_raw = payment_credentials_raw(integration)
+    adapter = get_payment_adapter(provider)
+    if provider == "wompi" and integration is not None and credentials_raw:
+        link = adapter.create_payment_link(
+            credentials_raw=credentials_raw,
+            config=config,
             order_id=str(order.id),
             reference=reference,
             amount=order.total,
             currency=order.currency,
-            redirect_url=str(config.get("redirect_url") or "").strip() or None,
-            expires_in_minutes=_payment_link_ttl_minutes(config),
         )
         order.payment_provider = "wompi"
-        order.payment_reference = link.reference
-        order.payment_link = link.url
-        metadata = order.metadata_json if isinstance(order.metadata_json, dict) else {}
-        metadata["payment"] = {
-            "provider": "wompi",
-            "link_id": link.link_id,
-            "expires_at": link.expires_at.isoformat(),
-        }
-        order.metadata_json = metadata
     else:
-        order.payment_provider = "mock"
-        order.payment_reference = reference
-        order.payment_link = f"https://payments.example.test/pay/{reference}"
+        fallback_provider = provider if provider in {"mock", "mercado_pago", "stripe"} else "mock"
+        link = get_payment_adapter(fallback_provider).create_payment_link(
+            credentials_raw=credentials_raw,
+            config=config,
+            order_id=str(order.id),
+            reference=reference,
+            amount=order.total,
+            currency=order.currency,
+        )
+        order.payment_provider = fallback_provider
+
+    order.payment_reference = link.reference
+    order.payment_link = link.url
+    metadata = order.metadata_json if isinstance(order.metadata_json, dict) else {}
+    metadata["payment"] = {
+        "provider": order.payment_provider,
+        "link_id": link.link_id,
+        "expires_at": link.expires_at.isoformat(),
+    }
+    order.metadata_json = metadata
 
     order.status = "waiting_payment"
     order.payment_status = "pending"
@@ -201,12 +221,28 @@ def generate_payment_link(db: Session, *, company_id: UUID, order_id: UUID) -> O
         event_type="order.waiting_payment",
         payload={"order_id": str(order.id), "payment_reference": reference},
     )
+    record_audit(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="order.payment_link_generated",
+        entity_type="order",
+        entity_id=order.id,
+        summary="Payment link generated",
+        metadata={"payment_reference": reference, "provider": order.payment_provider},
+    )
     db.commit()
     db.refresh(order)
     return order
 
 
-def cancel_order(db: Session, *, company_id: UUID, order_id: UUID) -> Order:
+def cancel_order(
+    db: Session,
+    *,
+    company_id: UUID,
+    order_id: UUID,
+    actor_user=None,
+) -> Order:
     order = get_order(db, company_id=company_id, order_id=order_id)
     if order.status in {"paid", "processing", "cancelled"}:
         raise HTTPException(
@@ -224,12 +260,21 @@ def cancel_order(db: Session, *, company_id: UUID, order_id: UUID) -> Order:
         event_type="order.cancelled",
         payload={"order_id": str(order.id)},
     )
+    record_audit(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="order.cancelled",
+        entity_type="order",
+        entity_id=order.id,
+        summary="Order cancelled",
+    )
     db.commit()
     db.refresh(order)
     return order
 
 
-def _mark_order_paid(db: Session, *, order: Order) -> Order:
+def _mark_order_paid(db: Session, *, order: Order, actor_user=None) -> Order:
     if order.status == "paid":
         return order
     if order.status not in {"waiting_payment", "pending"}:
@@ -258,6 +303,16 @@ def _mark_order_paid(db: Session, *, order: Order) -> Order:
         event_type="order.paid",
         payload={"order_id": str(order.id), "payment_reference": order.payment_reference},
     )
+    record_audit(
+        db,
+        company_id=order.company_id,
+        actor_user=actor_user,
+        action="order.paid",
+        entity_type="order",
+        entity_id=order.id,
+        summary="Order marked as paid",
+        metadata={"payment_reference": order.payment_reference, "payment_provider": order.payment_provider},
+    )
     db.commit()
     db.refresh(order)
     try:
@@ -267,7 +322,13 @@ def _mark_order_paid(db: Session, *, order: Order) -> Order:
     return order
 
 
-def mark_paid_by_reference(db: Session, *, payment_reference: str, provider: str = "mock") -> Order:
+def mark_paid_by_reference(
+    db: Session,
+    *,
+    payment_reference: str,
+    provider: str = "mock",
+    actor_user=None,
+) -> Order:
     order = db.scalar(
         select(Order)
         .options(selectinload(Order.items))
@@ -275,10 +336,10 @@ def mark_paid_by_reference(db: Session, *, payment_reference: str, provider: str
     )
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
-    return _mark_order_paid(db, order=order)
+    return _mark_order_paid(db, order=order, actor_user=actor_user)
 
 
-def update_payment_status(db: Session, *, order: Order, payment_status: str) -> Order:
+def update_payment_status(db: Session, *, order: Order, payment_status: str, actor_user=None) -> Order:
     normalized = payment_status.strip().lower()
     if normalized in {"approved", "paid"}:
         return _mark_order_paid(db, order=order)
@@ -300,13 +361,31 @@ def update_payment_status(db: Session, *, order: Order, payment_status: str) -> 
             "payment_status": order.payment_status,
         },
     )
+    record_audit(
+        db,
+        company_id=order.company_id,
+        actor_user=actor_user,
+        action="order.payment_status_updated",
+        entity_type="order",
+        entity_id=order.id,
+        summary="Payment status updated",
+        metadata={
+            "payment_reference": order.payment_reference,
+            "payment_status": order.payment_status,
+        },
+    )
     db.commit()
     db.refresh(order)
     return order
 
 
 def update_payment_status_by_reference(
-    db: Session, *, payment_reference: str, provider: str, payment_status: str
+    db: Session,
+    *,
+    payment_reference: str,
+    provider: str,
+    payment_status: str,
+    actor_user=None,
 ) -> Order:
     order = db.scalar(
         select(Order)
@@ -315,4 +394,4 @@ def update_payment_status_by_reference(
     )
     if order is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Order not found")
-    return update_payment_status(db, order=order, payment_status=payment_status)
+    return update_payment_status(db, order=order, payment_status=payment_status, actor_user=actor_user)

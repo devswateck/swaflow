@@ -6,6 +6,8 @@ Proyecto SaaS multi-tenant para asistente comercial IA por WhatsApp.
 
 - `backend/`: API FastAPI, SQLAlchemy, Alembic, MySQL, auth JWT y servicios del MVP.
 - `frontend/`: consola React/Vite para el panel administrativo e inbox comercial.
+- `docs/`: politica operativa y referencias para agentes, incluyendo el uso de subagentes.
+- `docs/adr/`: decisiones arquitectonicas formales del proyecto.
 - `proyecto_saas_ia_comercial_multitenant.md`: documento base del desarrollo.
 
 ## Arranque rapido

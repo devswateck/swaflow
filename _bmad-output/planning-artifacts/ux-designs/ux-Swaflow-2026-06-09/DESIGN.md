@@ -1,7 +1,7 @@
 ---
 name: SWAFLOW Swa Tech
 description: Interfaz SaaS corporativa para ventas por WhatsApp asistidas por IA. Actualiza el MVP React/Tailwind desde verde a identidad Swa Tech oscura-magenta-violeta.
-status: draft
+status: final
 sources:
   - imports/swa-tech-logo-reference.md
   - brand/logo-brief.md
@@ -10,7 +10,7 @@ sources:
   - ../../../../frontend/src/App.tsx
   - ../../../../frontend/src/styles.css
   - ../../../../frontend/tailwind.config.ts
-updated: 2026-06-09
+updated: 2026-06-10
 colors:
   background: '#F6F7FB'
   surface: '#FFFFFF'
@@ -46,37 +46,37 @@ colors:
   focus-ring: '#FF3DE8'
 typography:
   display:
-    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    fontFamily: 'Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     fontSize: 32px
     fontWeight: '700'
     lineHeight: '1.15'
     letterSpacing: '0'
   page-title:
-    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    fontFamily: 'Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     fontSize: 20px
     fontWeight: '700'
     lineHeight: '1.25'
     letterSpacing: '0'
   section-title:
-    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    fontFamily: 'Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     fontSize: 15px
     fontWeight: '700'
     lineHeight: '1.35'
     letterSpacing: '0'
   body:
-    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    fontFamily: 'Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     fontSize: 14px
     fontWeight: '400'
     lineHeight: '1.55'
     letterSpacing: '0'
   label:
-    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    fontFamily: 'Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     fontSize: 12px
     fontWeight: '600'
     lineHeight: '1.35'
     letterSpacing: '0'
   caption:
-    fontFamily: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+    fontFamily: 'Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
     fontSize: 12px
     fontWeight: '400'
     lineHeight: '1.4'
@@ -94,7 +94,6 @@ spacing:
   '5': 20px
   '6': 24px
   '8': 32px
-  gutter-mobile: 16px
   gutter-desktop: 32px
   sidebar: 280px
 components:
@@ -196,7 +195,7 @@ Evitar: acentos verdes/teal, grandes gradientes morados, blobs decorativos, text
 
 ## Typography
 
-Usar Inter/system sans en toda la app. SWAFLOW es una interfaz operacional densa; la tipografia debe priorizar escaneo, alineacion y lectura rapida.
+Usar Sora en toda la app. SWAFLOW es una interfaz operacional densa; la tipografia debe priorizar escaneo, alineacion y lectura rapida.
 
 - `display` se reserva para estados vacios, paneles de onboarding/salud y resumenes especiales de Dashboard.
 - `page-title` se usa en el header de pagina.
@@ -210,7 +209,7 @@ Letter spacing permanece en `0`. No usar labels mayusculos espaciados dentro de 
 Usar ritmo basado en 8px con densidad SaaS compacta. Tarjetas y paneles deben sentirse organizados, no editoriales.
 
 - Shell desktop: sidebar agrupado fijo de `{spacing.sidebar}`, header superior y gutter `{spacing.gutter-desktop}`.
-- Shell movil: top bar con menu sheet y gutter `{spacing.gutter-mobile}`.
+- Shell desktop: sidebar agrupado fijo/sticky de `{spacing.sidebar}`; el panel izquierdo permanece visible mientras el contenido principal scrolla.
 - Dashboard: grid responsivo de 12 columnas. KPI primero, graficas segundo, listas operativas debajo o al costado.
 - Inbox desktop: tres zonas - lista de conversaciones, hilo de mensajes y rail de contexto/acciones.
 - Tablas: columnas estables, headers claros, scroll horizontal solo cuando sea inevitable.

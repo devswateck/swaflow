@@ -1,0 +1,100 @@
+# generated: 2026-06-10
+# last_updated: 2026-06-25
+# project: Swaflow
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /Users/camilosanchez/Documents/Swateck/SwaFlow/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog → in-progress: Automatically when first story is created (via create-story)
+#   - in-progress → done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-06-10
+last_updated: 2026-06-26
+project: Swaflow
+project_key: NOKEY
+tracking_system: file-system
+story_location: /Users/camilosanchez/Documents/Swateck/SwaFlow/_bmad-output/implementation-artifacts
+
+development_status:
+  epic-1: in-progress
+  1-1-configurar-identidad-y-perfil-comercial-del-tenant: Done
+  1-2-gestionar-branding-visual-del-tenant: done
+  1-3-administrar-usuarios-roles-y-permisos-del-tenant: done
+  1-4-configurar-whatsapp-cloud-api-del-tenant: done
+  1-5-definir-funnel-de-bienvenida-y-captura-inicial: done
+  1-6-configurar-ia-comercial-base: done
+  1-7-configurar-seguridad-y-comportamiento-operativo-de-la-ia: done
+  1-8-configurar-pasarela-de-pagos-y-contrato-de-integracion: done
+  1-9-configurar-calendario-del-tenant: backlog
+  1-10-configurar-notificaciones-por-correo-y-webhooks-salientes: backlog
+  1-11-operar-acceso-superadmin-y-auditoria-transversal: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-ver-y-actualizar-conversaciones-en-tiempo-real: backlog
+  2-2-responder-manualmente-desde-el-inbox: backlog
+  2-3-desactivar-reactivar-y-continuar-la-ia-en-una-conversacion: backlog
+  2-4-asignar-tomar-y-reasignar-chats-por-usuario: backlog
+  2-5-clasificar-conversaciones-y-preparar-agenda-desde-el-hilo: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-sincronizar-el-catalogo-meta-del-tenant: backlog
+  3-2-visualizar-y-validar-el-catalogo-sincronizado: backlog
+  3-3-registrar-y-calcular-disponibilidad-operativa-de-inventario: backlog
+  3-4-consumir-reservas-y-exponer-disponibilidad-a-ia-e-inbox: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-crear-ordenes-desde-una-conversacion-con-reserva-de-inventario: backlog
+  4-2-generar-y-mostrar-links-de-pago-por-tenant: backlog
+  4-3-confirmar-pagos-por-webhook-con-idempotencia: backlog
+  4-4-listar-filtrar-y-leer-estados-de-orden-en-espanol: backlog
+  4-5-hacer-seguimiento-de-links-vencidos-sin-romper-la-verdad-del-backend: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-crear-citas-desde-conversaciones-o-manualmente: backlog
+  5-2-validar-disponibilidad-y-proponer-horarios-de-agenda: backlog
+  5-3-configurar-reglas-de-horario-y-duracion-de-citas: backlog
+  5-4-sincronizar-citas-con-calendario-externo-sin-bloquear-swaflow: backlog
+  5-5-filtrar-y-reflejar-citas-en-el-dashboard-y-el-hilo-de-conversacion: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-ver-resumen-operativo-del-tenant-en-el-dashboard: backlog
+  6-2-visualizar-graficas-y-filtrar-metricas-del-dashboard: backlog
+  6-3-mantener-aislamiento-y-rendimiento-visible-en-el-dashboard: backlog
+  epic-6-retrospective: optional
+
+  epic-7: backlog
+  7-1-operar-como-superadmin-con-acceso-auditado: backlog
+  7-2-registrar-auditoria-de-cambios-y-eventos-relevantes: backlog
+  7-3-exportar-la-informacion-completa-al-retiro-del-tenant: backlog
+  epic-7-retrospective: optional

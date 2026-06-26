@@ -15,6 +15,7 @@ class AiAgentCreate(BaseModel):
     security_rules: str = Field(default="", max_length=6000)
     tone: str | None = Field(default=None, max_length=100)
     rules: dict = Field(default_factory=dict)
+    operational_config: dict | None = None
     active: bool = True
 
 
@@ -26,6 +27,7 @@ class AiAgentUpdate(BaseModel):
     security_rules: str | None = Field(default=None, max_length=6000)
     tone: str | None = Field(default=None, max_length=100)
     rules: dict | None = None
+    operational_config: dict | None = None
     active: bool | None = None
 
 
@@ -38,7 +40,103 @@ class AiAgentRead(TimestampedRead):
     security_rules: str
     tone: str | None
     rules: dict
+    operational_config: dict = Field(default_factory=dict)
     active: bool
+
+
+class AiOperationalGuardrailRead(BaseModel):
+    tenant_isolation: bool = True
+    payments_locked_to_backend: bool = True
+    inventory_reserved_by_backend: bool = True
+    no_invention: bool = True
+    no_manual_payment_confirmation: bool = True
+
+
+class AiOperationalSecurityRead(BaseModel):
+    mandatory_guardrails: AiOperationalGuardrailRead = Field(default_factory=AiOperationalGuardrailRead)
+    custom_rules: str = ""
+
+
+class AiOperationalWindowRead(BaseModel):
+    start: str = "08:00"
+    end: str = "18:00"
+
+
+class AiOperationalScheduleRead(BaseModel):
+    timezone: str = "UTC"
+    weekday: AiOperationalWindowRead = Field(default_factory=AiOperationalWindowRead)
+    weekend: AiOperationalWindowRead = Field(
+        default_factory=lambda: AiOperationalWindowRead(start="08:00", end="14:00")
+    )
+    outside_hours_behavior: str = "handoff"
+    inside_hours_behavior: str = "normal"
+    outside_hours_message: str = ""
+    handoff_message: str = ""
+
+
+class AiOperationalAutonomyRead(BaseModel):
+    allow_critical_actions: bool = False
+    critical_intents: list[str] = Field(default_factory=list)
+    min_confidence: float = 0.75
+    required_capture_fields: list[str] = Field(default_factory=list)
+
+
+class AiOperationalEscalationRead(BaseModel):
+    low_confidence: bool = True
+    complaint: bool = True
+    payment_failed: bool = True
+    stock_uncertain: bool = True
+    explicit_human_request: bool = True
+    handoff_message: str = ""
+    clarification_message: str = ""
+
+
+class AiOperationalPoliciesRead(BaseModel):
+    shipping: str = ""
+    warranty: str = ""
+    returns: str = ""
+    payments: str = ""
+
+
+class AiOperationalPrioritiesRead(BaseModel):
+    priority_categories: list[str] = Field(default_factory=list)
+    restricted_categories: list[str] = Field(default_factory=list)
+
+
+class AiOperationalTestModeRead(BaseModel):
+    enabled: bool = False
+    simulation_note: str = ""
+
+
+class AiOperationalConfigRead(BaseModel):
+    status: str = "draft"
+    version: int = 1
+    published_at: str | None = None
+    draft: dict = Field(default_factory=dict)
+    published: dict = Field(default_factory=dict)
+
+
+class AiOperationalSimulationRequest(BaseModel):
+    message: str = Field(min_length=1)
+    operational_config: dict | None = None
+
+
+class AiOperationalSimulationResponse(BaseModel):
+    within_hours: bool
+    day_type: str
+    timezone: str
+    status: str
+    intent: str
+    confidence: float
+    requires_handoff: bool
+    reason: str
+    suggested_reply: str
+    min_confidence: float
+    critical_intents: list[str]
+
+
+class DefaultSystemPromptRead(BaseModel):
+    default_system_prompt: str
 
 
 class AiFaqEntryCreate(BaseModel):

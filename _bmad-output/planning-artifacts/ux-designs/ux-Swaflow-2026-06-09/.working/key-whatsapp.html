@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SWAFLOW - WhatsApp</title>
+  <style>
+    :root{
+      --bg:#0b0614;
+      --panel:#151023;
+      --panel-2:#1a1129;
+      --panel-3:#211833;
+      --line:#332646;
+      --ink:#f8f2ff;
+      --muted:#bfb5d1;
+      --muted-2:#8e7ea8;
+      --magenta:#ff3de8;
+      --violet:#a855f7;
+      --cyan:#0891b2;
+      --amber:#f59e0b;
+      --success:#22c55e;
+      --shadow:0 24px 60px rgba(0,0,0,.34);
+      --r-lg:18px;
+      --r-md:12px;
+      --r-sm:10px;
+      --gap:16px;
+      --font:Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:
+        radial-gradient(circle at 16% 0%, rgba(255,61,232,.12), transparent 24%),
+        radial-gradient(circle at 90% 12%, rgba(168,85,247,.16), transparent 22%),
+        linear-gradient(180deg, #0e0817 0%, #0b0614 100%);
+      color:var(--ink);
+      font-family:var(--font);
+      -webkit-font-smoothing:antialiased;
+      text-rendering:optimizeLegibility;
+    }
+    *:focus-visible{outline:2px solid rgba(255,61,232,.45);outline-offset:2px}
+    .frame{
+      width:min(1460px, calc(100vw - 32px));
+      min-height:calc(100vh - 32px);
+      margin:16px auto;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:28px;
+      overflow:hidden;
+      background:rgba(9,5,17,.72);
+      box-shadow:var(--shadow);
+      display:grid;
+      grid-template-columns:280px 1fr;
+      align-items:start;
+    }
+    .sidebar{
+      background:linear-gradient(180deg, #0b0614 0%, #120b1d 100%);
+      border-right:1px solid rgba(255,255,255,.06);
+      padding:22px 18px;
+      position:sticky;
+      top:16px;
+      height:calc(100vh - 32px);
+      overflow:auto;
+    }
+    .lockup{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+    .mark{
+      width:44px;height:44px;border-radius:14px;
+      background:linear-gradient(135deg, var(--magenta), var(--violet));
+      position:relative;
+      box-shadow:0 0 0 1px rgba(255,255,255,.05) inset;
+    }
+    .mark:before,.mark:after{
+      content:"";
+      position:absolute;
+      background:#fff;
+      opacity:.92;
+      border-radius:999px;
+    }
+    .mark:before{inset:10px 11px 24px 11px}
+    .mark:after{left:11px;right:11px;bottom:11px;height:5px}
+    .brand{
+      line-height:1.02;
+      letter-spacing:.12em;
+      font-size:12px;
+      font-weight:800;
+    }
+    .brand span{display:block;color:var(--muted);font-size:10px;letter-spacing:.16em;margin-top:3px}
+    .group{margin-top:18px;color:var(--muted-2);font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+    .nav{display:grid;gap:6px;margin-top:10px}
+    .nav a{
+      text-decoration:none;
+      color:var(--muted);
+      padding:11px 12px;
+      border-radius:12px;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      border:1px solid transparent;
+    }
+    .nav a.active{
+      color:var(--ink);
+      background:var(--panel-3);
+      border-color:rgba(255,61,232,.24);
+      box-shadow:inset 3px 0 0 var(--magenta);
+    }
+    .nav a:hover{background:rgba(255,255,255,.04)}
+    .pill{
+      font-size:11px;
+      padding:4px 8px;
+      border-radius:999px;
+      background:rgba(255,255,255,.06);
+      color:var(--ink);
+    }
+    .content{padding:22px}
+    .topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom:18px;
+    }
+    .title h1{margin:0;font-size:26px;line-height:1.15;letter-spacing:-.02em}
+    .title p{margin:4px 0 0;color:var(--muted);font-size:14px}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .search,.btn{
+      border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.04);
+      color:var(--ink);
+      border-radius:12px;
+      height:42px;
+    }
+    .search{
+      min-width:180px;
+      padding:0 14px;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      color:var(--muted);
+      font-size:13px;
+    }
+    .btn{padding:0 14px;font-weight:700}
+    .btn.primary{
+      background:linear-gradient(135deg, var(--magenta), var(--violet));
+      border-color:transparent;
+    }
+    .grid-shell{
+      display:grid;
+      grid-template-columns:1fr 340px;
+      gap:14px;
+      align-items:start;
+    }
+    .stack{display:grid;gap:14px}
+    .card{
+      background:linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+      border:1px solid rgba(255,255,255,.07);
+      border-radius:var(--r-lg);
+      padding:16px;
+      box-shadow:0 14px 28px rgba(0,0,0,.18);
+    }
+    .section-title{
+      display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px
+    }
+    .section-title h2{margin:0;font-size:15px;letter-spacing:.01em}
+    .section-title span{font-size:12px;color:var(--muted)}
+    .badge{
+      padding:8px 10px;
+      border-radius:999px;
+      background:rgba(255,255,255,.06);
+      color:var(--ink);
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+    }
+    .badge.ok{background:rgba(34,197,94,.12);color:#7ef0a1}
+    .badge.warn{background:rgba(245,158,11,.12);color:#ffd07a}
+    .badge.gray{background:rgba(255,255,255,.06);color:var(--muted)}
+    .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .field label{
+      display:block;
+      margin-bottom:8px;
+      color:var(--muted);
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+    }
+    .input,.select,.textarea{
+      width:100%;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      background:#100b1c;
+      color:var(--ink);
+      font-size:14px;
+      padding:0 14px;
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .input,.select{height:42px}
+    .textarea{
+      min-height:104px;
+      padding:12px 14px;
+      resize:vertical;
+      line-height:1.45;
+    }
+    .input::placeholder,.textarea::placeholder{color:#9d92b3}
+    .row{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:14px;
+    }
+    .table-wrap{
+      overflow:auto;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+    }
+    table{width:100%;border-collapse:collapse;min-width:520px}
+    thead th{
+      text-align:left;
+      font-size:11px;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+      color:var(--muted);
+      padding:14px 16px;
+      border-bottom:1px solid rgba(255,255,255,.06);
+    }
+    tbody td{
+      padding:16px;
+      border-bottom:1px solid rgba(255,255,255,.05);
+      font-size:14px;
+      color:var(--ink);
+    }
+    tbody tr:last-child td{border-bottom:none}
+    .status{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 12px;
+      border-radius:999px;
+      background:rgba(34,197,94,.12);
+      color:#7ef0a1;
+      font-size:12px;
+      font-weight:700;
+      white-space:nowrap;
+    }
+    .status:before{
+      content:"";
+      width:8px;height:8px;border-radius:999px;background:var(--success);
+      box-shadow:0 0 0 4px rgba(34,197,94,.12);
+    }
+    .hint{
+      color:var(--muted);
+      font-size:12px;
+      line-height:1.5;
+    }
+    .key-grid{
+      display:grid;
+      gap:12px;
+    }
+    .key-card{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:14px;
+    }
+    .key-card strong{
+      display:block;
+      font-size:12px;
+      color:var(--magenta);
+      margin-bottom:6px;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+    }
+    .key-card span{
+      display:block;
+      font-size:13px;
+      color:var(--ink);
+      line-height:1.45;
+      word-break:break-word;
+    }
+    .mini-grid{display:grid;gap:10px}
+    .mini-chip{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:14px;
+      background:rgba(255,255,255,.03);
+      padding:12px 14px;
+      font-size:13px;
+      color:var(--ink);
+    }
+    .mini-chip span{color:var(--muted)}
+    @media (max-width:1180px){
+      .frame{grid-template-columns:1fr}
+      .sidebar{display:none}
+      .grid-shell{grid-template-columns:1fr}
+      .grid-2,.grid-3{grid-template-columns:1fr}
+    }
+    @media (max-width:720px){
+      .frame{width:100vw;min-height:100vh;margin:0;border-radius:0}
+      .content{padding:16px}
+      .topbar{flex-direction:column;align-items:stretch}
+      .controls{width:100%}
+      .search{flex:1;min-width:0}
+      .btn,.search{width:100%}
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <aside class="sidebar">
+      <div class="lockup">
+        <div class="mark" aria-hidden="true"></div>
+        <div class="brand">SWAFLOW<span>Tactical innovation</span></div>
+      </div>
+      <div class="group">Operacion</div>
+      <nav class="nav">
+        <a href="#"><span>Dashboard</span></a>
+        <a href="#"><span>Inbox</span></a>
+      </nav>
+      <div class="group">Comercio</div>
+      <nav class="nav">
+        <a href="#"><span>Productos</span></a>
+        <a href="#"><span>Inventario</span></a>
+        <a href="#"><span>Ordenes</span></a>
+        <a href="#"><span>Citas</span></a>
+      </nav>
+      <div class="group">Automatizacion</div>
+      <nav class="nav">
+        <a href="#"><span>IA</span></a>
+        <a href="#"><span>Funnels</span></a>
+        <a class="active" href="#"><span>WhatsApp</span><span class="pill">Cloud</span></a>
+        <a href="#"><span>Integraciones</span></a>
+      </nav>
+      <div class="group">Administracion</div>
+      <nav class="nav">
+        <a href="#"><span>Ajustes</span></a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div class="title">
+          <h1>WhatsApp</h1>
+          <p>Cuenta Cloud API, webhook y verificacion</p>
+        </div>
+        <div class="controls">
+          <div class="search">⌕ Buscar cuenta</div>
+          <button class="btn">Probar Meta</button>
+          <button class="btn primary">Enviar test</button>
+          <div class="badge ok">Conectado</div>
+        </div>
+      </header>
+
+      <div class="grid-shell">
+        <section class="stack">
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Cuenta Cloud API</h2>
+                <span>Campos activos en produccion</span>
+              </div>
+              <div class="badge gray">pending</div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Phone number ID</label>
+                <input class="input" value="1167413196453372" />
+              </div>
+              <div class="field">
+                <label>Business account ID</label>
+                <input class="input" value="1271184041446148" />
+              </div>
+              <div class="field">
+                <label>Verify token SWAFLOW</label>
+                <input class="input" value="631189257d6b3f2a559a351bea87b47adfed7aa9f" />
+              </div>
+              <div class="field">
+                <label>Access token</label>
+                <input class="input" value="" placeholder="Token cifrado en produccion" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="hint">La UI expone el token de verificacion, pero el access token se mantiene oculto en el backend.</div>
+              <button class="btn primary">Guardar</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Prueba de envio</h2>
+                <span>Enviar mensaje de test a un numero de destino</span>
+              </div>
+              <div class="badge warn">Prueba</div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Destino</label>
+                <input class="input" value="+57 300 000 0000" />
+              </div>
+              <div class="field">
+                <label>Mensaje</label>
+                <input class="input" value="Hola, esta es una prueba de SWAFLOW." />
+              </div>
+            </div>
+            <div class="row">
+              <div class="hint">La llamada usa la cuenta activa. Si no hay cuenta guardada, primero crea una.</div>
+              <button class="btn">Probar Meta</button>
+              <button class="btn primary">Enviar</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Cuentas activas</h2>
+                <span>Numeros activos por tenant</span>
+              </div>
+              <div class="badge gray">2 cuentas</div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Phone ID</th>
+                    <th>WABA</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>1167413196453372</td>
+                    <td>1271184041446148</td>
+                    <td><span class="status">active</span></td>
+                  </tr>
+                  <tr>
+                    <td>1190087744002211</td>
+                    <td>1271184041446148</td>
+                    <td><span class="status">active</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+
+        <aside class="stack">
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Webhook</h2>
+                <span>Estado del callback y version Graph</span>
+              </div>
+              <div class="badge ok">OK</div>
+            </div>
+            <div class="key-grid">
+              <div class="key-card">
+                <strong>Callback</strong>
+                <span>https://swaflow.swateck.com/webhooks/whatsapp</span>
+              </div>
+              <div class="key-card">
+                <strong>Verify token</strong>
+                <span>631189257d6b3f2a559a351bea87b47adfed7aa9f</span>
+              </div>
+              <div class="key-card">
+                <strong>Graph</strong>
+                <span>v21.0</span>
+              </div>
+              <div class="key-card">
+                <strong>Firma</strong>
+                <span>Activa</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Eventos</h2>
+                <span>Entrantes y salidas visibles en la UI</span>
+              </div>
+            </div>
+            <div class="mini-grid">
+              <div class="mini-chip"><span>Entrantes</span><strong>messages</strong></div>
+              <div class="mini-chip"><span>Estados</span><strong>statuses</strong></div>
+              <div class="mini-chip"><span>Salida</span><strong>/whatsapp/messages</strong></div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Lectura rapida</h2>
+                <span>Lo que hoy expone el modulo</span>
+              </div>
+            </div>
+            <div class="mini-grid">
+              <div class="mini-chip"><span>Cuenta</span><strong>Cloud API</strong></div>
+              <div class="mini-chip"><span>Accion</span><strong>Guardar y probar</strong></div>
+              <div class="mini-chip"><span>Estado</span><strong>pending / active</strong></div>
+            </div>
+          </article>
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

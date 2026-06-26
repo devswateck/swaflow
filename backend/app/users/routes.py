@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.auth.service import get_current_user, is_superadmin, require_roles
+from app.auth.service import is_superadmin, require_roles
 from app.core.database import get_db
 from app.core.schemas import MessageResponse
 from app.users import service
@@ -18,7 +18,7 @@ def list_users(
     company_id: UUID | None = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("owner", "admin")),
     db: Session = Depends(get_db),
 ) -> list[User]:
     target_company_id = company_id if is_superadmin(current_user) else current_user.company_id
@@ -41,13 +41,14 @@ def create_user(
         company_id=target_company_id,
         payload=payload,
         allow_superadmin=is_superadmin(current_user),
+        actor_user=current_user,
     )
 
 
 @router.get("/{user_id}", response_model=UserRead)
 def get_user(
     user_id: UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("owner", "admin")),
     db: Session = Depends(get_db),
 ) -> User:
     company_id = None if is_superadmin(current_user) else current_user.company_id
@@ -68,6 +69,7 @@ def update_user(
         user_id=user_id,
         payload=payload,
         allow_superadmin=is_superadmin(current_user),
+        actor_user=current_user,
     )
 
 
@@ -79,7 +81,13 @@ def reset_password(
     db: Session = Depends(get_db),
 ) -> MessageResponse:
     company_id = None if is_superadmin(current_user) else current_user.company_id
-    service.reset_user_password(db, company_id=company_id, user_id=user_id, payload=payload)
+    service.reset_user_password(
+        db,
+        company_id=company_id,
+        user_id=user_id,
+        payload=payload,
+        actor_user=current_user,
+    )
     return MessageResponse(detail="Password reset")
 
 
@@ -90,5 +98,5 @@ def delete_user(
     db: Session = Depends(get_db),
 ) -> MessageResponse:
     company_id = None if is_superadmin(current_user) else current_user.company_id
-    service.deactivate_user(db, company_id=company_id, user_id=user_id)
+    service.deactivate_user(db, company_id=company_id, user_id=user_id, actor_user=current_user)
     return MessageResponse(detail="User deactivated")

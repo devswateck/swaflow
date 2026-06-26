@@ -14,6 +14,7 @@
 project_name = "Swaflow"
 document_output_language = "Spanish"
 output_folder = "{project-root}/_bmad-output"
+communication_language = "Spanish"
 
 [modules.bmm]
 planning_artifacts = "{project-root}/_bmad-output/planning-artifacts"

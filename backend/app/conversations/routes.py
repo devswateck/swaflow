@@ -28,6 +28,8 @@ def list_conversations(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     status: str | None = None,
+    funnel_id: UUID | None = None,
+    funnel_step_id: UUID | None = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> list[dict]:
@@ -37,6 +39,8 @@ def list_conversations(
         limit=limit,
         offset=offset,
         status_filter=status,
+        funnel_id=funnel_id,
+        funnel_step_id=funnel_step_id,
     )
     return [
         service.conversation_to_inbox_item(db, conversation=conversation)

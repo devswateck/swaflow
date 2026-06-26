@@ -10,6 +10,7 @@ from app.contacts.service import get_contact
 from app.conversations.models import Conversation
 from app.conversations.schemas import ConversationCreate
 from app.funnels.models import SalesFunnel, SalesFunnelStep
+from app.funnels.service import ensure_welcome_funnel
 from app.messages.models import Message
 from app.messages.service import create_message
 from app.realtime import realtime_manager
@@ -23,10 +24,16 @@ def list_conversations(
     limit: int,
     offset: int,
     status_filter: str | None = None,
+    funnel_id: UUID | None = None,
+    funnel_step_id: UUID | None = None,
 ) -> list[Conversation]:
     stmt = select(Conversation).where(Conversation.company_id == company_id)
     if status_filter:
         stmt = stmt.where(Conversation.status == status_filter)
+    if funnel_id is not None:
+        stmt = stmt.where(Conversation.funnel_id == funnel_id)
+    if funnel_step_id is not None:
+        stmt = stmt.where(Conversation.funnel_step_id == funnel_step_id)
     return list(
         db.scalars(
             stmt.order_by(
@@ -104,7 +111,7 @@ def get_conversation(db: Session, *, company_id: UUID, conversation_id: UUID) ->
         )
     )
     if conversation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversación no encontrada")
     return conversation
 
 
@@ -118,6 +125,19 @@ def get_conversation_messages(
             .order_by(Message.created_at.asc())
         )
     )
+
+
+def _apply_default_funnel(
+    db: Session, *, company_id: UUID, conversation: Conversation
+) -> None:
+    if conversation.funnel_id is not None:
+        return
+    default_funnel = ensure_welcome_funnel(db, company_id=company_id, commit=False)
+    default_step = default_funnel.steps[0] if default_funnel.steps else None
+    conversation.funnel_id = default_funnel.id
+    conversation.funnel_step_id = default_step.id if default_step else None
+    if conversation.current_step is None:
+        conversation.current_step = default_step.code if default_step else "bienvenida"
 
 
 def get_or_create_open_conversation(
@@ -136,10 +156,13 @@ def get_or_create_open_conversation(
         )
     )
     if conversation is not None:
+        if conversation.funnel_id is None:
+            _apply_default_funnel(db, company_id=company_id, conversation=conversation)
         return conversation
     conversation = Conversation(company_id=company_id, contact_id=contact_id, channel=channel)
     db.add(conversation)
     db.flush()
+    _apply_default_funnel(db, company_id=company_id, conversation=conversation)
     return conversation
 
 
@@ -154,6 +177,8 @@ def create_conversation(
         current_step=payload.current_step,
     )
     db.add(conversation)
+    db.flush()
+    _apply_default_funnel(db, company_id=company_id, conversation=conversation)
     db.commit()
     db.refresh(conversation)
     return conversation
@@ -172,7 +197,7 @@ def assign_conversation(
             select(User).where(User.company_id == company_id, User.id == assigned_user_id)
         )
         if assignee is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario no encontrado")
     conversation.assigned_user_id = assigned_user_id
     conversation.status = "waiting_human" if assigned_user_id else "open"
     db.commit()
@@ -205,7 +230,7 @@ def assign_conversation_funnel(
         )
     )
     if funnel is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funnel not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Funnel no encontrado")
 
     step_id_to_set = None
     step_name_to_set = current_step
@@ -220,7 +245,7 @@ def assign_conversation_funnel(
         if step is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Funnel step not found for selected funnel",
+                detail="Paso del funnel no encontrado para el funnel seleccionado",
             )
         step_id_to_set = step.id
         if not step_name_to_set:

@@ -1,4 +1,5 @@
 from app.ai.models import AiAgent, AiFaqEntry, AiInteractiveTemplate
+from app.audit.models import AuditLog
 from app.appointments.models import Appointment
 from app.companies.models import Company
 from app.contacts.models import Contact
@@ -17,6 +18,7 @@ __all__ = [
     "AiAgent",
     "AiFaqEntry",
     "AiInteractiveTemplate",
+    "AuditLog",
     "Appointment",
     "Company",
     "CompanyIntegration",

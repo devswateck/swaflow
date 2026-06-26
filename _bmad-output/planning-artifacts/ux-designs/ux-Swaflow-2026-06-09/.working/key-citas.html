@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SWAFLOW - Citas</title>
+  <style>
+    :root{
+      --bg:#0b0614;--panel:#151023;--panel-2:#1a1129;--panel-3:#211833;--line:#332646;
+      --ink:#f8f2ff;--muted:#bfb5d1;--magenta:#ff3de8;--violet:#a855f7;--cyan:#0891b2;--amber:#f59e0b;--rose:#e11d48;
+      --shadow:0 24px 60px rgba(0,0,0,.34);--r-lg:18px;--font:Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#0e0817,#0b0614);color:var(--ink);font-family:var(--font);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+    .frame{width:min(1520px, calc(100vw - 32px));min-height:calc(100vh - 32px);margin:16px auto;background:rgba(9,5,17,.72);border:1px solid rgba(255,255,255,.06);border-radius:28px;overflow:hidden;box-shadow:var(--shadow);display:grid;grid-template-columns:280px 1fr;align-items:start}
+    .sidebar,.main{background:linear-gradient(180deg,#0b0614,#120b1d);border-right:1px solid rgba(255,255,255,.06)}
+    .sidebar,.main{padding:18px}
+    .sidebar{position:sticky;top:16px;height:calc(100vh - 32px);overflow:auto}
+    .lockup{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+    .mark{width:40px;height:40px;border-radius:14px;background:linear-gradient(135deg,var(--magenta),var(--violet));position:relative}
+    .mark:before,.mark:after{content:"";position:absolute;background:#fff;opacity:.92;border-radius:999px}
+    .mark:before{inset:9px 10px 22px 10px}
+    .mark:after{left:10px;right:10px;bottom:10px;height:5px}
+    .brand{font-weight:800;letter-spacing:.12em;font-size:12px}.brand span{display:block;color:var(--muted);font-size:10px;letter-spacing:.16em;margin-top:3px}
+    .group{margin-top:16px;color:#8e7ea8;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+    .nav{display:grid;gap:6px;margin-top:10px}
+    .nav a{text-decoration:none;color:var(--muted);padding:11px 12px;border-radius:12px;display:flex;justify-content:space-between;align-items:center}
+    .nav a.active{color:var(--ink);background:var(--panel-3);box-shadow:inset 3px 0 0 var(--magenta)}
+    .nav a:hover{background:rgba(255,255,255,.04)}
+    .pill{font-size:11px;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.06);color:var(--ink)}
+    .main-shell{display:flex;flex-direction:column;gap:14px}
+    .header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+    h1{margin:0;font-size:24px;line-height:1.15}
+    .sub{margin:5px 0 0;color:var(--muted);font-size:14px}
+    .tools{display:flex;gap:10px;flex-wrap:wrap}
+    .btn{height:42px;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:var(--ink);padding:0 14px;font-weight:700}
+    .btn.primary{background:linear-gradient(135deg,var(--magenta),var(--violet));border-color:rgba(255,255,255,.05)}
+    .kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .card{background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid rgba(255,255,255,.07);border-radius:var(--r-lg);padding:16px}
+    .kpi .label{color:var(--muted);font-size:12px;margin-bottom:8px}
+    .kpi .value{font-size:28px;font-weight:800;letter-spacing:-.03em}
+    .kpi .delta{margin-top:8px;font-size:12px;color:var(--muted)}
+    .layout{display:grid;grid-template-columns:1fr;gap:14px}
+    .toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+    .filters{display:flex;gap:8px;flex-wrap:wrap}
+    .filter{height:34px;padding:0 12px;border-radius:999px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:var(--ink);font-size:12px;font-weight:700}
+    .table{width:100%;border-collapse:separate;border-spacing:0 8px}
+    .table thead th{text-align:left;font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:0 12px 4px}
+    .table tbody tr{background:rgba(255,255,255,.03)}
+    .table tbody tr:hover{background:rgba(255,255,255,.05)}
+    .table td{padding:14px 12px;font-size:13px;vertical-align:middle;border-top:1px solid rgba(255,255,255,.06);border-bottom:1px solid rgba(255,255,255,.06)}
+    .table td:first-child{border-left:1px solid rgba(255,255,255,.06);border-radius:14px 0 0 14px}
+    .table td:last-child{border-right:1px solid rgba(255,255,255,.06);border-radius:0 14px 14px 0}
+    .appt{font-weight:800;font-size:14px}
+    .meta{color:var(--muted);font-size:12px;margin-top:4px}
+    .badge{display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.06)}
+    .badge.cyan{background:rgba(8,145,178,.16);color:#a7f3ff}.badge.amber{background:rgba(245,158,11,.16);color:#ffe1a4}
+    .badge.magenta{background:rgba(255,61,232,.14);color:#ffd1fb}.badge.rose{background:rgba(225,29,72,.16);color:#ffb5c4}
+    .badge.muted{background:rgba(255,255,255,.08);color:var(--ink)}
+    .actions{display:flex;gap:8px;flex-wrap:wrap}
+    .chip{height:32px;padding:0 10px;border-radius:999px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:var(--ink);font-size:12px;font-weight:700}
+    @media (max-width:1280px){.frame{grid-template-columns:1fr}.sidebar{display:none}.layout{grid-template-columns:1fr}}
+    @media (max-width:920px){.frame{width:100vw;min-height:100vh;margin:0;border-radius:0}.main{padding:16px}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media (max-width:640px){.kpis{grid-template-columns:1fr}.header{flex-direction:column}.tools{width:100%}.btn{width:100%}}
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <aside class="sidebar">
+      <div class="lockup">
+        <div class="mark" aria-hidden="true"></div>
+        <div class="brand">SWAFLOW<span>Tactical innovation</span></div>
+      </div>
+      <div class="group">Operacion</div>
+      <nav class="nav">
+        <a href="#"><span>Dashboard</span></a>
+        <a href="#"><span>Inbox</span></a>
+      </nav>
+      <div class="group">Comercio</div>
+      <nav class="nav">
+        <a href="#"><span>Productos</span></a>
+        <a href="#"><span>Inventario</span></a>
+        <a href="#"><span>Ordenes</span></a>
+        <a class="active" href="#"><span>Citas</span><span class="pill">5</span></a>
+      </nav>
+      <div class="group">Automatizacion</div>
+      <nav class="nav">
+        <a href="#"><span>IA</span></a>
+        <a href="#"><span>Funnels</span></a>
+        <a href="#"><span>WhatsApp</span></a>
+        <a href="#"><span>Integraciones</span></a>
+      </nav>
+      <div class="group">Administracion</div>
+      <nav class="nav">
+        <a href="#"><span>Ajustes</span></a>
+      </nav>
+    </aside>
+    <main class="main">
+      <div class="main-shell">
+        <div class="header">
+          <div>
+            <h1>Citas</h1>
+            <p class="sub">Agenda operativa conectada a chats y ordenes. 5 citas visibles hoy.</p>
+          </div>
+          <div class="tools">
+            <button class="btn">Sincronizar</button>
+            <button class="btn">Calendario</button>
+            <button class="btn primary">Nueva cita</button>
+          </div>
+        </div>
+        <section class="kpis">
+          <article class="card kpi"><div class="label">Citas de hoy</div><div class="value">5</div><div class="delta"><span class="up">3</span> confirmadas</div></article>
+          <article class="card kpi"><div class="label">Pendientes</div><div class="value">2</div><div class="delta"><span class="amber">1</span> por confirmar</div></article>
+          <article class="card kpi"><div class="label">Reprogramadas</div><div class="value">1</div><div class="delta">Cambio por WhatsApp</div></article>
+          <article class="card kpi"><div class="label">No show</div><div class="value">0</div><div class="delta">Sin incidencias</div></article>
+        </section>
+        <section class="layout">
+          <div class="card">
+            <div class="toolbar">
+              <div class="filters">
+                <button class="filter">Hoy</button>
+                <button class="filter">Manana</button>
+                <button class="filter">Pendientes</button>
+                <button class="filter">Confirmadas</button>
+                <button class="filter">Reprogramadas</button>
+              </div>
+              <div class="filters">
+                <button class="filter">Orden: hora</button>
+                <button class="filter">Buscar cliente</button>
+              </div>
+            </div>
+            <table class="table" aria-label="Listado de citas">
+              <thead>
+                <tr>
+                  <th>Cita</th>
+                  <th>Cliente</th>
+                  <th>Hora</th>
+                  <th>Estado</th>
+                  <th>Origen</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><div class="appt">CITA-321</div><div class="meta">Venta asociada</div></td>
+                  <td>Ana Martinez</td>
+                  <td><span class="badge muted">Hoy 5:30 p. m.</span></td>
+                  <td><span class="badge cyan">Confirmada</span></td>
+                  <td><span class="badge magenta">Inbox</span></td>
+                  <td><div class="actions"><button class="chip">Recordar</button><button class="chip">Ver chat</button></div></td>
+                </tr>
+                <tr>
+                  <td><div class="appt">CITA-318</div><div class="meta">Seguimiento</div></td>
+                  <td>Laura Gomez</td>
+                  <td><span class="badge muted">Hoy 6:15 p. m.</span></td>
+                  <td><span class="badge amber">Pendiente</span></td>
+                  <td><span class="badge cyan">Orden</span></td>
+                  <td><div class="actions"><button class="chip">Confirmar</button><button class="chip">Reprogramar</button></div></td>
+                </tr>
+                <tr>
+                  <td><div class="appt">CITA-315</div><div class="meta">Demostracion</div></td>
+                  <td>Mariana Ruiz</td>
+                  <td><span class="badge muted">Mañana 10:00 a. m.</span></td>
+                  <td><span class="badge magenta">Reprogramada</span></td>
+                  <td><span class="badge muted">Manual</span></td>
+                  <td><div class="actions"><button class="chip">Abrir agenda</button><button class="chip">Enviar msg</button></div></td>
+                </tr>
+                <tr>
+                  <td><div class="appt">CITA-309</div><div class="meta">Visita al local</div></td>
+                  <td>Carlos Perez</td>
+                  <td><span class="badge muted">Hoy 7:40 p. m.</span></td>
+                  <td><span class="badge cyan">Confirmada</span></td>
+                  <td><span class="badge cyan">Inbox</span></td>
+                  <td><div class="actions"><button class="chip">Revisar</button><button class="chip">Ubicacion</button></div></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

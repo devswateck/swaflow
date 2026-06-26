@@ -1,11 +1,13 @@
 import csv
 import json
 from io import BytesIO
+from copy import deepcopy
 from uuid import UUID
 
 from fastapi import HTTPException, status
 from openpyxl import load_workbook
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.ai.intent_classifier import classify_intent
@@ -18,10 +20,60 @@ from app.ai.schemas import (
     AiFaqUploadResult,
     AiInteractiveTemplateCreate,
     AiInteractiveTemplateUpdate,
+    AiOperationalConfigRead,
+    AiOperationalSimulationResponse,
     IntentClassifyResponse,
 )
+from app.ai.operational import (
+    build_operational_config,
+    publish_operational_config,
+    simulation_summary,
+    validate_operational_config,
+)
+from app.companies.models import Company
 
 MAX_FAQ_ENTRIES_PER_TENANT = 10
+
+
+def _agent_rules_copy(agent: AiAgent | None) -> dict:
+    if agent is None or not isinstance(agent.rules, dict):
+        return {}
+    return deepcopy(agent.rules)
+
+
+def _normalize_agent_rules(
+    *,
+    base_rules: dict | None,
+    operational_config: dict | None,
+    fallback_timezone: str | None,
+) -> dict:
+    rules = deepcopy(base_rules) if isinstance(base_rules, dict) else {}
+    effective_operational = build_operational_config(rules, fallback_timezone=fallback_timezone)
+    if operational_config is not None:
+        if not isinstance(operational_config, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="La configuracion operativa debe ser un objeto valido.",
+            )
+        effective_operational = build_operational_config(
+            {"operational": operational_config},
+            fallback_timezone=fallback_timezone,
+        )
+    validate_operational_config(effective_operational)
+    rules["operational"] = effective_operational
+    return rules
+
+
+def _agent_timezone(db: Session, *, company_id: UUID) -> str | None:
+    company = db.scalar(select(Company).where(Company.id == company_id))
+    if company is None:
+        return None
+    return company.timezone
+
+
+def _agent_operational_config(db: Session, *, company_id: UUID, agent: AiAgent) -> dict:
+    fallback_timezone = _agent_timezone(db, company_id=company_id)
+    return build_operational_config(agent.rules if isinstance(agent.rules, dict) else {}, fallback_timezone=fallback_timezone)
 
 
 def list_agents(db: Session, *, company_id: UUID) -> list[AiAgent]:
@@ -52,36 +104,65 @@ def create_agent(db: Session, *, company_id: UUID, payload: AiAgentCreate) -> Ai
         select(AiAgent)
         .where(AiAgent.company_id == company_id)
         .order_by(AiAgent.updated_at.desc(), AiAgent.created_at.desc())
+        .with_for_update()
     )
-    if existing is None:
-        agent = AiAgent(
-            company_id=company_id,
-            name=payload.name,
-            system_prompt=payload.system_prompt,
-            conversation_objective=payload.conversation_objective,
-            conversation_guide=payload.conversation_guide,
-            security_rules=payload.security_rules,
-            tone=payload.tone,
-            rules=payload.rules,
-            active=payload.active,
-        )
-        db.add(agent)
-        db.flush()
-    else:
-        existing.name = payload.name
-        existing.system_prompt = payload.system_prompt
-        existing.conversation_objective = payload.conversation_objective
-        existing.conversation_guide = payload.conversation_guide
-        existing.security_rules = payload.security_rules
-        existing.tone = payload.tone
-        existing.rules = payload.rules
-        existing.active = payload.active
-        agent = existing
+    fallback_timezone = _agent_timezone(db, company_id=company_id)
+    normalized_rules = _normalize_agent_rules(
+        base_rules=payload.rules,
+        operational_config=payload.operational_config,
+        fallback_timezone=fallback_timezone,
+    )
+    try:
+        if existing is None:
+            agent = AiAgent(
+                company_id=company_id,
+                name=payload.name,
+                system_prompt=payload.system_prompt,
+                conversation_objective=payload.conversation_objective,
+                conversation_guide=payload.conversation_guide,
+                security_rules=payload.security_rules,
+                tone=payload.tone,
+                rules=normalized_rules,
+                active=payload.active,
+            )
+            db.add(agent)
+            db.flush()
+        else:
+            existing.name = payload.name
+            existing.system_prompt = payload.system_prompt
+            existing.conversation_objective = payload.conversation_objective
+            existing.conversation_guide = payload.conversation_guide
+            existing.security_rules = payload.security_rules
+            existing.tone = payload.tone
+            existing.rules = normalized_rules
+            existing.active = payload.active
+            agent = existing
 
-    _cleanup_extra_agents(db, company_id=company_id, keep_id=agent.id)
-    db.commit()
-    db.refresh(agent)
-    return agent
+        _cleanup_extra_agents(db, company_id=company_id, keep_id=agent.id)
+        db.commit()
+        db.refresh(agent)
+        return agent
+    except IntegrityError:
+        db.rollback()
+        agent = db.scalar(
+            select(AiAgent)
+            .where(AiAgent.company_id == company_id)
+            .order_by(AiAgent.updated_at.desc(), AiAgent.created_at.desc())
+        )
+        if agent is None:
+            raise
+        agent.name = payload.name
+        agent.system_prompt = payload.system_prompt
+        agent.conversation_objective = payload.conversation_objective
+        agent.conversation_guide = payload.conversation_guide
+        agent.security_rules = payload.security_rules
+        agent.tone = payload.tone
+        agent.rules = normalized_rules
+        agent.active = payload.active
+        _cleanup_extra_agents(db, company_id=company_id, keep_id=agent.id)
+        db.commit()
+        db.refresh(agent)
+        return agent
 
 
 def get_agent(db: Session, *, company_id: UUID, agent_id: UUID) -> AiAgent:
@@ -95,7 +176,17 @@ def update_agent(
     db: Session, *, company_id: UUID, agent_id: UUID, payload: AiAgentUpdate
 ) -> AiAgent:
     agent = get_agent(db, company_id=company_id, agent_id=agent_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    fallback_timezone = _agent_timezone(db, company_id=company_id)
+    if "rules" in data or "operational_config" in data:
+        base_rules = data.get("rules") if data.get("rules") is not None else _agent_rules_copy(agent)
+        data["rules"] = _normalize_agent_rules(
+            base_rules=base_rules,
+            operational_config=data.get("operational_config"),
+            fallback_timezone=fallback_timezone,
+        )
+        data.pop("operational_config", None)
+    for field, value in data.items():
         setattr(agent, field, value)
     _cleanup_extra_agents(db, company_id=company_id, keep_id=agent.id)
     db.commit()
@@ -474,3 +565,88 @@ def delete_interactive_template(db: Session, *, company_id: UUID, template_id: U
     template = get_interactive_template(db, company_id=company_id, template_id=template_id)
     db.delete(template)
     db.commit()
+
+
+def get_operational_config(db: Session, *, company_id: UUID, agent_id: UUID) -> AiOperationalConfigRead:
+    agent = get_agent(db, company_id=company_id, agent_id=agent_id)
+    operational_config = _agent_operational_config(db, company_id=company_id, agent=agent)
+    return AiOperationalConfigRead(
+        status=str(operational_config.get("status") or "draft"),
+        version=int(operational_config.get("version") or 1),
+        published_at=operational_config.get("published_at"),
+        draft=operational_config.get("draft") if isinstance(operational_config.get("draft"), dict) else {},
+        published=operational_config.get("published")
+        if isinstance(operational_config.get("published"), dict)
+        else operational_config.get("draft") if isinstance(operational_config.get("draft"), dict) else {},
+    )
+
+
+def update_operational_config(
+    db: Session,
+    *,
+    company_id: UUID,
+    agent_id: UUID,
+    payload: dict,
+) -> AiAgent:
+    agent = get_agent(db, company_id=company_id, agent_id=agent_id)
+    fallback_timezone = _agent_timezone(db, company_id=company_id)
+    rules = _agent_rules_copy(agent)
+    rules["operational"] = build_operational_config(
+        {"operational": payload},
+        fallback_timezone=fallback_timezone,
+    )
+    validate_operational_config(rules["operational"])
+    agent.rules = rules
+    db.commit()
+    db.refresh(agent)
+    return agent
+
+
+def publish_operational_config_for_agent(
+    db: Session,
+    *,
+    company_id: UUID,
+    agent_id: UUID,
+) -> AiAgent:
+    agent = get_agent(db, company_id=company_id, agent_id=agent_id)
+    fallback_timezone = _agent_timezone(db, company_id=company_id)
+    rules = _agent_rules_copy(agent)
+    operational_config = build_operational_config(rules, fallback_timezone=fallback_timezone)
+    operational_config = publish_operational_config(operational_config)
+    validate_operational_config(operational_config)
+    rules["operational"] = operational_config
+    agent.rules = rules
+    db.commit()
+    db.refresh(agent)
+    return agent
+
+
+def simulate_operational_config(
+    db: Session,
+    *,
+    company_id: UUID,
+    agent_id: UUID,
+    message: str,
+    operational_config: dict | None = None,
+) -> AiOperationalSimulationResponse:
+    agent = get_agent(db, company_id=company_id, agent_id=agent_id)
+    fallback_timezone = _agent_timezone(db, company_id=company_id)
+    if operational_config is None:
+        operational_config = _agent_operational_config(db, company_id=company_id, agent=agent)
+    else:
+        if not isinstance(operational_config, dict):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="La configuracion operativa debe ser un objeto valido.",
+            )
+        operational_config = build_operational_config(
+            {"operational": operational_config},
+            fallback_timezone=fallback_timezone,
+        )
+        validate_operational_config(operational_config)
+    summary = simulation_summary(
+        operational_config,
+        timezone_name=fallback_timezone,
+        message=message,
+    )
+    return AiOperationalSimulationResponse(**summary)

@@ -1,4 +1,4 @@
-from sqlalchemy import String, UniqueConstraint
+from sqlalchemy import JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -14,6 +14,6 @@ class User(Base, IdMixin, TenantMixin, TimestampMixin):
     password_hash: Mapped[str] = mapped_column(nullable=False)
     role: Mapped[str] = mapped_column(String(50), nullable=False, default="agent")
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="active")
+    module_permissions: Mapped[dict[str, bool]] = mapped_column(JSON, nullable=False, default=dict)
 
     company: Mapped["Company"] = relationship(back_populates="users")
-

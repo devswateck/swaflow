@@ -51,10 +51,13 @@ class RealtimeManager:
                         current.discard(socket)
 
     def publish(self, company_id: UUID, event_type: str, payload: dict) -> None:
-        if self._loop is None:
+        if self._loop is None or self._loop.is_closed():
             return
         message = {"type": event_type, "payload": payload}
-        asyncio.run_coroutine_threadsafe(self._broadcast(company_id, message), self._loop)
+        try:
+            asyncio.run_coroutine_threadsafe(self._broadcast(company_id, message), self._loop)
+        except RuntimeError:
+            return
 
 
 realtime_manager = RealtimeManager()

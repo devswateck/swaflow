@@ -21,6 +21,9 @@ class FunnelCreate(BaseModel):
     description: str | None = None
     status: str = Field(default="active", max_length=30)
     is_default: bool = False
+    welcome_message: str | None = None
+    capture_fields: list[str] = Field(default_factory=list)
+    assignment_criteria: str | None = None
     steps: list[FunnelStepWrite] = Field(default_factory=list)
 
 
@@ -29,6 +32,9 @@ class FunnelUpdate(BaseModel):
     description: str | None = None
     status: str | None = Field(default=None, max_length=30)
     is_default: bool | None = None
+    welcome_message: str | None = None
+    capture_fields: list[str] | None = None
+    assignment_criteria: str | None = None
     steps: list[FunnelStepWrite] | None = None
 
 
@@ -48,7 +54,11 @@ class FunnelStepRead(TimestampedRead):
 class FunnelRead(TimestampedRead):
     company_id: UUID
     name: str
+    system_key: str | None = None
     description: str | None
     status: str
     is_default: bool
+    welcome_message: str | None = None
+    capture_fields: list[str]
+    assignment_criteria: str | None = None
     steps: list[FunnelStepRead]

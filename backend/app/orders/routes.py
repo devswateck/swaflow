@@ -29,7 +29,13 @@ def create_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Order:
-    return service.create_order(db, company_id=current_user.company_id, payload=payload)
+    order = service.create_order(
+        db,
+        company_id=current_user.company_id,
+        payload=payload,
+        actor_user=current_user,
+    )
+    return order
 
 
 @router.get("/{order_id}", response_model=OrderRead)
@@ -47,7 +53,12 @@ def generate_payment_link(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> PaymentLinkRead:
-    order = service.generate_payment_link(db, company_id=current_user.company_id, order_id=order_id)
+    order = service.generate_payment_link(
+        db,
+        company_id=current_user.company_id,
+        order_id=order_id,
+        actor_user=current_user,
+    )
     return PaymentLinkRead(
         payment_link=order.payment_link or "",
         payment_reference=order.payment_reference or "",
@@ -60,5 +71,10 @@ def cancel_order(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Order:
-    return service.cancel_order(db, company_id=current_user.company_id, order_id=order_id)
-
+    order = service.cancel_order(
+        db,
+        company_id=current_user.company_id,
+        order_id=order_id,
+        actor_user=current_user,
+    )
+    return order

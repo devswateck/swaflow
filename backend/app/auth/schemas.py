@@ -1,5 +1,7 @@
 from uuid import UUID
 
+from typing import Literal
+
 from pydantic import BaseModel, EmailStr, Field
 
 from app.core.schemas import ORMModel
@@ -22,7 +24,12 @@ class CurrentUserRead(ORMModel):
     name: str
     email: EmailStr
     role: str
-    status: str
+    status: Literal["active", "inactive"]
+    module_permissions: dict[str, bool]
+    company_timezone: str | None = None
+    company_logo_url: str | None = None
+    company_banner_url: str | None = None
+    company_profile_url: str | None = None
 
 
 class PasswordChangeRequest(BaseModel):

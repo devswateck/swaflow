@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SWAFLOW - Inbox</title>
+  <style>
+    /* Spine coverage:
+       DESIGN.md: Brand & Style, Colors, Typography, Layout & Spacing, Elevation & Depth, Shapes, Components
+       EXPERIENCE.md: Foundation, Information Architecture, Component Patterns, State Patterns, Accessibility Floor, Key Flows
+    */
+    :root{
+      --bg:#0b0614;--panel:#151023;--panel-2:#1a1129;--panel-3:#211833;--line:#332646;
+      --ink:#f8f2ff;--muted:#bfb5d1;--magenta:#ff3de8;--violet:#a855f7;--cyan:#0891b2;--amber:#f59e0b;
+      --shadow:0 24px 60px rgba(0,0,0,.34);--r-lg:18px;--r-md:12px;--r-sm:10px;--gap:14px;
+      --font: Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#0e0817,#0b0614);color:var(--ink);font-family:var(--font)}
+    .frame{
+      width:min(1500px, calc(100vw - 32px)); min-height:calc(100vh - 32px); margin:16px auto;
+      background:rgba(9,5,17,.72); border:1px solid rgba(255,255,255,.06); border-radius:28px; overflow:hidden;
+      box-shadow:var(--shadow); display:grid; grid-template-columns:280px 1fr; align-items:start;
+    }
+    .sidebar,.main{background:linear-gradient(180deg,#0b0614,#120b1d);border-right:1px solid rgba(255,255,255,.06)}
+    .sidebar,.main{padding:18px}
+    .sidebar{position:sticky;top:16px;height:calc(100vh - 32px);overflow:auto}
+    .main{background:linear-gradient(180deg,rgba(255,255,255,.02),transparent)}
+    .lockup{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+    .mark{width:40px;height:40px;border-radius:14px;background:linear-gradient(135deg,var(--magenta),var(--violet));position:relative}
+    .mark:before,.mark:after{content:"";position:absolute;background:#fff;opacity:.92;border-radius:999px}
+    .mark:before{inset:9px 10px 22px 10px}
+    .mark:after{left:10px;right:10px;bottom:10px;height:5px}
+    .brand{font-weight:800;letter-spacing:.12em;font-size:12px}
+    .brand span{display:block;color:var(--muted);font-size:10px;letter-spacing:.16em;margin-top:3px}
+    .group{margin-top:16px;color:#8e7ea8;font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+    .nav{display:grid;gap:6px;margin-top:10px}
+    .nav a{
+      text-decoration:none;color:var(--muted);padding:11px 12px;border-radius:12px;display:flex;justify-content:space-between;align-items:center
+    }
+    .nav a.active{color:var(--ink);background:var(--panel-3);box-shadow:inset 3px 0 0 var(--magenta)}
+    .nav a:hover{background:rgba(255,255,255,.04)}
+    .pill{display:none}
+    .header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;margin-bottom:16px}
+    h1{margin:0;font-size:24px;line-height:1.15}
+    .sub{margin:5px 0 0;color:var(--muted);font-size:14px}
+    .statusbar{
+      margin-bottom:14px;
+      padding:12px 14px;
+      border-radius:16px;
+      border:1px solid rgba(255,255,255,.07);
+      background:linear-gradient(180deg, rgba(255,255,255,.04), rgba(255,255,255,.02));
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    .statusbar strong{font-size:13px}
+    .statusbar span{color:var(--muted);font-size:12px}
+    .tools{display:flex;gap:10px;flex-wrap:wrap}
+    .btn{
+      height:42px;border-radius:12px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);color:var(--ink);
+      padding:0 14px;font-weight:700
+    }
+    .btn.primary{
+      background:linear-gradient(135deg,var(--magenta),var(--violet));
+      border-color:rgba(255,255,255,.05);
+    }
+    .listpanel,.threadpanel,.composer,.chip,.meta-card,.bubble{background:linear-gradient(180deg,var(--panel),var(--panel-2));border:1px solid rgba(255,255,255,.07);border-radius:var(--r-lg)}
+    .layout{display:grid;grid-template-columns:360px 1fr;gap:14px}
+    .listpanel{padding:12px}
+    .threadpanel{display:flex;flex-direction:column;min-height:calc(100vh - 170px);overflow:hidden}
+    .conversation{
+      padding:14px 12px;border-radius:14px;display:grid;grid-template-columns:1fr auto;gap:12px;cursor:default
+    }
+    .conversation.active{background:rgba(255,61,232,.12);box-shadow:inset 3px 0 0 var(--magenta)}
+    .conversation + .conversation{margin-top:4px}
+    .name{font-weight:800;font-size:14px}
+    .meta,.small{color:var(--muted);font-size:12px;line-height:1.4}
+    .badges{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+    .badge{font-size:11px;font-weight:700;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.06)}
+    .badge.magenta{background:rgba(255,61,232,.14);color:#ffd1fb}
+    .badge.amber{background:rgba(245,158,11,.16);color:#ffe1a4}
+    .badge.cyan{background:rgba(8,145,178,.16);color:#a7f3ff}
+    .badge.muted{background:rgba(255,255,255,.08);color:var(--ink)}
+    .thread-head{padding:18px;border-bottom:1px solid rgba(255,255,255,.06)}
+    .thread-head .top{display:flex;justify-content:space-between;align-items:flex-start;gap:14px}
+    .thread-head h2{margin:0;font-size:18px}
+    .thread-head .contact{color:var(--muted);font-size:13px;margin-top:5px}
+    .thread-meta{
+      display:grid;
+      grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:10px;
+      margin-top:14px;
+    }
+    .meta-card{
+      padding:12px;
+      background:rgba(255,255,255,.03);
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:14px;
+      min-height:76px;
+    }
+    .meta-card .label{
+      color:var(--muted);
+      font-size:11px;
+      letter-spacing:.08em;
+      text-transform:uppercase;
+      margin-bottom:6px;
+    }
+    .meta-card .value{font-size:13px;font-weight:800}
+    .meta-card .hint{display:block;margin-top:4px;color:var(--muted);font-size:12px;line-height:1.35}
+    .messages{
+      padding:18px;
+      display:grid;
+      gap:10px;
+      flex:1;
+      overflow-y:auto;
+      min-height:0;
+      max-height:calc(100vh - 360px);
+    }
+    .bubble{padding:12px 13px;max-width:72%;line-height:1.35;font-size:12px}
+    .bubble .foot{display:block;margin-top:8px;color:var(--muted);font-size:11px}
+    .bubble.customer{background:rgba(255,255,255,.05);margin-right:auto}
+    .bubble.agent{background:rgba(168,85,247,.22);margin-left:auto;border-color:rgba(168,85,247,.35)}
+    .bubble.ai{background:rgba(11,6,20,.95);border-color:rgba(255,61,232,.28);margin-right:auto}
+    .system{max-width:100%;text-align:center;background:rgba(255,255,255,.03);color:var(--muted)}
+    .composer{margin:0 18px 18px;padding:14px;display:flex;gap:10px;align-items:flex-end;flex-shrink:0}
+    .textarea{flex:1;min-height:50px;border-radius:14px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.04);padding:11px 13px;color:var(--muted);font-size:12px}
+    .send{height:56px;padding:0 18px;border-radius:14px;border:0;background:linear-gradient(135deg,var(--magenta),var(--violet));color:#fff;font-weight:800}
+    .composer-actions{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      margin:0 18px 12px;
+    }
+    .mini-action{
+      height:34px;
+      padding:0 12px;
+      border-radius:999px;
+      border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.04);
+      color:var(--ink);
+      font-size:12px;
+      font-weight:700;
+    }
+    @media (max-width:1260px){
+      .frame{grid-template-columns:280px 1fr}
+    }
+    @media (max-width:920px){
+      .frame{grid-template-columns:1fr;margin:0;width:100vw;min-height:100vh;border-radius:0}
+      .sidebar{display:none}
+      .layout{grid-template-columns:1fr}
+      .threadpanel{min-height:auto}
+      .bubble{max-width:100%}
+      .composer{margin:0;padding:14px}
+      .header{flex-direction:column}
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <aside class="sidebar">
+      <div class="lockup">
+        <div class="mark" aria-hidden="true"></div>
+        <div class="brand">SWAFLOW<span>Tactical innovation</span></div>
+      </div>
+      <div class="group">Operacion</div>
+      <nav class="nav">
+        <a href="#"><span>Dashboard</span></a>
+        <a class="active" href="#"><span>Inbox</span></a>
+      </nav>
+      <div class="group">Comercio</div>
+      <nav class="nav">
+        <a href="#"><span>Productos</span></a>
+        <a href="#"><span>Ordenes</span></a>
+        <a href="#"><span>Citas</span></a>
+      </nav>
+    </aside>
+
+    <main class="main">
+      <div class="header">
+        <div>
+          <h1>Inbox</h1>
+          <p class="sub">7 sin leer. 2 asignados a Mateo. Conexion en tiempo real activa.</p>
+        </div>
+        <div class="tools">
+          <button class="btn">Filtrar</button>
+          <button class="btn primary">Retomar humano</button>
+          <button class="btn">Asignar a IA</button>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <strong>Conversacion prioritaria: Ana Martinez</strong>
+        <span>Pago pendiente. Handoff humano activo. Ultima actualizacion hace 1 min.</span>
+      </div>
+
+      <section class="layout">
+        <div class="listpanel">
+          <div class="conversation active">
+            <div>
+              <div class="name">Ana Martinez</div>
+              <div class="meta">+57 300 555 0192 - Ultimo mensaje: "Necesito envio hoy."</div>
+              <div class="badges">
+                <span class="badge magenta">IA activa</span>
+                <span class="badge amber">Pago pendiente</span>
+                <span class="badge cyan">Funnel: Compra</span>
+                <span class="badge muted">Responsable: Mateo</span>
+              </div>
+            </div>
+            <div class="meta">Hace 4 min</div>
+          </div>
+          <div class="conversation">
+            <div>
+              <div class="name">Laura Gomez</div>
+              <div class="meta">+57 310 221 1188 - "Gracias, queda para manana."</div>
+              <div class="badges">
+                <span class="badge magenta">Humano: Mateo</span>
+                <span class="badge cyan">Cita creada</span>
+                <span class="badge muted">Paso: Confirmacion</span>
+              </div>
+            </div>
+            <div class="meta">Hace 21 min</div>
+          </div>
+          <div class="conversation">
+            <div>
+              <div class="name">Carlos Perez</div>
+              <div class="meta">+57 320 111 4455 - "Quiero ver tallas."</div>
+              <div class="badges">
+                <span class="badge">No leido</span>
+                <span class="badge amber">Stock bajo</span>
+                <span class="badge muted">Paso: Descubrimiento</span>
+              </div>
+            </div>
+            <div class="meta">Hace 48 min</div>
+          </div>
+        </div>
+
+        <article class="threadpanel">
+          <div class="thread-head">
+            <div class="top">
+              <div>
+                <h2>Ana Martinez</h2>
+              <div class="contact">+57 300 555 0192 · IA activa · Responsable: Mateo</div>
+              </div>
+              <div class="badges">
+                <span class="badge magenta">Humano</span>
+                <span class="badge amber">Pago vence hoy</span>
+              </div>
+            </div>
+            <div class="thread-meta">
+              <div class="meta-card">
+                <div class="label">Estado IA</div>
+                <div class="value">Activa</div>
+                <span class="hint">Lista para sugerir siguiente paso.</span>
+              </div>
+              <div class="meta-card">
+                <div class="label">Funnel</div>
+                <div class="value">Compra</div>
+                <span class="hint">Paso actual con riesgo de abandono.</span>
+              </div>
+              <div class="meta-card">
+                <div class="label">Pago</div>
+                <div class="value">Pendiente</div>
+                <span class="hint">Link vence en menos de 42 min.</span>
+              </div>
+              <div class="meta-card">
+                <div class="label">Cita</div>
+                <div class="value">No creada</div>
+                <span class="hint">Disponible como accion rapida.</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="messages">
+            <div class="bubble customer">
+              Buenas, me interesa el producto. 
+              <span class="foot">Cliente · 8:42 a. m.</span>
+            </div>
+            <div class="bubble ai">
+              Tenemos stock disponible. Si confirmas antes de que venza el link, dejo lista la orden.
+              <span class="foot">IA · 8:44 a. m.</span>
+            </div>
+            <div class="bubble customer">
+              Necesito envio hoy.
+              <span class="foot">Cliente · 8:46 a. m.</span>
+            </div>
+            <div class="bubble system">
+              IA activa. Conversacion lista para handoff humano.
+              <span class="foot">Sistema · 8:47 a. m.</span>
+            </div>
+            <div class="bubble agent">
+              Lo reviso yo. Te confirmo el envio y te paso el siguiente paso.
+              <span class="foot">Mateo · 8:49 a. m.</span>
+            </div>
+            <div class="bubble customer">
+              Gracias. Quedo atento.
+              <span class="foot">Cliente · 8:50 a. m.</span>
+            </div>
+            <div class="bubble ai">
+              Si necesitas mas detalles, aqui sigo.
+              <span class="foot">IA · 8:50 a. m.</span>
+            </div>
+          </div>
+
+          <div class="composer-actions">
+            <button class="mini-action">Agregar nota</button>
+            <button class="mini-action">Pedir pago</button>
+            <button class="mini-action">Crear cita</button>
+            <button class="mini-action">Ver orden</button>
+          </div>
+          <div class="composer">
+            <div class="textarea">Escribe una respuesta, un recordatorio o una indicacion interna...</div>
+            <button class="send">Enviar</button>
+          </div>
+        </article>
+      </section>
+    </main>
+  </div>
+</body>
+</html>

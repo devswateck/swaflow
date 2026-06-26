@@ -1,12 +1,12 @@
 ---
 name: SWAFLOW
-status: draft
+status: final
 sources:
   - DESIGN.md
   - imports/swa-tech-logo-reference.md
   - ../../prds/prd-Swaflow-2026-06-08/prd.md
   - ../../../../frontend/src/App.tsx
-updated: 2026-06-09
+updated: 2026-06-10
 ---
 
 # SWAFLOW - Experience Spine
@@ -15,11 +15,13 @@ Este spine gana en conflicto contra cualquier mockup, screenshot o borrador de i
 
 ## Foundation
 
-Web SaaS responsiva construida con React, Vite, TypeScript, Tailwind CSS, Zustand, TanStack Query y lucide-react. El frontend actual esta concentrado en `frontend/src/App.tsx`, asi que la primera pasada de implementacion debe mantener comportamiento estable y extraer/estandarizar componentes solo donde reduzca complejidad real.
+Web SaaS de escritorio construida con React, Vite, TypeScript, Tailwind CSS, Zustand, TanStack Query y lucide-react. El frontend actual esta concentrado en `frontend/src/App.tsx`, asi que la primera pasada de implementacion debe mantener comportamiento estable y extraer/estandarizar componentes solo donde reduzca complejidad real.
 
 La experiencia es para admins de tenant y operadores comerciales que gestionan ventas por WhatsApp, asistencia IA, inventario, ordenes, citas, funnels, integraciones y ajustes de cuenta. `DESIGN.md` define la identidad Swa Tech, reemplaza la paleta verde rechazada y fija dark mode como tema por defecto.
 
 Postura principal: consola operacional. El producto debe abrir directo al trabajo, no a una superficie de marketing.
+
+No hay version mobile en este ciclo. La experiencia se diseña y valida para desktop/laptop solamente.
 
 ## Information Architecture
 
@@ -41,15 +43,16 @@ La navegacion sigue siendo una sola app, pero debe agruparse para reducir comple
 
 Sidebar desktop:
 
-- Siempre visible en `lg+`.
+- Siempre visible en `lg+` y fijo/sticky mientras la pagina principal scrolla.
 - Usa labels agrupados y estados activos compactos de `DESIGN.md`.
 - Dashboard e Inbox quedan anclados arriba.
 - Ajustes puede ir abajo como area de cuenta/admin.
+- El panel izquierdo no cambia de posicion entre modulos; lo que cambia es el contenido central o derecho de cada vista.
 
 Movil:
 
-- Sidebar se vuelve sheet.
-- Inbox separa lista y detalle de chat como paneles navegables; no comprimir la composicion de tres zonas de desktop en una sola pantalla movil.
+- Fuera de alcance en este ciclo.
+- No se diseña ni valida version mobile.
 
 ## Voice and Tone
 
@@ -71,7 +74,7 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 
 | Componente | Uso | Reglas de comportamiento |
 |---|---|---|
-| Sidebar agrupado | Shell global | Agrupa nav items. El activo tiene acento izquierdo persistente. En movil colapsa a sheet. La pagina actual se anuncia en el header. |
+| Sidebar agrupado | Shell global | Agrupa nav items. El activo tiene acento izquierdo persistente. La pagina actual se anuncia en el header. |
 | Page header | Shell global | Muestra titulo, subtitulo, busqueda global, tema, notificaciones y cuenta. No sobrecargar con acciones especificas de pagina; esas viven dentro de la superficie. |
 | KPI card | Dashboard | Muestra label, valor principal, delta de periodo y mini trend. Click navega al modulo fuente cuando el dato lo permite. |
 | Chart panel | Dashboard | Usa Recharts para line charts, bar charts, areas, ejes, leyendas y tooltips. Debe tener labels reales, rango de fecha y estados vacio/cargando. |
@@ -79,7 +82,7 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 | Conversation list item | Inbox | Click abre chat. Muestra contacto, telefono, ultimo mensaje, no leidos, responsable, estado IA/humano, funnel/paso y tiempo. El seleccionado persiste visualmente. |
 | Chat thread | Inbox | Mensajes muestran tipo de emisor, timestamp y metadata de entrega/fuente cuando exista. Auto-scroll solo si el operador ya estaba cerca del fondo. |
 | Message composer | Inbox | Envio por boton. El comportamiento de `Enter` debe decidirse explicitamente despues. Deshabilitar al enviar. Mantener draft si falla. |
-| Conversation context rail | Inbox | Rail derecho con datos de cliente, toggle/handoff IA, responsable, funnel/paso, orden/pago, cita y notas/auditoria. Reemplaza botones sueltos bajo el hilo. |
+| Handoff actions | Inbox | Botones de "Retomar humano" y "Asignar a IA" visibles en el header del chat o rail de acciones. Deben reflejar el estado actual de la conversacion y no depender de hover. |
 | Status badge | Todos | Mapea codigos internos a labels en espanol. El tono sigue estado semantico, no color arbitrario por modulo. |
 | Data table | Productos, Ordenes, Citas | Escaneable: columnas estables, badges compactos, acciones de fila al final, estado vacio bajo header. |
 | Notice / Toast | Global | Error usa `role="alert"`, success usa `role="status"`. Mensajes cortos y accionables. |
@@ -92,6 +95,7 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 | Dashboard sin datos | Dashboard | Mostrar KPIs en cero y checklist de setup/salud. No mostrar graficas falsas. |
 | Dashboard cargando | Dashboard | Skeletons de KPI y paneles de grafica con el mismo layout final. |
 | Dashboard desactualizado | Dashboard | Timestamp pequeno: "Actualizado hace N min". Refresh manual disponible. |
+| Atencion requerida | Dashboard | Se muestra como bloque independiente debajo de Salud del sistema, no mezclado con la card de salud. |
 | Sin conversaciones | Inbox | Estado vacio en lista: "No hay conversaciones activas". El detalle muestra siguiente accion de setup si WhatsApp no esta conectado. |
 | Conversacion no seleccionada | Inbox | Prompt en detalle: "Selecciona una conversacion". En desktop, rail contextual oculto hasta seleccionar. |
 | Enviando mensaje | Inbox | Composer deshabilitado, texto inline "Enviando". Draft visible hasta exito. |
@@ -107,7 +111,7 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 
 - Click/tap para navegar y actuar.
 - Busqueda global permanece en el header; una futura command palette puede reutilizarla.
-- `Esc` cierra sheet movil, dialogos, menus y limpia busqueda transitoria cuando este enfocada.
+- `Esc` cierra dialogos, menus y limpia busqueda transitoria cuando este enfocada.
 - Tab order va de sidebar a header y contenido de pagina.
 - Hover puede revelar acciones secundarias en desktop, pero toda accion debe existir tambien en touch.
 - Acciones de refresh usan icono lucide `RefreshCw` con title/label accesible y texto visible cuando no sea obvio.
@@ -133,19 +137,19 @@ El contraste visual vive en `DESIGN.md`. Piso de accesibilidad conductual:
 - Contadores no leidos no dependen solo del color.
 - Graficas de Dashboard necesitan alternativa textual: titulo, periodo, resumen de valor y labels de leyenda.
 - Errores de formulario aparecen junto al campo/composer y usan `role="alert"` cuando bloquean.
-- Targets tactiles de al menos 40px en web; 44px preferido para movil.
+- Targets tactiles de al menos 40px en web.
 - No truncar labels criticos como estado de pago, paso de funnel o alertas de inventario sin tooltip/title.
 
 ## Responsive & Platform
 
 | Breakpoint | Comportamiento |
 |---|---|
-| `xl` y mayor | Dashboard usa fila KPI + grid de graficas. Inbox usa tres zonas: lista, hilo, rail. |
-| `lg` | Sidebar visible. Inbox puede mantener lista + hilo, con rail colapsable. |
-| `md` | Sidebar puede colapsar o seguir sheet-based. Graficas de Dashboard se apilan dos por fila. |
-| `< md` | Sidebar sheet. Inbox abre lista primero; seleccionar chat navega al detalle. Contexto/acciones abren como bottom sheet o panel. |
+| `xl` y mayor | Dashboard usa fila KPI + grafica de ancho completo. Inbox usa lista + hilo, sin rail derecho. |
+| `lg` | Sidebar visible. Inbox mantiene lista + hilo a ancho completo. |
+| `md` | Fuera de alcance en este ciclo. |
+| `< md` | Fuera de alcance en este ciclo. |
 
-El producto es web responsiva, no app nativa movil. Movil sirve para respuesta urgente y revision rapida; desktop sigue siendo la superficie principal de administracion y operacion.
+El producto es web de escritorio en este ciclo. No se define comportamiento mobile hasta una iteracion posterior.
 
 ## Inspiration & Anti-patterns
 
@@ -173,6 +177,7 @@ Rechazado:
 6. Convertir dark mode a sistema real de tokens y hacerlo el fallback por defecto cuando no exista preferencia guardada.
 7. Extraer primitivos UI desde `App.tsx` antes de que crezca el rediseno: Button, Card, Badge, Table, PageHeader, Sidebar, Input, Notice.
 8. Normalizar naming de marca: reemplazar el texto actual "Swatek Flow AI" por `SWAFLOW`.
+9. Usar la tipografia Sora definida por el concepto del logo como familia tipografica principal de la aplicacion.
 
 ## Key Flows
 

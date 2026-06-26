@@ -1,30 +1,92 @@
+import json
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.auth.schemas import PasswordChangeRequest
-from app.auth.service import authenticate_user, change_own_password
-from app.ai.schemas import AiInteractiveTemplateCreate, AiInteractiveTemplateOption
-from app.ai.service import create_interactive_template, list_interactive_templates
-from app.companies.schemas import CompanyCreate
-from app.companies.service import create_company_with_owner
+from app.auth.service import authenticate_user, build_current_user_payload, change_own_password
+from app.audit.service import list_audit_logs
+from app.ai.schemas import (
+    AiAgentCreate,
+    AiAgentUpdate,
+    AiFaqEntryCreate,
+    AiInteractiveTemplateCreate,
+    AiInteractiveTemplateOption,
+)
+from app.ai.service import (
+    create_agent,
+    create_faq_entry,
+    create_interactive_template,
+    get_agent,
+    get_operational_config,
+    list_agents,
+    list_interactive_templates,
+    publish_operational_config_for_agent,
+    simulate_operational_config,
+    update_agent,
+)
+from app.companies.models import Company
+from app.companies import service
+from app.companies.schemas import CompanyCreate, CompanyUpdate
+from app.companies.service import create_company_with_owner, update_company
 from app.contacts.models import Contact
+from app.core.crypto import decrypt_secret
 from app.core.schemas import OwnerCreate
 from app.ai.runtime import (
     AutoReplyResult,
     _build_catalog_context,
     _infer_interactive_action,
     _selected_interactive_source_action,
+    generate_auto_reply,
 )
+from app.ai.routes import get_default_system_prompt
+from app.ai.models import AiAgent
 from app.conversations.models import Conversation
+from app.conversations.schemas import ConversationCreate
+from app.conversations.service import (
+    assign_conversation_funnel,
+    assign_conversation,
+    create_conversation,
+    get_conversation,
+    get_or_create_open_conversation,
+    list_conversations,
+)
+from app.funnels import service as funnel_service
 from app.inventory.models import Inventory
 from app.inventory.service import list_inventory
 from app.messages.models import Message
+from app.integrations.models import CompanyIntegration
+from app.integrations.schemas import (
+    IntegrationCreate,
+    IntegrationUpdate,
+    OutboundWebhookCreate,
+    OutboundWebhookUpdate,
+)
+from app.integrations.service import (
+    create_integration,
+    create_outbound_webhook,
+    update_integration,
+    update_outbound_webhook,
+)
+from app.payments.service import process_payment_webhook
 from app.orders.schemas import OrderCreate, OrderItemCreate
 from app.orders.service import create_order, generate_payment_link, mark_paid_by_reference
+from app.orders.models import Order
+from app.funnels.models import SalesFunnel
+from app.funnels.schemas import FunnelCreate, FunnelStepWrite, FunnelUpdate
+from app.funnels.service import (
+    create_funnel,
+    ensure_welcome_funnel,
+    get_default_funnel,
+    get_funnel,
+    update_funnel,
+)
 from app.products.models import Product
 from app.products.service import get_product
 from app.core.security import verify_password
@@ -66,11 +128,1532 @@ def test_company_bootstrap_creates_owner(db):
     company, owner = bootstrap_company(db, "Acme")
 
     assert company.id is not None
+    assert company.contact_email is None
+    assert company.contact_phone is None
+    assert company.currency is None
+    assert company.timezone is None
+    assert company.business_mode is None
+    assert company.logo_url is None
+    assert company.banner_url is None
+    assert company.profile_url is None
     assert owner.company_id == company.id
     assert owner.role == "owner"
     assert owner.email == "owner@acme.example.com"
     assert owner.password_hash != "super-secret"
     assert verify_password("super-secret", owner.password_hash)
+
+
+def test_company_bootstrap_audit_includes_owner_id(db):
+    company, owner = bootstrap_company(db, "Acme")
+
+    audit_log = list_audit_logs(db, company_id=company.id, limit=1, offset=0)[0]
+
+    assert audit_log.action == "company.created"
+    assert audit_log.metadata_json["owner_id"] == str(owner.id)
+    assert audit_log.metadata_json["owner_email"] == owner.email
+
+
+def test_get_default_funnel_does_not_commit(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+
+    def boom(*args, **kwargs):
+        raise AssertionError("get_default_funnel should not commit")
+
+    monkeypatch.setattr(db, "commit", boom)
+
+    funnel = get_default_funnel(db, company_id=company.id)
+
+    assert funnel.system_key == "welcome"
+    assert funnel.is_default is True
+
+
+def test_company_bootstrap_rolls_back_if_welcome_funnel_bootstrap_fails(db, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("bootstrap failed")
+
+    monkeypatch.setattr(service, "ensure_welcome_funnel", boom)
+
+    with pytest.raises(RuntimeError, match="bootstrap failed"):
+        bootstrap_company(db, "Acme")
+
+    assert db.scalar(select(Company).where(Company.name == "Acme")) is None
+
+
+def test_company_bootstrap_rolls_back_if_audit_write_fails(db, monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError("audit failed")
+
+    monkeypatch.setattr(service, "record_audit", boom)
+
+    with pytest.raises(RuntimeError, match="audit failed"):
+        bootstrap_company(db, "Acme")
+
+    assert db.scalar(select(Company).where(Company.name == "Acme")) is None
+    assert db.scalar(
+        select(User).where(User.email == "owner@acme.example.com")
+    ) is None
+
+
+def test_company_bootstrap_creates_default_welcome_funnel(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    assert welcome_funnel.company_id == company.id
+    assert welcome_funnel.system_key == "welcome"
+    assert welcome_funnel.is_default is True
+    assert welcome_funnel.name == "Funnel de bienvenida"
+    assert welcome_funnel.welcome_message
+    assert welcome_funnel.capture_fields == ["Nombre", "Correo", "Ciudad"]
+    assert welcome_funnel.assignment_criteria
+    assert len(welcome_funnel.steps) == 3
+    assert welcome_funnel.steps[0].code == "bienvenida"
+    assert welcome_funnel.steps[0].config["entry_point"] is True
+
+
+def test_default_welcome_funnel_is_idempotent(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    first = ensure_welcome_funnel(db, company_id=company.id)
+    second = ensure_welcome_funnel(db, company_id=company.id)
+
+    assert first.id == second.id
+    assert first.system_key == "welcome"
+    assert second.system_key == "welcome"
+    assert len(
+        list(
+            db.scalars(
+                select(SalesFunnel).where(
+                    SalesFunnel.company_id == company.id,
+                    SalesFunnel.is_default.is_(True),
+                )
+            )
+        )
+    ) == 1
+
+
+def test_open_conversation_uses_default_welcome_funnel(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    assert conversation.funnel_id == welcome_funnel.id
+    assert conversation.funnel_step_id == welcome_funnel.steps[0].id
+    assert conversation.current_step == welcome_funnel.steps[0].code
+
+
+def test_existing_open_conversation_backfills_default_funnel_without_internal_commit(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    conversation = Conversation(company_id=company.id, contact_id=contact.id, channel="whatsapp")
+    db.add(conversation)
+    db.commit()
+
+    def boom():
+        raise AssertionError("commit should not be called by get_or_create_open_conversation")
+
+    monkeypatch.setattr(db, "commit", boom)
+
+    updated = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    assert updated.id == conversation.id
+    assert updated.funnel_id == welcome_funnel.id
+    assert updated.funnel_step_id == welcome_funnel.steps[0].id
+    assert updated.current_step == welcome_funnel.steps[0].code
+
+
+def test_existing_open_conversation_repairs_inactive_welcome_funnel_on_outer_commit(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+    welcome_funnel.status = "inactive"
+    db.commit()
+
+    conversation = Conversation(company_id=company.id, contact_id=contact.id, channel="whatsapp")
+    db.add(conversation)
+    db.commit()
+
+    commit_calls = 0
+    original_commit = db.commit
+
+    def spy_commit():
+        nonlocal commit_calls
+        commit_calls += 1
+        return original_commit()
+
+    monkeypatch.setattr(db, "commit", spy_commit)
+
+    updated = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+
+    assert commit_calls == 0
+    assert updated.funnel_id == welcome_funnel.id
+    assert updated.current_step == welcome_funnel.steps[0].code
+
+    monkeypatch.setattr(db, "commit", original_commit)
+    db.commit()
+
+    reloaded = db.scalar(
+        select(SalesFunnel).where(
+            SalesFunnel.company_id == company.id,
+            SalesFunnel.id == welcome_funnel.id,
+        )
+    )
+    assert reloaded is not None
+    assert reloaded.status == "active"
+
+
+def test_inbox_conversations_can_filter_by_funnel(db):
+    company, _ = bootstrap_company(db, "Acme")
+    first_contact = Contact(company_id=company.id, name="Cliente 1", phone="+573001112233")
+    second_contact = Contact(company_id=company.id, name="Cliente 2", phone="+573001112234")
+    db.add_all([first_contact, second_contact])
+    db.commit()
+
+    custom_funnel = create_funnel(
+        db,
+        company_id=company.id,
+        payload=FunnelCreate(
+            name="Funnel VIP",
+            description="Atencion prioritaria",
+            status="active",
+            is_default=False,
+            welcome_message="Hola, cuentame tu caso.",
+            capture_fields=["Nombre"],
+            assignment_criteria="Clientes VIP",
+            steps=[
+                FunnelStepWrite(
+                    position=1,
+                    name="Recepcion",
+                    code="recepcion",
+                    prompt="Recibe al cliente VIP",
+                    objectives=["Recibir"],
+                    transition_criteria="El cliente comparte su necesidad",
+                    status="active",
+                    config={},
+                )
+            ],
+        ),
+    )
+    first_conversation = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=first_contact.id,
+        channel="whatsapp",
+    )
+    second_conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=second_contact.id, channel="whatsapp"),
+    )
+    assign_conversation_funnel(
+        db,
+        company_id=company.id,
+        conversation_id=second_conversation.id,
+        funnel_id=custom_funnel.id,
+        funnel_step_id=custom_funnel.steps[0].id,
+        current_step=custom_funnel.steps[0].code,
+    )
+
+    filtered = list_conversations(
+        db,
+        company_id=company.id,
+        limit=50,
+        offset=0,
+        funnel_id=custom_funnel.id,
+    )
+
+    assert [conversation.id for conversation in filtered] == [second_conversation.id]
+    assert first_conversation.id not in {conversation.id for conversation in filtered}
+
+
+def test_conversation_service_returns_spanish_errors_for_missing_resources(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_conversation(db, company_id=company.id, conversation_id=uuid4())
+    assert exc_info.value.status_code == 404
+    assert "no encontrada" in str(exc_info.value.detail).lower()
+
+    with pytest.raises(HTTPException) as exc_info:
+        assign_conversation(
+            db,
+            company_id=company.id,
+            conversation_id=conversation.id,
+            assigned_user_id=uuid4(),
+        )
+    assert exc_info.value.status_code == 404
+    assert "usuario no encontrado" in str(exc_info.value.detail).lower()
+
+    with pytest.raises(HTTPException) as exc_info:
+        assign_conversation_funnel(
+            db,
+            company_id=company.id,
+            conversation_id=conversation.id,
+            funnel_id=uuid4(),
+            funnel_step_id=None,
+            current_step=None,
+        )
+    assert exc_info.value.status_code == 404
+    assert "funnel no encontrado" in str(exc_info.value.detail).lower()
+
+
+def test_assign_conversation_funnel_returns_spanish_error_for_invalid_step(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        assign_conversation_funnel(
+            db,
+            company_id=company.id,
+            conversation_id=conversation.id,
+            funnel_id=welcome_funnel.id,
+            funnel_step_id=uuid4(),
+            current_step=None,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "paso del funnel no encontrado" in str(exc_info.value.detail).lower()
+
+
+def test_generate_auto_reply_uses_welcome_funnel_context(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    db.add(
+        AiAgent(
+            company_id=company.id,
+            name="Agente comercial",
+            system_prompt="Saluda y captura datos.",
+            conversation_objective="Vender con claridad",
+            conversation_guide="1. Saluda 2. Captura datos 3. Clasifica",
+            security_rules="No inventar datos.",
+            tone="amable",
+            rules={"auto_reply_enabled": True},
+            active=True,
+        )
+    )
+    db.commit()
+
+    captured = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"reply_text":"Hola, te ayudo con tu caso.","action":null,"captured_fields":{},"product_retailer_ids":[]}'
+                        }
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, headers=None):
+            captured["payload"] = json or {}
+            return FakeResponse()
+
+    monkeypatch.setattr("app.ai.runtime.get_settings", lambda: SimpleNamespace(openai_api_key="test-key"))
+    monkeypatch.setattr(
+        "app.ai.runtime.evaluate_business_hours",
+        lambda *args, **kwargs: {
+            "timezone": "America/Bogota",
+            "day_type": "weekday",
+            "within_hours": True,
+            "window": {"start": "08:00", "end": "18:00"},
+            "outside_hours_behavior": "handoff",
+            "outside_hours_message": "Estamos fuera de horario.",
+            "handoff_message": "Te paso con un humano.",
+            "current_iso": "2026-06-25T10:00:00-05:00",
+        },
+    )
+    monkeypatch.setattr("app.ai.runtime.httpx.Client", FakeClient)
+
+    result = generate_auto_reply(
+        db,
+        company_id=company.id,
+        conversation=conversation,
+        incoming_text="Necesito ayuda con mi pedido",
+    )
+
+    assert result is not None
+    assert result.reply_text == "Hola, te ayudo con tu caso."
+    system_prompt = captured["payload"]["messages"][0]["content"]
+    assert "Funnel de bienvenida" in system_prompt
+    assert "Nombre, Correo, Ciudad" in system_prompt
+    assert "bienvenida" in system_prompt
+
+
+def test_ai_agent_configuration_remains_canonical_per_tenant(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    created = create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente comercial",
+            system_prompt="Prompt base de ventas.",
+            conversation_objective="Acompanar ventas y consultas.",
+            conversation_guide="1. Saluda 2. Detecta necesidad 3. Orienta.",
+            security_rules="No inventar precios.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True, "business_context": "Venta minorista"},
+            active=True,
+        ),
+    )
+    recreated = create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente comercial actualizado",
+            system_prompt="Prompt base ajustado.",
+            conversation_objective="Acompanamiento comercial completo.",
+            conversation_guide="1. Saluda 2. Captura contexto 3. Ofrece siguiente paso.",
+            security_rules="No inventar precios ni stock.",
+            tone="consultivo",
+            rules={
+                "auto_reply_enabled": True,
+                "business_context": "Venta minorista",
+                "capture_fields": ["nombre", "correo"],
+            },
+            active=False,
+        ),
+    )
+    updated = update_agent(
+        db,
+        company_id=company.id,
+        agent_id=created.id,
+        payload=AiAgentUpdate(
+            name="Agente comercial final",
+            system_prompt="Prompt base final.",
+            conversation_objective="Cerrar oportunidades.",
+            conversation_guide="1. Saluda 2. Resuelve 3. Deriva si aplica.",
+            security_rules="No inventar precios ni stock.",
+            tone="profesional cercano",
+            rules={
+                "auto_reply_enabled": False,
+                "business_context": "Venta minorista",
+                "capture_fields": ["nombre", "correo", "ciudad"],
+            },
+            active=True,
+        ),
+    )
+    rows = list_agents(db, company_id=company.id)
+
+    assert recreated.id == created.id
+    assert updated.id == created.id
+    assert len(rows) == 1
+    assert rows[0].id == created.id
+    assert rows[0].name == "Agente comercial final"
+    assert rows[0].system_prompt == "Prompt base final."
+    assert rows[0].conversation_objective == "Cerrar oportunidades."
+    assert rows[0].conversation_guide == "1. Saluda 2. Resuelve 3. Deriva si aplica."
+    assert rows[0].security_rules == "No inventar precios ni stock."
+    assert rows[0].tone == "profesional cercano"
+    assert rows[0].rules["capture_fields"] == ["nombre", "correo", "ciudad"]
+
+
+def test_ai_agent_company_scope_is_unique_in_database(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    db.add_all(
+        [
+            AiAgent(
+                company_id=company.id,
+                name="Agente 1",
+                system_prompt="Prompt 1",
+                conversation_objective="Objetivo 1",
+                conversation_guide="Guia 1",
+                security_rules="Regla 1",
+                tone="cercano",
+                rules={},
+                active=True,
+            ),
+            AiAgent(
+                company_id=company.id,
+                name="Agente 2",
+                system_prompt="Prompt 2",
+                conversation_objective="Objetivo 2",
+                conversation_guide="Guia 2",
+                security_rules="Regla 2",
+                tone="profesional",
+                rules={},
+                active=False,
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        db.commit()
+
+
+def test_ai_agent_config_is_tenant_scoped_and_returns_404_for_other_tenant(db):
+    company_a, _ = bootstrap_company(db, "Acme")
+    company_b, _ = bootstrap_company(db, "Bravo")
+
+    created = create_agent(
+        db,
+        company_id=company_a.id,
+        payload=AiAgentCreate(
+            name="Agente Acme",
+            system_prompt="Prompt Acme.",
+            conversation_objective="Atender clientes de Acme.",
+            conversation_guide="1. Saluda 2. Captura datos.",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            active=True,
+        ),
+    )
+
+    assert list_agents(db, company_id=company_b.id) == []
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_agent(db, company_id=company_b.id, agent_id=created.id)
+    assert exc_info.value.status_code == 404
+
+    with pytest.raises(HTTPException) as exc_info:
+        update_agent(
+            db,
+            company_id=company_b.id,
+            agent_id=created.id,
+            payload=AiAgentUpdate(name="Intruso"),
+        )
+    assert exc_info.value.status_code == 404
+
+
+def test_default_system_prompt_is_exposed_from_backend_contract():
+    response = get_default_system_prompt()
+
+    assert "No inventes precios." in response.default_system_prompt
+    assert "No inventes disponibilidad." in response.default_system_prompt
+
+
+def test_ai_runtime_prompt_includes_agent_faq_and_interactive_context(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+
+    create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente comercial",
+            system_prompt="Prompt base de ventas para Acme.",
+            conversation_objective="Responder y convertir leads.",
+            conversation_guide="1. Saluda 2. Detecta necesidad 3. Ofrece siguiente paso.",
+            security_rules="No inventar precios ni stock.",
+            tone="cercano",
+            rules={
+                "auto_reply_enabled": True,
+                "model": "gpt-4o-mini",
+                "language": "espanol",
+            },
+            active=True,
+        ),
+    )
+    create_faq_entry(
+        db,
+        company_id=company.id,
+        payload=AiFaqEntryCreate(
+            question="Horarios",
+            answer="Atendemos de lunes a viernes de 8 a 6.",
+            active=True,
+        ),
+    )
+    create_interactive_template(
+        db,
+        company_id=company.id,
+        payload=AiInteractiveTemplateCreate(
+            name="Menu principal",
+            action_key="menu_principal",
+            body_text="Selecciona una opcion",
+            options=[AiInteractiveTemplateOption(id="menu_principal_opt_1", title="Productos")],
+            usage_instruction="Enviar despues de capturar datos.",
+            trigger_mode="after_capture",
+            trigger_fields=["nombre", "correo", "ciudad"],
+        ),
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"reply_text":"Hola, te ayudo con tu caso.","action":null,"captured_fields":{},"product_retailer_ids":[]}'
+                        }
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json=None, headers=None):
+            captured["payload"] = json or {}
+            return FakeResponse()
+
+    monkeypatch.setattr("app.ai.runtime.get_settings", lambda: SimpleNamespace(openai_api_key="test-key"))
+    monkeypatch.setattr(
+        "app.ai.runtime.evaluate_business_hours",
+        lambda *args, **kwargs: {
+            "timezone": "America/Bogota",
+            "day_type": "weekday",
+            "within_hours": True,
+            "window": {"start": "08:00", "end": "18:00"},
+            "outside_hours_behavior": "handoff",
+            "outside_hours_message": "Estamos fuera de horario.",
+            "handoff_message": "Te paso con un humano.",
+            "current_iso": "2026-06-25T10:00:00-05:00",
+        },
+    )
+    monkeypatch.setattr("app.ai.runtime.httpx.Client", FakeClient)
+
+    result = generate_auto_reply(
+        db,
+        company_id=company.id,
+        conversation=conversation,
+        incoming_text="Necesito ayuda con mi pedido",
+    )
+
+    assert result is not None
+    assert result.reply_text == "Hola, te ayudo con tu caso."
+    system_prompt = str(captured["payload"]["messages"][0]["content"])
+    assert "system_prompt:\nPrompt base de ventas para Acme." in system_prompt
+    assert "conversation_objective: Responder y convertir leads." in system_prompt
+    assert "conversation_guide:\n1. Saluda 2. Detecta necesidad 3. Ofrece siguiente paso." in system_prompt
+    assert "security_rules: No inventar precios ni stock." in system_prompt
+    assert "FAQ base:\n- Q: Horarios" in system_prompt
+    assert "Atendemos de lunes a viernes de 8 a 6." in system_prompt
+    assert "Biblioteca de interactivos disponible:" in system_prompt
+    assert "menu_principal" in system_prompt
+    assert "Enviar despues de capturar datos." in system_prompt
+    assert "No inventes precios ni stock." in system_prompt
+
+
+def test_ai_operational_config_roundtrip_and_publish(db):
+    company, _ = bootstrap_company(db, "Acme")
+    operational_config = {
+        "status": "draft",
+        "version": 1,
+        "published_at": None,
+        "draft": {
+            "security": {
+                "mandatory_guardrails": {
+                    "tenant_isolation": True,
+                    "payments_locked_to_backend": True,
+                    "inventory_reserved_by_backend": True,
+                    "no_invention": True,
+                    "no_manual_payment_confirmation": True,
+                },
+                "custom_rules": "No inventar disponibilidad.",
+            },
+            "schedule": {
+                "timezone": "America/Bogota",
+                "weekday": {"start": "09:00", "end": "17:00"},
+                "weekend": {"start": "10:00", "end": "13:00"},
+                "outside_hours_behavior": "handoff",
+                "inside_hours_behavior": "normal",
+                "outside_hours_message": "Fuera de horario.",
+                "handoff_message": "Derivando a humano.",
+            },
+            "autonomy": {
+                "allow_critical_actions": False,
+                "critical_intents": ["buy_product", "schedule_appointment"],
+                "min_confidence": "0.82",
+                "required_capture_fields": ["nombre", "correo"],
+            },
+            "escalation": {
+                "low_confidence": True,
+                "complaint": True,
+                "payment_failed": True,
+                "stock_uncertain": True,
+                "explicit_human_request": True,
+                "handoff_message": "Derivando a humano.",
+                "clarification_message": "Necesito mas datos.",
+            },
+            "policies": {
+                "shipping": "Envio 48h.",
+                "warranty": "Garantia 6 meses.",
+                "returns": "Cambios en 7 dias.",
+                "payments": "Transferencia y tarjeta.",
+            },
+            "priorities": {
+                "priority_categories": ["premium"],
+                "restricted_categories": ["adultos"],
+            },
+            "test_mode": {"enabled": True, "simulation_note": "Simulacion interna."},
+        },
+    }
+
+    created = create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda 2. Ayuda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config=operational_config,
+            active=True,
+        ),
+    )
+
+    config = get_operational_config(db, company_id=company.id, agent_id=created.id)
+    assert config.status == "draft"
+    assert config.draft["schedule"]["weekday"]["start"] == "09:00"
+    assert config.draft["security"]["mandatory_guardrails"]["no_invention"] is True
+
+    published = publish_operational_config_for_agent(db, company_id=company.id, agent_id=created.id)
+    reloaded = get_operational_config(db, company_id=company.id, agent_id=published.id)
+
+    assert reloaded.status == "published"
+    assert reloaded.version == 2
+    assert reloaded.published["schedule"]["weekday"]["end"] == "17:00"
+    assert reloaded.published["escalation"]["handoff_message"] == "Derivando a humano."
+
+
+def test_ai_operational_config_rejects_guardrail_disable(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_agent(
+            db,
+            company_id=company.id,
+            payload=AiAgentCreate(
+                name="Agente inseguro",
+                system_prompt="Prompt base.",
+                conversation_objective="Responder.",
+                conversation_guide="1. Saluda",
+                security_rules="No inventar datos.",
+                tone="cercano",
+                rules={"auto_reply_enabled": True},
+                operational_config={
+                    "draft": {
+                        "security": {
+                            "mandatory_guardrails": {
+                                "tenant_isolation": False,
+                                "payments_locked_to_backend": True,
+                                "inventory_reserved_by_backend": True,
+                                "no_invention": True,
+                                "no_manual_payment_confirmation": True,
+                            },
+                            "custom_rules": "",
+                        }
+                    }
+                },
+                active=True,
+            ),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "guardrails obligatorios" in str(exc_info.value.detail).lower()
+
+
+def test_generate_auto_reply_hands_off_outside_business_hours(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config={
+                "draft": {
+                    "schedule": {
+                        "timezone": "America/Bogota",
+                        "weekday": {"start": "09:00", "end": "17:00"},
+                        "weekend": {"start": "09:00", "end": "13:00"},
+                        "outside_hours_behavior": "handoff",
+                        "outside_hours_message": "Estamos fuera de horario.",
+                        "handoff_message": "Te paso con un humano.",
+                    }
+                }
+            },
+            active=True,
+        ),
+    )
+
+    monkeypatch.setattr("app.ai.runtime.get_settings", lambda: SimpleNamespace(openai_api_key="test-key"))
+    monkeypatch.setattr(
+        "app.ai.runtime.evaluate_business_hours",
+        lambda *args, **kwargs: {
+            "timezone": "America/Bogota",
+            "day_type": "weekday",
+            "within_hours": False,
+            "window": {"start": "09:00", "end": "17:00"},
+            "outside_hours_behavior": "handoff",
+            "outside_hours_message": "Estamos fuera de horario.",
+            "handoff_message": "Te paso con un humano.",
+            "current_iso": "2026-06-25T22:00:00-05:00",
+        },
+    )
+
+    result = generate_auto_reply(
+        db,
+        company_id=company.id,
+        conversation=conversation,
+        incoming_text="Hola",
+    )
+
+    assert result is not None
+    assert result.reply_text == "Estamos fuera de horario."
+    assert result.action is None
+
+
+def test_generate_auto_reply_escalates_low_confidence_critical_intent(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config={
+                "draft": {
+                    "autonomy": {
+                        "allow_critical_actions": False,
+                        "critical_intents": ["buy_product", "schedule_appointment"],
+                        "min_confidence": "0.95",
+                        "required_capture_fields": ["nombre", "correo"],
+                    },
+                    "escalation": {
+                        "low_confidence": True,
+                        "complaint": True,
+                        "payment_failed": True,
+                        "stock_uncertain": True,
+                        "explicit_human_request": True,
+                        "handoff_message": "Te paso con un humano.",
+                        "clarification_message": "Necesito confirmar algunos datos antes de avanzar.",
+                    },
+                }
+            },
+            active=True,
+        ),
+    )
+
+    monkeypatch.setattr("app.ai.runtime.get_settings", lambda: SimpleNamespace(openai_api_key="test-key"))
+    monkeypatch.setattr(
+        "app.ai.runtime.evaluate_business_hours",
+        lambda *args, **kwargs: {
+            "timezone": "America/Bogota",
+            "day_type": "weekday",
+            "within_hours": True,
+            "window": {"start": "09:00", "end": "17:00"},
+            "outside_hours_behavior": "handoff",
+            "outside_hours_message": "Estamos fuera de horario.",
+            "handoff_message": "Te paso con un humano.",
+            "current_iso": "2026-06-25T10:00:00-05:00",
+        },
+    )
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"reply_text":"Claro, te ayudo con la compra.","action":"menu_principal","captured_fields":{"nombre":"Ana"},"product_retailer_ids":["ret-1"]}'
+                        }
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.ai.runtime.httpx.Client", FakeClient)
+
+    result = generate_auto_reply(
+        db,
+        company_id=company.id,
+        conversation=conversation,
+        incoming_text="Quiero comprar",
+    )
+
+    assert result is not None
+    assert result.reply_text == "Necesito confirmar algunos datos antes de avanzar."
+    assert result.action is None
+    assert result.product_retailer_ids == []
+
+
+def test_operational_config_simulation_reports_handoff(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    agent = create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config={
+                "draft": {
+                    "schedule": {
+                        "timezone": "America/Bogota",
+                        "weekday": {"start": "09:00", "end": "17:00"},
+                        "weekend": {"start": "09:00", "end": "13:00"},
+                        "outside_hours_behavior": "handoff",
+                        "outside_hours_message": "Estamos fuera de horario.",
+                        "handoff_message": "Te paso con un humano.",
+                    },
+                    "autonomy": {
+                        "allow_critical_actions": False,
+                        "critical_intents": ["buy_product"],
+                        "min_confidence": "0.95",
+                        "required_capture_fields": ["nombre"],
+                    },
+                }
+            },
+            active=True,
+        ),
+    )
+
+    monkeypatch.setattr(
+        "app.ai.operational.evaluate_business_hours",
+        lambda *args, **kwargs: {
+            "timezone": "America/Bogota",
+            "day_type": "weekday",
+            "within_hours": False,
+            "window": {"start": "09:00", "end": "17:00"},
+            "outside_hours_behavior": "handoff",
+            "outside_hours_message": "Estamos fuera de horario.",
+            "handoff_message": "Te paso con un humano.",
+            "current_iso": "2026-06-25T22:00:00-05:00",
+        },
+    )
+
+    simulation = simulate_operational_config(
+        db,
+        company_id=company.id,
+        agent_id=agent.id,
+        message="Quiero comprar",
+    )
+
+    assert simulation.within_hours is False
+    assert simulation.requires_handoff is True
+    assert simulation.reason == "fuera de horario"
+    assert simulation.suggested_reply == "Estamos fuera de horario."
+
+
+def test_operational_config_simulation_uses_preview_payload(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    agent = create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config={
+                "draft": {
+                    "schedule": {
+                        "timezone": "America/Bogota",
+                        "weekday": {"start": "00:00", "end": "23:59"},
+                        "weekend": {"start": "09:00", "end": "13:00"},
+                        "outside_hours_behavior": "auto_reply",
+                        "outside_hours_message": "Estamos fuera de horario.",
+                        "handoff_message": "Te paso con un humano.",
+                    },
+                    "autonomy": {
+                        "allow_critical_actions": False,
+                        "critical_intents": ["buy_product"],
+                        "min_confidence": "0.95",
+                        "required_capture_fields": ["nombre"],
+                    },
+                }
+            },
+            active=True,
+        ),
+    )
+
+    def fake_evaluate_business_hours(operational_config, *, timezone_name, now=None):
+        section = operational_config.get("draft") if isinstance(operational_config, dict) else {}
+        schedule = section.get("schedule") if isinstance(section, dict) else {}
+        weekday = schedule.get("weekday") if isinstance(schedule, dict) else {}
+        is_preview = weekday.get("start") == "09:00"
+        return {
+            "timezone": timezone_name or "America/Bogota",
+            "day_type": "weekday",
+            "within_hours": not is_preview,
+            "window": {"start": "09:00", "end": "17:00"},
+            "outside_hours_behavior": "handoff" if is_preview else "auto_reply",
+            "outside_hours_message": "Estamos fuera de horario.",
+            "handoff_message": "Te paso con un humano.",
+            "current_iso": "2026-06-25T10:00:00-05:00",
+        }
+
+    monkeypatch.setattr("app.ai.operational.evaluate_business_hours", fake_evaluate_business_hours)
+
+    saved_simulation = simulate_operational_config(
+        db,
+        company_id=company.id,
+        agent_id=agent.id,
+        message="Hola",
+    )
+    preview_simulation = simulate_operational_config(
+        db,
+        company_id=company.id,
+        agent_id=agent.id,
+        message="Hola",
+        operational_config={
+            "draft": {
+                "schedule": {
+                    "timezone": "America/Bogota",
+                    "weekday": {"start": "09:00", "end": "17:00"},
+                    "weekend": {"start": "09:00", "end": "13:00"},
+                    "outside_hours_behavior": "handoff",
+                    "outside_hours_message": "Estamos fuera de horario.",
+                    "handoff_message": "Te paso con un humano.",
+                },
+                "autonomy": {
+                    "allow_critical_actions": False,
+                    "critical_intents": ["buy_product"],
+                    "min_confidence": "0.95",
+                    "required_capture_fields": ["nombre"],
+                },
+            }
+        },
+    )
+
+    assert saved_simulation.status == "draft"
+    assert preview_simulation.status == "draft"
+    assert saved_simulation.within_hours is True
+    assert saved_simulation.requires_handoff is False
+    assert preview_simulation.within_hours is False
+    assert preview_simulation.requires_handoff is True
+
+
+def test_operational_config_simulation_rejects_invalid_preview_guardrails(db):
+    company, _ = bootstrap_company(db, "Acme")
+    agent = create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config={
+                "draft": {
+                    "schedule": {
+                        "timezone": "America/Bogota",
+                        "weekday": {"start": "09:00", "end": "17:00"},
+                        "weekend": {"start": "09:00", "end": "13:00"},
+                        "outside_hours_behavior": "handoff",
+                        "outside_hours_message": "Estamos fuera de horario.",
+                        "handoff_message": "Te paso con un humano.",
+                    }
+                }
+            },
+            active=True,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        simulate_operational_config(
+            db,
+            company_id=company.id,
+            agent_id=agent.id,
+            message="Hola",
+            operational_config={
+                "draft": {
+                    "security": {
+                        "mandatory_guardrails": {
+                            "tenant_isolation": False,
+                            "payments_locked_to_backend": True,
+                            "inventory_reserved_by_backend": True,
+                            "no_invention": True,
+                            "no_manual_payment_confirmation": True,
+                        }
+                    }
+                }
+            },
+        )
+
+    assert exc_info.value.status_code == 422
+
+
+def test_funnel_configuration_persists_welcome_fields_and_steps(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    funnel = create_funnel(
+        db,
+        company_id=company.id,
+        payload=FunnelCreate(
+            name="Funnel de soporte",
+            description="Flujo para tickets y seguimiento.",
+            status="active",
+            is_default=False,
+            welcome_message="Hola, cuéntame tu caso.",
+            capture_fields=["Nombre", "Correo"],
+            assignment_criteria="Casos de soporte o reclamo",
+            steps=[
+                FunnelStepWrite(
+                    position=1,
+                    name="Escucha",
+                    code="escucha",
+                    prompt="Recibe el caso y resume el problema.",
+                    objectives=["Entender el problema"],
+                    transition_criteria="El cliente explica el motivo",
+                    status="active",
+                    config={"handoff": "support"},
+                )
+            ],
+        ),
+    )
+
+    assert funnel.welcome_message == "Hola, cuéntame tu caso."
+    assert funnel.capture_fields == ["Nombre", "Correo"]
+    assert funnel.assignment_criteria == "Casos de soporte o reclamo"
+    assert funnel.steps[0].objectives == ["Entender el problema"]
+    assert funnel.steps[0].config == {"handoff": "support"}
+
+
+def test_welcome_funnel_cannot_be_unset_as_default(db):
+    company, _ = bootstrap_company(db, "Acme")
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    renamed = update_funnel(
+        db,
+        company_id=company.id,
+        funnel_id=welcome_funnel.id,
+        payload=FunnelUpdate(name="Funnel VIP"),
+    )
+
+    assert renamed.id == welcome_funnel.id
+    assert renamed.system_key == "welcome"
+    assert renamed.name == "Funnel VIP"
+
+    with pytest.raises(HTTPException) as exc_info:
+        update_funnel(
+            db,
+            company_id=company.id,
+            funnel_id=renamed.id,
+            payload=FunnelUpdate(is_default=False),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "bienvenida" in str(exc_info.value.detail).lower()
+    reloaded = get_default_funnel(db, company_id=company.id)
+    assert reloaded.id == renamed.id
+    assert reloaded.is_default is True
+
+
+def test_welcome_funnel_cannot_be_set_inactive(db):
+    company, _ = bootstrap_company(db, "Acme")
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        update_funnel(
+            db,
+            company_id=company.id,
+            funnel_id=welcome_funnel.id,
+            payload=FunnelUpdate(status="inactive"),
+    )
+
+    assert exc_info.value.status_code == 422
+    assert "debe permanecer activo" in str(exc_info.value.detail).lower()
+
+
+def test_welcome_funnel_cannot_be_deleted(db):
+    company, _ = bootstrap_company(db, "Acme")
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        funnel_service.delete_funnel(db, company_id=company.id, funnel_id=welcome_funnel.id)
+
+    assert exc_info.value.status_code == 422
+    assert "funnel de bienvenida" in str(exc_info.value.detail).lower()
+    reloaded = get_default_funnel(db, company_id=company.id)
+    assert reloaded.id == welcome_funnel.id
+
+
+def test_custom_funnel_cannot_be_marked_as_default(db):
+    company, _ = bootstrap_company(db, "Acme")
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+    custom_funnel = create_funnel(
+        db,
+        company_id=company.id,
+        payload=FunnelCreate(
+            name="Funnel de soporte",
+            description="Flujo para tickets y seguimiento.",
+            status="active",
+            is_default=False,
+            welcome_message="Hola, cuéntame tu caso.",
+            capture_fields=["Nombre", "Correo"],
+            assignment_criteria="Casos de soporte o reclamo",
+            steps=[
+                FunnelStepWrite(
+                    position=1,
+                    name="Escucha",
+                    code="escucha",
+                    prompt="Recibe el caso y resume el problema.",
+                    objectives=["Entender el problema"],
+                    transition_criteria="El cliente explica el motivo",
+                    status="active",
+                    config={"handoff": "support"},
+                )
+            ],
+        ),
+    )
+
+    assert welcome_funnel.system_key == "welcome"
+    assert custom_funnel.system_key is None
+
+    with pytest.raises(HTTPException) as exc_info:
+        update_funnel(
+            db,
+            company_id=company.id,
+            funnel_id=custom_funnel.id,
+            payload=FunnelUpdate(is_default=True),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "bienvenida" in str(exc_info.value.detail).lower() or "predeterminado" in str(
+        exc_info.value.detail
+    ).lower()
+
+
+def test_legacy_renamed_welcome_funnel_is_repaired_without_duplication(db):
+    company, _ = bootstrap_company(db, "Acme")
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    renamed = update_funnel(
+        db,
+        company_id=company.id,
+        funnel_id=welcome_funnel.id,
+        payload=FunnelUpdate(name="Funnel VIP"),
+    )
+    renamed.system_key = None
+    renamed.is_default = False
+    db.commit()
+
+    repaired = ensure_welcome_funnel(db, company_id=company.id)
+
+    assert repaired.id == welcome_funnel.id
+    assert repaired.name == "Funnel VIP"
+    assert repaired.system_key == "welcome"
+    assert repaired.is_default is True
+    assert len(
+        list(
+            db.scalars(
+                select(SalesFunnel).where(
+                    SalesFunnel.company_id == company.id,
+                    SalesFunnel.is_default.is_(True),
+                )
+            )
+        )
+    ) == 1
+
+
+def test_legacy_step_code_collision_does_not_repair_custom_funnel_as_welcome(db):
+    company, _ = bootstrap_company(db, "Acme")
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+
+    update_funnel(
+        db,
+        company_id=company.id,
+        funnel_id=welcome_funnel.id,
+        payload=FunnelUpdate(
+            name="Funnel VIP",
+            welcome_message="Hola, cuentame tu caso.",
+            capture_fields=["Nombre", "Empresa"],
+            assignment_criteria="Atencion VIP",
+        ),
+    )
+    welcome_funnel.system_key = None
+    welcome_funnel.is_default = False
+    db.commit()
+
+    repaired = ensure_welcome_funnel(db, company_id=company.id)
+    funnels = list(
+        db.scalars(
+            select(SalesFunnel).where(SalesFunnel.company_id == company.id).order_by(SalesFunnel.created_at.asc())
+        )
+    )
+
+    assert repaired.system_key == "welcome"
+    assert repaired.id != welcome_funnel.id
+    assert welcome_funnel.system_key is None
+    assert welcome_funnel.name == "Funnel VIP"
+    assert repaired.welcome_message
+    assert repaired.capture_fields == ["Nombre", "Correo", "Ciudad"]
+    assert repaired.assignment_criteria
+    assert len([funnel for funnel in funnels if funnel.system_key == "welcome"]) == 1
+
+
+def test_legacy_duplicate_welcome_candidates_do_not_create_a_third_funnel(db):
+    company, _ = bootstrap_company(db, "Acme")
+    welcome_funnel = get_default_funnel(db, company_id=company.id)
+    duplicate = create_funnel(
+        db,
+        company_id=company.id,
+        payload=FunnelCreate(
+            name="Funnel de bienvenida legado",
+            description="Punto de entrada comercial para conversaciones nuevas.",
+            status="active",
+            is_default=False,
+            welcome_message="Hola, gracias por escribir. Soy el asistente de Swaflow. Para ayudarte mejor, cuentame tu nombre, correo y ciudad.",
+            capture_fields=["Nombre", "Correo", "Ciudad"],
+            assignment_criteria="Conversaciones nuevas o sin clasificacion comercial previa",
+            steps=[
+                FunnelStepWrite(
+                    position=1,
+                    name="Bienvenida",
+                    code="bienvenida",
+                    prompt=(
+                        "Saluda al cliente, agradece su contacto y presenta las opciones "
+                        "comerciales principales del tenant."
+                    ),
+                    objectives=["Saludar", "Detectar interes principal"],
+                    transition_criteria="El cliente responde con una necesidad o interes concreto.",
+                    status="active",
+                    config={"entry_point": True, "capture_fields": ["Nombre", "Correo", "Ciudad"]},
+                ),
+                FunnelStepWrite(
+                    position=2,
+                    name="Captura inicial",
+                    code="captura_inicial",
+                    prompt=(
+                        "Solicita solamente los datos que faltan: nombre, correo y ciudad. "
+                        "No repitas el telefono si ya viene desde WhatsApp."
+                    ),
+                    objectives=["Capturar datos iniciales", "Evitar pedir el telefono"],
+                    transition_criteria="Los datos iniciales estan completos o el cliente pide avanzar.",
+                    status="active",
+                    config={"required_fields": ["Nombre", "Correo", "Ciudad"]},
+                ),
+                FunnelStepWrite(
+                    position=3,
+                    name="Clasificacion comercial",
+                    code="clasificacion_comercial",
+                    prompt=(
+                        "Clasifica la intencion del cliente y decide el siguiente paso: "
+                        "comprar, consultar, agendar o pasar a humano."
+                    ),
+                    objectives=["Clasificar la intencion", "Elegir el siguiente flujo"],
+                    transition_criteria="La intencion comercial queda identificada.",
+                    status="active",
+                    config={"allowed_outcomes": ["comprar", "consultar", "agendar", "humano"]},
+                ),
+            ],
+        ),
+    )
+
+    welcome_funnel.system_key = None
+    welcome_funnel.is_default = False
+    duplicate.system_key = None
+    duplicate.is_default = False
+    db.commit()
+
+    repaired = ensure_welcome_funnel(db, company_id=company.id)
+    funnels = list(
+        db.scalars(
+            select(SalesFunnel)
+            .where(SalesFunnel.company_id == company.id)
+            .order_by(SalesFunnel.created_at.asc())
+        )
+    )
+
+    assert repaired.id in {welcome_funnel.id, duplicate.id}
+    assert len(funnels) == 2
+    assert len([funnel for funnel in funnels if funnel.system_key == "welcome"]) == 1
+    assert sum(1 for funnel in funnels if funnel.is_default) == 1
+
+
+def test_get_funnel_returns_404_for_other_tenant(db):
+    company, _ = bootstrap_company(db, "Acme")
+    other_company, _ = bootstrap_company(db, "Other")
+    funnel = get_default_funnel(db, company_id=company.id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        get_funnel(db, company_id=other_company.id, funnel_id=funnel.id)
+
+    assert exc_info.value.status_code == 404
+
+
+def test_order_flow_writes_audit_logs(db):
+    company, _ = bootstrap_company(db, "Acme")
+    product = Product(
+        company_id=company.id,
+        name="Producto 1",
+        sku="SKU-1",
+        price=Decimal("100.00"),
+        currency="COP",
+        status="active",
+    )
+    contact = Contact(
+        company_id=company.id,
+        name="Cliente Uno",
+        phone="+573001112233",
+    )
+    db.add_all([product, contact])
+    db.commit()
+    inventory = Inventory(
+        company_id=company.id,
+        product_id=product.id,
+        quantity_available=10,
+        quantity_reserved=0,
+    )
+    db.add(inventory)
+    db.commit()
+
+    order = create_order(
+        db,
+        company_id=company.id,
+        payload=OrderCreate(
+            contact_id=contact.id,
+            conversation_id=None,
+            items=[OrderItemCreate(product_id=product.id, quantity=1)],
+        ),
+    )
+    order = generate_payment_link(db, company_id=company.id, order_id=order.id)
+    mark_paid_by_reference(db, payment_reference=order.payment_reference or "", provider="mock")
+
+    actions = [log.action for log in list_audit_logs(db, company_id=company.id, limit=50, offset=0)]
+    assert "order.created" in actions
+    assert "order.payment_link_generated" in actions
+    assert "order.paid" in actions
 
 
 def test_login_works_without_company_id_and_user_can_change_password(db):
@@ -89,6 +1672,155 @@ def test_login_works_without_company_id_and_user_can_change_password(db):
 
     assert authenticate_user(db, email=owner.email, password="super-secret") is None
     assert authenticate_user(db, email=owner.email, password="new-super-secret") == owner
+
+
+def test_current_user_payload_includes_company_branding(db):
+    company, owner = bootstrap_company(db, "Acme")
+    company.logo_url = "https://cdn.example.com/acme/logo.svg"
+    company.banner_url = "https://cdn.example.com/acme/banner.png"
+    company.profile_url = "https://cdn.example.com/acme/profile.jpg"
+    db.commit()
+
+    payload = build_current_user_payload(owner)
+
+    assert payload["company_logo_url"] == "https://cdn.example.com/acme/logo.svg"
+    assert payload["company_banner_url"] == "https://cdn.example.com/acme/banner.png"
+    assert payload["company_profile_url"] == "https://cdn.example.com/acme/profile.jpg"
+
+
+def test_company_profile_update_persists_configuration_fields(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    updated = update_company(
+        db,
+        company_id=company.id,
+        current_company_id=company.id,
+        payload=CompanyUpdate(
+            name="Acme Comercial",
+            contact_email="contacto@acme.com",
+            contact_phone="+57 300 111 2233",
+            currency="COP",
+            timezone="America/Bogota",
+            business_mode="mixed",
+            logo_url="https://cdn.example.com/acme/logo.svg",
+            banner_url="https://cdn.example.com/acme/banner.png",
+            profile_url="https://cdn.example.com/acme/profile.jpg",
+        ),
+    )
+
+    assert updated.name == "Acme Comercial"
+    assert updated.contact_email == "contacto@acme.com"
+    assert updated.contact_phone == "+57 300 111 2233"
+    assert updated.currency == "COP"
+    assert updated.timezone == "America/Bogota"
+    assert updated.business_mode == "mixed"
+    assert updated.logo_url == "https://cdn.example.com/acme/logo.svg"
+    assert updated.banner_url == "https://cdn.example.com/acme/banner.png"
+    assert updated.profile_url == "https://cdn.example.com/acme/profile.jpg"
+
+    reloaded = db.scalar(select(Company).where(Company.id == company.id))
+    assert reloaded is not None
+    assert reloaded.name == "Acme Comercial"
+    assert reloaded.business_mode == "mixed"
+    assert reloaded.logo_url == "https://cdn.example.com/acme/logo.svg"
+    assert reloaded.banner_url == "https://cdn.example.com/acme/banner.png"
+    assert reloaded.profile_url == "https://cdn.example.com/acme/profile.jpg"
+
+
+def test_company_profile_update_preserves_legacy_business_mode_values(db):
+    company, _ = bootstrap_company(db, "Acme")
+    company.business_mode = "legacy"
+    db.commit()
+
+    updated = update_company(
+        db,
+        company_id=company.id,
+        current_company_id=company.id,
+        payload=CompanyUpdate(
+            name="Acme Comercial",
+            business_mode="legacy",
+        ),
+    )
+
+    assert updated.name == "Acme Comercial"
+    assert updated.business_mode == "legacy"
+
+
+def test_company_profile_update_rejects_unknown_business_mode_values(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    with pytest.raises(HTTPException) as exc:
+        update_company(
+            db,
+            company_id=company.id,
+            current_company_id=company.id,
+            payload=CompanyUpdate(
+                name="Acme Comercial",
+                business_mode="inventado",
+            ),
+        )
+
+    assert exc.value.status_code == 422
+
+
+def test_company_profile_cross_tenant_access_returns_404(db):
+    company_a, _ = bootstrap_company(db, "Acme")
+    company_b, _ = bootstrap_company(db, "Beta")
+
+    with pytest.raises(HTTPException) as exc:
+        update_company(
+            db,
+            company_id=company_a.id,
+            current_company_id=company_b.id,
+            payload=CompanyUpdate(
+                name="Acme Comercial",
+            ),
+        )
+    assert exc.value.status_code == 404
+
+
+def test_company_profile_read_is_tenant_scoped(db):
+    company, _ = bootstrap_company(db, "Acme")
+    company.logo_url = "https://cdn.example.com/acme/logo.svg"
+    company.banner_url = "https://cdn.example.com/acme/banner.png"
+    company.profile_url = "https://cdn.example.com/acme/profile.jpg"
+    db.commit()
+
+    loaded = service.get_company_for_user(
+        db,
+        company_id=company.id,
+        current_company_id=company.id,
+    )
+
+    assert loaded.logo_url == "https://cdn.example.com/acme/logo.svg"
+    assert loaded.banner_url == "https://cdn.example.com/acme/banner.png"
+    assert loaded.profile_url == "https://cdn.example.com/acme/profile.jpg"
+
+    other_company, _ = bootstrap_company(db, "Beta")
+    with pytest.raises(HTTPException) as exc:
+        service.get_company_for_user(
+            db,
+            company_id=company.id,
+            current_company_id=other_company.id,
+        )
+    assert exc.value.status_code == 404
+
+
+def test_company_profile_same_tenant_agent_access_returns_404(db):
+    company, _ = bootstrap_company(db, "Acme")
+    agent = User(
+        company_id=company.id,
+        name="Agente Acme",
+        email="agent@acme.example.com",
+        password_hash="not-used",
+        role="agent",
+    )
+    db.add(agent)
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc:
+        service.require_company_profile_access(agent)
+    assert exc.value.status_code == 403
 
 
 def test_superadmin_access_can_cross_tenant_scope(db):
@@ -168,6 +1900,441 @@ def test_order_flow_reserves_stock_and_settles_payment(db):
     assert paid_order.status == "paid"
     assert inventory.quantity_available == 3
     assert inventory.quantity_reserved == 0
+
+
+def test_payment_integration_requires_provider_and_webhook_secret_when_active(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_integration(
+            db,
+            company_id=company.id,
+            payload=IntegrationCreate(
+                type="payments",
+                credentials=json.dumps({"private_key": "pk_test"}),
+                config={
+                    "environment": "sandbox",
+                    "currency": "COP",
+                    "payment_link_ttl_minutes": "45",
+                },
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Payment provider is required" in str(exc_info.value.detail)
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_integration(
+            db,
+            company_id=company.id,
+            payload=IntegrationCreate(
+                type="payments",
+                credentials=json.dumps({"private_key": "pk_test"}),
+                config={
+                    "provider": "wompi",
+                    "environment": "sandbox",
+                    "currency": "COP",
+                    "payment_link_ttl_minutes": "45",
+                },
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Wompi events secret is required" in str(exc_info.value.detail)
+
+    integration = create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="payments",
+            credentials=json.dumps(
+                {"private_key": "pk_test", "events_secret": "evt_test"}
+            ),
+            config={
+                "provider": "wompi",
+                "environment": "sandbox",
+                "currency": "COP",
+                "payment_link_ttl_minutes": "45",
+            },
+        ),
+    )
+
+    stored = db.scalar(select(CompanyIntegration).where(CompanyIntegration.id == integration.id))
+    assert stored is not None
+    assert json.loads(decrypt_secret(stored.credentials_encrypted or "{}")) == {
+        "private_key": "pk_test",
+        "events_secret": "evt_test",
+    }
+
+    updated = update_integration(
+        db,
+        company_id=company.id,
+        integration_id=integration.id,
+        payload=IntegrationUpdate(
+            config={
+                "provider": "wompi",
+                "environment": "sandbox",
+                "currency": "COP",
+                "payment_link_ttl_minutes": "90",
+            }
+        ),
+    )
+    assert updated.status == "active"
+    assert updated.config["payment_link_ttl_minutes"] == "90"
+    assert json.loads(decrypt_secret(updated.credentials_encrypted or "{}")) == {
+        "private_key": "pk_test",
+        "events_secret": "evt_test",
+    }
+
+
+def test_audit_logs_redact_integration_secrets(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    integration = create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="payments",
+            credentials=json.dumps(
+                {"private_key": "pk_test", "events_secret": "evt_test"}
+            ),
+            config={
+                "provider": "wompi",
+                "environment": "sandbox",
+                "currency": "COP",
+            },
+        ),
+    )
+
+    update_integration(
+        db,
+        company_id=company.id,
+        integration_id=integration.id,
+        payload=IntegrationUpdate(
+            credentials=json.dumps(
+                {"private_key": "pk_test_2", "events_secret": "evt_test_2"}
+            )
+        ),
+    )
+
+    integration_log = next(
+        log for log in list_audit_logs(db, company_id=company.id, limit=10, offset=0)
+        if log.action == "integration.updated"
+    )
+    assert "credentials" not in integration_log.metadata_json
+    assert "secret_token" not in integration_log.metadata_json
+
+    webhook = create_outbound_webhook(
+        db,
+        company_id=company.id,
+        payload=OutboundWebhookCreate(
+            event_type="order.paid",
+            target_url="https://example.com/webhooks/orders",
+            secret_token="initial-secret",
+            active=True,
+        ),
+    )
+
+    update_outbound_webhook(
+        db,
+        company_id=company.id,
+        webhook_id=webhook.id,
+        payload=OutboundWebhookUpdate(secret_token="rotated-secret"),
+    )
+
+    webhook_log = next(
+        log for log in list_audit_logs(db, company_id=company.id, limit=10, offset=0)
+        if log.action == "outbound_webhook.updated"
+    )
+    assert "credentials" not in webhook_log.metadata_json
+    assert "secret_token" not in webhook_log.metadata_json
+
+
+def test_payment_link_ttl_applies_custom_and_default_values(db, monkeypatch):
+    captured_ttls: list[int] = []
+
+    def fake_create_payment_link(**kwargs):
+        expires_in_minutes = kwargs["expires_in_minutes"]
+        captured_ttls.append(expires_in_minutes)
+        reference = kwargs["reference"]
+        return SimpleNamespace(
+            url=f"https://checkout.example/{reference}",
+            reference=reference,
+            link_id=f"link-{reference[:8]}",
+            expires_at=datetime.now(UTC) + timedelta(minutes=expires_in_minutes),
+            raw={"reference": reference},
+        )
+
+    monkeypatch.setattr("app.payments.contract.create_wompi_payment_link", fake_create_payment_link)
+
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente Demo", phone="573000000000")
+    product = Product(
+        company_id=company.id,
+        name="Camiseta negra",
+        sku="CAM-NEG",
+        price=Decimal("80000.00"),
+        currency="COP",
+    )
+    db.add_all([contact, product])
+    db.flush()
+    db.add(Inventory(company_id=company.id, product_id=product.id, quantity_available=5))
+    db.commit()
+
+    create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="payments",
+            credentials=json.dumps(
+                {"private_key": "pk_test", "events_secret": "evt_test"}
+            ),
+            config={
+                "provider": "wompi",
+                "environment": "sandbox",
+                "currency": "COP",
+                "payment_link_ttl_minutes": "45",
+            },
+        ),
+    )
+    order = create_order(
+        db,
+        company_id=company.id,
+        payload=OrderCreate(
+            contact_id=contact.id,
+            items=[OrderItemCreate(product_id=product.id, quantity=1)],
+        ),
+    )
+    order = generate_payment_link(db, company_id=company.id, order_id=order.id)
+    assert captured_ttls[-1] == 45
+    assert order.payment_provider == "wompi"
+    assert order.payment_link == f"https://checkout.example/{order.payment_reference}"
+
+    company_default, _ = bootstrap_company(db, "Beta")
+    contact_default = Contact(
+        company_id=company_default.id,
+        name="Cliente Beta",
+        phone="573000000001",
+    )
+    product_default = Product(
+        company_id=company_default.id,
+        name="Pantalon",
+        sku="PAN-01",
+        price=Decimal("65000.00"),
+        currency="COP",
+    )
+    db.add_all([contact_default, product_default])
+    db.flush()
+    db.add(
+        Inventory(
+            company_id=company_default.id,
+            product_id=product_default.id,
+            quantity_available=3,
+        )
+    )
+    db.commit()
+
+    create_integration(
+        db,
+        company_id=company_default.id,
+        payload=IntegrationCreate(
+            type="payments",
+            credentials=json.dumps(
+                {"private_key": "pk_beta", "events_secret": "evt_beta"}
+            ),
+            config={
+                "provider": "wompi",
+                "environment": "sandbox",
+                "currency": "COP",
+            },
+        ),
+    )
+    order_default = create_order(
+        db,
+        company_id=company_default.id,
+        payload=OrderCreate(
+            contact_id=contact_default.id,
+            items=[OrderItemCreate(product_id=product_default.id, quantity=1)],
+        ),
+    )
+    order_default = generate_payment_link(
+        db,
+        company_id=company_default.id,
+        order_id=order_default.id,
+    )
+    assert captured_ttls[-1] == 120
+    assert order_default.payment_provider == "wompi"
+    assert order_default.payment_link == f"https://checkout.example/{order_default.payment_reference}"
+
+
+def test_payment_webhook_idempotency_ignores_duplicate_transaction_ids(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente Demo", phone="573000000000")
+    product = Product(
+        company_id=company.id,
+        name="Camiseta negra",
+        sku="CAM-NEG",
+        price=Decimal("80000.00"),
+        currency="COP",
+    )
+    db.add_all([contact, product])
+    db.flush()
+    inventory = Inventory(company_id=company.id, product_id=product.id, quantity_available=5)
+    db.add(inventory)
+    db.commit()
+
+    create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="payments",
+            credentials=json.dumps(
+                {"private_key": "pk_test", "events_secret": "evt_test"}
+            ),
+            config={
+                "provider": "wompi",
+                "environment": "sandbox",
+                "currency": "COP",
+            },
+        ),
+    )
+
+    monkeypatch.setattr("app.payments.contract.verify_event_checksum", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        "app.payments.contract.create_wompi_payment_link",
+        lambda **kwargs: SimpleNamespace(
+            url=f"https://checkout.example/{kwargs['reference']}",
+            reference=kwargs["reference"],
+            link_id="link-123",
+            expires_at=datetime.now(UTC) + timedelta(minutes=120),
+            raw={"reference": kwargs["reference"]},
+        ),
+    )
+
+    order = create_order(
+        db,
+        company_id=company.id,
+        payload=OrderCreate(
+            contact_id=contact.id,
+            items=[OrderItemCreate(product_id=product.id, quantity=2)],
+        ),
+    )
+    order = generate_payment_link(db, company_id=company.id, order_id=order.id)
+
+    payload = {
+        "data": {
+            "transaction": {
+                "id": "txn-123",
+                "reference": order.payment_reference,
+                "status": "approved",
+                "payment_link_id": "link-123",
+            }
+        }
+    }
+
+    first = process_payment_webhook(db, provider="wompi", payload=payload, header_checksum="sig")
+    assert first.status == "processed"
+    assert inventory.quantity_available == 3
+    assert inventory.quantity_reserved == 0
+
+    second = process_payment_webhook(db, provider="wompi", payload=payload, header_checksum="sig")
+    assert second.status == "ignored"
+    assert inventory.quantity_available == 3
+    assert inventory.quantity_reserved == 0
+
+    stored_order = db.scalar(select(Order).where(Order.id == order.id))
+    assert stored_order is not None
+    assert stored_order.metadata_json["payment"]["transaction_id"] == "txn-123"
+    assert stored_order.metadata_json["payment"]["processed_transaction_ids"] == ["txn-123"]
+
+
+def test_mock_payment_webhook_ignores_duplicate_reference_without_transaction_id(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente Demo", phone="573000000000")
+    product = Product(
+        company_id=company.id,
+        name="Gorra",
+        sku="GOR-01",
+        price=Decimal("35000.00"),
+        currency="COP",
+    )
+    db.add_all([contact, product])
+    db.flush()
+    inventory = Inventory(company_id=company.id, product_id=product.id, quantity_available=4)
+    db.add(inventory)
+    db.commit()
+
+    order = create_order(
+        db,
+        company_id=company.id,
+        payload=OrderCreate(
+            contact_id=contact.id,
+            items=[OrderItemCreate(product_id=product.id, quantity=1)],
+        ),
+    )
+    order = generate_payment_link(db, company_id=company.id, order_id=order.id)
+
+    payload = {
+        "payment_reference": order.payment_reference,
+        "status": "paid",
+        "provider": "mock",
+    }
+
+    first = process_payment_webhook(db, provider="mock", payload=payload)
+    assert first.status == "processed"
+    assert inventory.quantity_available == 3
+    assert inventory.quantity_reserved == 0
+
+    second = process_payment_webhook(db, provider="mock", payload=payload)
+    assert second.status == "ignored"
+    assert inventory.quantity_available == 3
+    assert inventory.quantity_reserved == 0
+
+    stored_order = db.scalar(select(Order).where(Order.id == order.id))
+    assert stored_order is not None
+    assert stored_order.metadata_json["payment"]["processed_payment_references"] == [
+        order.payment_reference
+    ]
+
+
+def test_payment_webhook_ignores_mismatched_provider_for_same_reference(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente Demo", phone="573000000000")
+    product = Product(
+        company_id=company.id,
+        name="Sudadera",
+        sku="SUD-01",
+        price=Decimal("95000.00"),
+        currency="COP",
+    )
+    db.add_all([contact, product])
+    db.flush()
+    inventory = Inventory(company_id=company.id, product_id=product.id, quantity_available=2)
+    db.add(inventory)
+    db.commit()
+
+    order = create_order(
+        db,
+        company_id=company.id,
+        payload=OrderCreate(
+            contact_id=contact.id,
+            items=[OrderItemCreate(product_id=product.id, quantity=1)],
+        ),
+    )
+    order = generate_payment_link(db, company_id=company.id, order_id=order.id)
+
+    payload = {
+        "payment_reference": order.payment_reference,
+        "status": "paid",
+        "provider": "mercado_pago",
+    }
+
+    response = process_payment_webhook(db, provider="mercado_pago", payload=payload)
+    assert response.status == "ignored"
+    assert inventory.quantity_available == 2
+    assert inventory.quantity_reserved == 1
+
+    stored_order = db.scalar(select(Order).where(Order.id == order.id))
+    assert stored_order is not None
+    assert stored_order.status == "waiting_payment"
 
 
 def test_inventory_listing_creates_missing_rows_for_tenant_products(db):
@@ -679,7 +2846,7 @@ def test_meta_request_includes_error_data_details(monkeypatch):
     monkeypatch.setattr("app.whatsapp.service.httpx.Client", FakeClient)
 
     with pytest.raises(HTTPException) as error:
-        _meta_request("POST", "/messages", access_token="token")
+        _meta_request("POST", "/api/v1/messages", access_token="token")
 
     assert error.value.detail == "(#131009) Parameter value is not valid: product not found"
 
@@ -959,3 +3126,9 @@ def test_selected_interactive_option_resolves_its_source_menu():
     )
 
     assert action_key == "menu_principal"
+
+
+def test_companies_routes_module_imports():
+    from app.companies import routes
+
+    assert routes.router.prefix == "/companies"

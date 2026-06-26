@@ -7,6 +7,7 @@ from app.core.models import IdMixin, TenantMixin, TimestampMixin
 
 class AiAgent(Base, IdMixin, TenantMixin, TimestampMixin):
     __tablename__ = "ai_agents"
+    __table_args__ = (UniqueConstraint("company_id", name="uq_ai_agents_company"),)
 
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False)
@@ -16,6 +17,18 @@ class AiAgent(Base, IdMixin, TenantMixin, TimestampMixin):
     tone: Mapped[str | None] = mapped_column(String(100))
     rules: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    @property
+    def operational_config(self) -> dict:
+        rules = self.rules if isinstance(self.rules, dict) else {}
+        operational = rules.get("operational")
+        return operational if isinstance(operational, dict) else {}
+
+    @property
+    def operational_status(self) -> str:
+        operational = self.operational_config
+        status = operational.get("status")
+        return status if isinstance(status, str) else "draft"
 
 
 class AiInteractiveTemplate(Base, IdMixin, TenantMixin, TimestampMixin):

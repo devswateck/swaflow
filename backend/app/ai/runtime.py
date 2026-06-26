@@ -9,11 +9,19 @@ from uuid import UUID
 
 import httpx
 from sqlalchemy import and_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.ai.models import AiAgent, AiFaqEntry, AiInteractiveTemplate
+from app.ai.intent_classifier import classify_intent
+from app.ai.operational import (
+    build_operational_config,
+    evaluate_business_hours,
+    get_effective_operational_section,
+    summarize_operational_config,
+)
 from app.companies.models import Company
 from app.conversations.models import Conversation
+from app.funnels.models import SalesFunnel
 from app.inventory.models import Inventory
 from app.messages.models import Message
 from app.products.models import Product
@@ -318,10 +326,6 @@ def generate_auto_reply(
     incoming_interactive_reply: dict | None = None,
 ) -> AutoReplyResult | None:
     settings = get_settings()
-    if not settings.openai_api_key:
-        logger.warning("AI auto-reply skipped: OPENAI_API_KEY is empty")
-        return None
-
     agent = _get_active_agent(db, company_id=company_id)
     if agent is None:
         logger.info("AI auto-reply skipped: no active agent for company_id=%s", company_id)
@@ -334,12 +338,23 @@ def generate_auto_reply(
 
     company = db.scalar(select(Company).where(Company.id == company_id))
     company_name = company.name if company else "la empresa"
+    timezone_name = company.timezone if company else None
+    operational_config = build_operational_config(rules, fallback_timezone=timezone_name)
+    operational_section = get_effective_operational_section(operational_config)
+    hours = evaluate_business_hours(
+        operational_config,
+        timezone_name=timezone_name,
+    )
+    autonomy = operational_section.get("autonomy", {}) if isinstance(operational_section, dict) else {}
+    escalation = operational_section.get("escalation", {}) if isinstance(operational_section, dict) else {}
+    schedule = (
+        f"{hours['day_type']} {hours['window']['start']}-{hours['window']['end']} ({hours['timezone']})"
+    )
     model = str(rules.get("model") or "gpt-4o-mini")
     temperature = float(rules.get("temperature") or 0.4)
     max_tokens = int(rules.get("max_tokens") or 350)
     language = _as_text(rules.get("language"), default="espanol")
     personality = _as_text(rules.get("personality"))
-    schedule = _as_text(rules.get("schedule"))
     welcome_message = _as_text(rules.get("welcome_message"))
     business_description = _as_text(rules.get("business_description"))
     products_services = _as_text(rules.get("products_services"))
@@ -357,8 +372,26 @@ def generate_auto_reply(
     handoff_rule = _as_text(rules.get("handoff_rule"))
     knowledge_sources = _as_text(rules.get("knowledge_sources"))
     guardrails = _as_text(rules.get("guardrails"))
-    security_rules = _as_text(agent.security_rules, default=guardrails)
+    security_rules = _as_text(
+        agent.security_rules,
+        default=_as_text(operational_section.get("security", {}).get("custom_rules"), default=guardrails),
+    )
     tone = _as_text(agent.tone or rules.get("tone"), default="profesional cercano")
+    funnel = None
+    if conversation.funnel_id:
+        funnel = db.scalar(
+            select(SalesFunnel)
+            .where(
+                SalesFunnel.company_id == company_id,
+                SalesFunnel.id == conversation.funnel_id,
+            )
+            .options(selectinload(SalesFunnel.steps))
+        )
+    funnel_name = funnel.name if funnel else ""
+    funnel_assignment_criteria = _as_text(funnel.assignment_criteria if funnel else "")
+    funnel_welcome_message = _as_text(funnel.welcome_message if funnel else "")
+    funnel_capture_fields = list(funnel.capture_fields) if funnel and isinstance(funnel.capture_fields, list) else []
+    funnel_step_names = [step.name for step in funnel.steps] if funnel and funnel.steps else []
     customer_messages = _customer_message_count(
         db, company_id=company_id, conversation_id=conversation.id
     )
@@ -368,6 +401,7 @@ def generate_auto_reply(
 
     first_contact = customer_messages <= 1
     greeting_message = use_welcome_on_greeting and _is_greeting(incoming_text)
+    intent = classify_intent(incoming_text)
     available_action_templates = _list_active_action_templates(
         db, company_id=company_id
     )
@@ -390,6 +424,45 @@ def generate_auto_reply(
         else ""
     )
 
+    critical_intents = set(_as_list(autonomy.get("critical_intents"))) or {
+        "buy_product",
+        "schedule_appointment",
+        "request_human",
+        "complaint",
+    }
+    required_capture_fields = {
+        field.lower()
+        for field in _as_list(autonomy.get("required_capture_fields"))
+    }
+    if not settings.openai_api_key:
+        logger.warning("AI auto-reply skipped: OPENAI_API_KEY is empty")
+        if not hours["within_hours"] and hours["outside_hours_behavior"] == "handoff":
+            return AutoReplyResult(
+                reply_text=hours["outside_hours_message"] or escalation.get("handoff_message") or "Te paso con una persona del equipo.",
+                action=None,
+                is_first_contact=first_contact,
+            )
+        if intent.intent in {"request_human", "complaint"}:
+            return AutoReplyResult(
+                reply_text=escalation.get("handoff_message") or "Te paso con una persona del equipo.",
+                action=None,
+                is_first_contact=first_contact,
+            )
+        return None
+
+    if not hours["within_hours"] and hours["outside_hours_behavior"] == "handoff":
+        return AutoReplyResult(
+            reply_text=hours["outside_hours_message"] or escalation.get("handoff_message") or "Te paso con una persona del equipo.",
+            action=None,
+            is_first_contact=first_contact,
+        )
+    if intent.intent in {"request_human", "complaint"}:
+        return AutoReplyResult(
+            reply_text=escalation.get("handoff_message") or "Te paso con una persona del equipo.",
+            action=None,
+            is_first_contact=first_contact,
+        )
+
     system_prompt = (
         "Configuracion obligatoria del agente desde ai_agents. Esta seccion tiene prioridad sobre "
         "catalogo, FAQ, historial y cualquier contexto auxiliar:\n"
@@ -406,12 +479,16 @@ def generate_auto_reply(
         f"Horario operativo: {schedule or 'sin restriccion'}\n"
         f"Descripcion del negocio: {business_description or 'no definida'}\n"
         f"Productos/servicios declarados: {products_services or 'no definidos'}\n"
+        f"Funnel activo: {funnel_name or 'sin funnel asignado'}\n"
+        f"Criterio de asignacion del funnel: {funnel_assignment_criteria or 'no definido'}\n"
         f"Fuentes de conocimiento: {knowledge_sources or 'catalogo y mensajes del tenant'}\n"
         f"{_build_faq_context(db, company_id=company_id)}\n"
-        f"Campos a capturar: {', '.join(capture_fields) if capture_fields else 'sin campos obligatorios'}\n"
-        f"Pasos del funnel: {', '.join(funnel_steps) if funnel_steps else 'sin pasos definidos'}\n"
+        f"Campos a capturar: {', '.join(capture_fields or funnel_capture_fields) if (capture_fields or funnel_capture_fields) else 'sin campos obligatorios'}\n"
+        f"Pasos del funnel: {', '.join(funnel_steps or funnel_step_names) if (funnel_steps or funnel_step_names) else 'sin pasos definidos'}\n"
         f"Criterio de handoff: {handoff_rule or 'cuando el cliente pida humano'}\n"
-        f"Mensaje de bienvenida recomendado: {welcome_message or 'no definido'}\n"
+        f"Mensaje de bienvenida recomendado: {welcome_message or funnel_welcome_message or 'no definido'}\n"
+        "Configuracion operativa publicada o de borrador segun el estado del agente:\n"
+        f"{summarize_operational_config(operational_config, timezone_name=timezone_name)}\n\n"
         f"{_build_catalog_context(db, company_id=company_id)}\n\n"
         f"{_build_interactive_actions_context(available_action_templates)}\n\n"
         f"{interactive_selection_context}"
@@ -427,6 +504,7 @@ def generate_auto_reply(
         "- Mensajes cortos (maximo 4 lineas) orientados a conversion.\n"
         "- Usa el catalogo solo como fuente interna. No listes productos, precios ni catalogo completo en el saludo.\n"
         "- En primer contacto o saludo, respeta la apertura del prompt del agente y no recomiendes productos hasta que el cliente elija una opcion o pregunte por productos.\n"
+        "- Si existe un funnel de bienvenida, usa su mensaje inicial, campos de captura y pasos como contexto operativo antes de responder.\n"
         "- La biblioteca de interactivos es el contrato de acciones del tenant. Cuando el prompt del agente o una regla_de_uso solicite enviar un menu, boton o lista, usa action con su action_key exacto. No redactes manualmente las opciones de esa plantilla en reply_text.\n"
         "- Interpreta frases como 'envia el interactivo menu_principal' o 'muestra la lista servicios' usando el action_key exacto disponible en la biblioteca.\n"
         "- Evalua la regla_de_uso de cada interactivo en cada turno. Si corresponde enviarlo, responde con su action_key exacto.\n"
@@ -528,11 +606,26 @@ def generate_auto_reply(
                 action,
             )
             action = None
+        if (
+            intent.intent in critical_intents
+            and (
+                intent.confidence < float(autonomy.get("min_confidence") or 0.75)
+                or not _as_bool(autonomy.get("allow_critical_actions"), default=False)
+                or (required_capture_fields and not required_capture_fields.issubset(set(captured_fields)))
+            )
+        ):
+            reply_text = (
+                escalation.get("clarification_message")
+                or escalation.get("handoff_message")
+                or "Necesito un poco mas de informacion para ayudarte mejor."
+            )
+            action = None
+            product_retailer_ids = []
         if first_contact and greeting_message:
             action = None
             product_retailer_ids = []
-            if welcome_message:
-                reply_text = welcome_message
+            if welcome_message or funnel_welcome_message:
+                reply_text = welcome_message or funnel_welcome_message
         if reply_text:
             return AutoReplyResult(
                 reply_text=reply_text,

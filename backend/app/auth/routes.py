@@ -2,7 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.auth.schemas import CurrentUserRead, LoginRequest, PasswordChangeRequest, TokenResponse
-from app.auth.service import authenticate_user, build_token, change_own_password, get_current_user
+from app.auth.service import (
+    authenticate_user,
+    build_current_user_payload,
+    build_token,
+    change_own_password,
+    get_current_user,
+)
 from app.core.database import get_db
 from app.core.schemas import MessageResponse
 from app.users.models import User
@@ -32,8 +38,8 @@ def refresh(current_user: User = Depends(get_current_user)) -> TokenResponse:
 
 
 @router.get("/me", response_model=CurrentUserRead)
-def me(current_user: User = Depends(get_current_user)) -> User:
-    return current_user
+def me(current_user: User = Depends(get_current_user)) -> dict[str, object]:
+    return build_current_user_payload(current_user)
 
 
 @router.post("/password", response_model=MessageResponse)
@@ -42,5 +48,5 @@ def change_password(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> MessageResponse:
-    change_own_password(db, user=current_user, payload=payload)
+    change_own_password(db, user=current_user, payload=payload, actor_user=current_user)
     return MessageResponse(detail="Password updated")

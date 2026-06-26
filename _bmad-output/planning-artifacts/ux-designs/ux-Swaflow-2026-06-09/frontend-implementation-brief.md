@@ -14,7 +14,7 @@ sources:
 
 # Brief de implementacion frontend
 
-Usar `DESIGN.md` y `EXPERIENCE.md` como contrato UX. Este brief traduce esos spines a una primera pasada practica para el frontend.
+Usar `DESIGN.md`, `EXPERIENCE.md` y `../architecture/swaflow-frontend-architecture.md` como contrato. Este brief traduce esos spines a una primera pasada practica para el frontend, pero no autoriza implementacion hasta que arquitectura y UX esten cerrados.
 
 ## Alcance de primera pasada
 
@@ -31,6 +31,10 @@ Usar `DESIGN.md` y `EXPERIENCE.md` como contrato UX. Este brief traduce esos spi
 - `frontend/tailwind.config.ts` - sistema actual de tokens verdes.
 - `frontend/src/lib/api.ts` - helper API y manejo de errores.
 - `frontend/src/lib/auth.ts` - store de auth y token.
+
+## Gate de arquitectura
+
+Antes de tocar codigo, revisar y aprobar `../architecture/swaflow-frontend-architecture.md`. Ese documento define la secuencia correcta de shell, tokens, Dashboard e Inbox, y aclara que la historia visual no debe saltar directamente a implementacion.
 
 ## Orden de implementacion
 
@@ -104,7 +108,7 @@ Usar `DESIGN.md` y `EXPERIENCE.md` como contrato UX. Este brief traduce esos spi
 - Navegacion esta agrupada y es mas escaneable.
 - Dark mode sigue funcionando y se siente intencional.
 - Dark mode es el tema inicial por defecto.
-- Texto cabe en botones, nav items, cards y filas de chat en mobile y desktop.
+- Texto cabe en botones, nav items, cards y filas de chat en desktop.
 - Botones solo-icono tienen nombres accesibles.
 - `npm run build` pasa.
 - `npm run lint` pasa o se documentan issues preexistentes.

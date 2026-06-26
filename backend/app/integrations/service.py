@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.crypto import decrypt_secret, encrypt_secret
+from app.audit.service import record_audit
 from app.integrations.models import CompanyIntegration, OutboundWebhook
 from app.integrations.schemas import (
     IntegrationCreate,
@@ -13,6 +14,7 @@ from app.integrations.schemas import (
     OutboundWebhookCreate,
     OutboundWebhookUpdate,
 )
+from app.payments.contract import validate_payment_integration_config
 
 
 def list_integrations(db: Session, *, company_id: UUID) -> list[CompanyIntegration]:
@@ -26,8 +28,18 @@ def list_integrations(db: Session, *, company_id: UUID) -> list[CompanyIntegrati
 
 
 def create_integration(
-    db: Session, *, company_id: UUID, payload: IntegrationCreate
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: IntegrationCreate,
+    actor_user=None,
 ) -> CompanyIntegration:
+    if payload.type == "payments":
+        validate_payment_integration_config(
+            config=payload.config,
+            credentials_raw=payload.credentials,
+            integration_status="active",
+        )
     integration = CompanyIntegration(
         company_id=company_id,
         type=payload.type,
@@ -35,6 +47,16 @@ def create_integration(
         config=payload.config,
     )
     db.add(integration)
+    record_audit(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="integration.created",
+        entity_type="integration",
+        summary="Integration created",
+        entity_id=integration.id,
+        metadata={"type": payload.type, "status": "active"},
+    )
     db.commit()
     db.refresh(integration)
     return integration
@@ -64,6 +86,13 @@ def _merge_secret_payload(current: str | None, incoming: str) -> str:
     return json.dumps(current_data)
 
 
+def _safe_audit_metadata(data: dict) -> dict:
+    safe_data = dict(data)
+    safe_data.pop("credentials", None)
+    safe_data.pop("secret_token", None)
+    return safe_data
+
+
 def get_integration(db: Session, *, company_id: UUID, integration_id: UUID) -> CompanyIntegration:
     integration = db.scalar(
         select(CompanyIntegration).where(
@@ -77,10 +106,34 @@ def get_integration(db: Session, *, company_id: UUID, integration_id: UUID) -> C
 
 
 def update_integration(
-    db: Session, *, company_id: UUID, integration_id: UUID, payload: IntegrationUpdate
+    db: Session,
+    *,
+    company_id: UUID,
+    integration_id: UUID,
+    payload: IntegrationUpdate,
+    actor_user=None,
 ) -> CompanyIntegration:
     integration = get_integration(db, company_id=company_id, integration_id=integration_id)
     data = payload.model_dump(exclude_unset=True)
+    next_config = data.get("config") if data.get("config") is not None else integration.config
+    if isinstance(next_config, dict) is False:
+        next_config = integration.config if isinstance(integration.config, dict) else {}
+    next_status = str(data.get("status") or integration.status or "active")
+    next_credentials_raw: str | None
+    if "credentials" in data:
+        credentials = data.get("credentials")
+        if credentials:
+            next_credentials_raw = _merge_secret_payload(integration.credentials_encrypted, credentials)
+        else:
+            next_credentials_raw = None
+    else:
+        next_credentials_raw = decrypt_secret(integration.credentials_encrypted) if integration.credentials_encrypted else None
+    if integration.type == "payments":
+        validate_payment_integration_config(
+            config=next_config,
+            credentials_raw=next_credentials_raw,
+            integration_status=next_status,
+        )
     if "credentials" in data:
         credentials = data.pop("credentials")
         if credentials:
@@ -91,6 +144,16 @@ def update_integration(
             integration.credentials_encrypted = None
     for field, value in data.items():
         setattr(integration, field, value)
+    record_audit(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="integration.updated",
+        entity_type="integration",
+        entity_id=integration.id,
+        summary="Integration updated",
+        metadata=_safe_audit_metadata(payload.model_dump(exclude_unset=True)),
+    )
     db.commit()
     db.refresh(integration)
     return integration
@@ -107,7 +170,11 @@ def list_outbound_webhooks(db: Session, *, company_id: UUID) -> list[OutboundWeb
 
 
 def create_outbound_webhook(
-    db: Session, *, company_id: UUID, payload: OutboundWebhookCreate
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: OutboundWebhookCreate,
+    actor_user=None,
 ) -> OutboundWebhook:
     webhook = OutboundWebhook(
         company_id=company_id,
@@ -117,6 +184,16 @@ def create_outbound_webhook(
         active=payload.active,
     )
     db.add(webhook)
+    record_audit(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="outbound_webhook.created",
+        entity_type="outbound_webhook",
+        entity_id=webhook.id,
+        summary="Outbound webhook created",
+        metadata={"event_type": payload.event_type, "target_url": str(payload.target_url)},
+    )
     db.commit()
     db.refresh(webhook)
     return webhook
@@ -135,7 +212,12 @@ def get_outbound_webhook(db: Session, *, company_id: UUID, webhook_id: UUID) -> 
 
 
 def update_outbound_webhook(
-    db: Session, *, company_id: UUID, webhook_id: UUID, payload: OutboundWebhookUpdate
+    db: Session,
+    *,
+    company_id: UUID,
+    webhook_id: UUID,
+    payload: OutboundWebhookUpdate,
+    actor_user=None,
 ) -> OutboundWebhook:
     webhook = get_outbound_webhook(db, company_id=company_id, webhook_id=webhook_id)
     data = payload.model_dump(exclude_unset=True)
@@ -146,12 +228,38 @@ def update_outbound_webhook(
         data["target_url"] = str(data["target_url"])
     for field, value in data.items():
         setattr(webhook, field, value)
+    record_audit(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="outbound_webhook.updated",
+        entity_type="outbound_webhook",
+        entity_id=webhook.id,
+        summary="Outbound webhook updated",
+        metadata=_safe_audit_metadata(payload.model_dump(exclude_unset=True)),
+    )
     db.commit()
     db.refresh(webhook)
     return webhook
 
 
-def delete_outbound_webhook(db: Session, *, company_id: UUID, webhook_id: UUID) -> None:
+def delete_outbound_webhook(
+    db: Session,
+    *,
+    company_id: UUID,
+    webhook_id: UUID,
+    actor_user=None,
+) -> None:
     webhook = get_outbound_webhook(db, company_id=company_id, webhook_id=webhook_id)
+    record_audit(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="outbound_webhook.deleted",
+        entity_type="outbound_webhook",
+        entity_id=webhook.id,
+        summary="Outbound webhook deleted",
+        metadata={"event_type": webhook.event_type, "target_url": webhook.target_url},
+    )
     db.delete(webhook)
     db.commit()

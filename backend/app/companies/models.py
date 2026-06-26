@@ -10,6 +10,13 @@ class Company(Base, IdMixin, TimestampMixin):
 
     name: Mapped[str] = mapped_column(String(150), nullable=False)
     status: Mapped[str] = mapped_column(String(30), nullable=False, default="active")
+    contact_email: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    timezone: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    business_mode: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    logo_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    banner_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    profile_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
 
     users: Mapped[list["User"]] = relationship(back_populates="company")
-

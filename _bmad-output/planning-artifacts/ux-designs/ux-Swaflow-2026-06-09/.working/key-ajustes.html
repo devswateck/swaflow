@@ -1,0 +1,861 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SWAFLOW - Ajustes</title>
+  <style>
+    :root{
+      --bg:#0b0614;
+      --panel:#151023;
+      --panel-2:#1a1129;
+      --panel-3:#211833;
+      --line:#332646;
+      --ink:#f8f2ff;
+      --muted:#bfb5d1;
+      --muted-2:#8e7ea8;
+      --magenta:#ff3de8;
+      --violet:#a855f7;
+      --cyan:#0891b2;
+      --amber:#f59e0b;
+      --success:#22c55e;
+      --shadow:0 24px 60px rgba(0,0,0,.34);
+      --r-lg:18px;
+      --font:Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:
+        radial-gradient(circle at 16% 0%, rgba(255,61,232,.12), transparent 24%),
+        radial-gradient(circle at 90% 10%, rgba(168,85,247,.15), transparent 22%),
+        linear-gradient(180deg, #0e0817 0%, #0b0614 100%);
+      color:var(--ink);
+      font-family:var(--font);
+      -webkit-font-smoothing:antialiased;
+      text-rendering:optimizeLegibility;
+    }
+    *:focus-visible{outline:2px solid rgba(255,61,232,.45);outline-offset:2px}
+    .frame{
+      width:min(1460px, calc(100vw - 32px));
+      min-height:calc(100vh - 32px);
+      margin:16px auto;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:28px;
+      overflow:hidden;
+      background:rgba(9,5,17,.72);
+      box-shadow:var(--shadow);
+      display:grid;
+      grid-template-columns:280px 1fr;
+      align-items:start;
+    }
+    .sidebar{
+      background:linear-gradient(180deg, #0b0614 0%, #120b1d 100%);
+      border-right:1px solid rgba(255,255,255,.06);
+      padding:22px 18px;
+      position:sticky;
+      top:16px;
+      height:calc(100vh - 32px);
+      overflow:auto;
+    }
+    .lockup{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+    .mark{
+      width:44px;height:44px;border-radius:14px;
+      background:linear-gradient(135deg, var(--magenta), var(--violet));
+      position:relative;
+      box-shadow:0 0 0 1px rgba(255,255,255,.05) inset;
+    }
+    .mark:before,.mark:after{
+      content:"";
+      position:absolute;
+      background:#fff;
+      opacity:.92;
+      border-radius:999px;
+    }
+    .mark:before{inset:10px 11px 24px 11px}
+    .mark:after{left:11px;right:11px;bottom:11px;height:5px}
+    .brand{
+      line-height:1.02;
+      letter-spacing:.12em;
+      font-size:12px;
+      font-weight:800;
+    }
+    .brand span{display:block;color:var(--muted);font-size:10px;letter-spacing:.16em;margin-top:3px}
+    .group{margin-top:18px;color:var(--muted-2);font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+    .nav{display:grid;gap:6px;margin-top:10px}
+    .nav a{
+      text-decoration:none;
+      color:var(--muted);
+      padding:11px 12px;
+      border-radius:12px;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      border:1px solid transparent;
+    }
+    .nav a.active{
+      color:var(--ink);
+      background:var(--panel-3);
+      border-color:rgba(255,61,232,.24);
+      box-shadow:inset 3px 0 0 var(--magenta);
+    }
+    .nav a:hover{background:rgba(255,255,255,.04)}
+    .pill{
+      font-size:11px;
+      padding:4px 8px;
+      border-radius:999px;
+      background:rgba(255,255,255,.06);
+      color:var(--ink);
+    }
+    .content{padding:22px}
+    .topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom:18px;
+    }
+    .title h1{margin:0;font-size:26px;line-height:1.15;letter-spacing:-.02em}
+    .title p{margin:4px 0 0;color:var(--muted);font-size:14px}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .search,.btn{
+      border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.04);
+      color:var(--ink);
+      border-radius:12px;
+      height:42px;
+    }
+    .search{
+      min-width:190px;
+      padding:0 14px;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      color:var(--muted);
+      font-size:13px;
+    }
+    .btn{padding:0 14px;font-weight:700}
+    .btn.primary{
+      background:linear-gradient(135deg, var(--magenta), var(--violet));
+      border-color:transparent;
+    }
+    .shell{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) minmax(420px, 520px);
+      gap:14px;
+      align-items:start;
+    }
+    .stack{display:grid;gap:14px}
+    .card{
+      background:linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+      border:1px solid rgba(255,255,255,.07);
+      border-radius:var(--r-lg);
+      padding:16px;
+      box-shadow:0 14px 28px rgba(0,0,0,.18);
+    }
+    .section-title{
+      display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px
+    }
+    .section-title h2{margin:0;font-size:15px;letter-spacing:.01em}
+    .section-title span{font-size:12px;color:var(--muted)}
+    .badge{
+      padding:8px 10px;
+      border-radius:999px;
+      background:rgba(255,255,255,.06);
+      color:var(--ink);
+      font-size:11px;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:.08em;
+    }
+    .badge.ok{background:rgba(34,197,94,.12);color:#7ef0a1}
+    .badge.warn{background:rgba(245,158,11,.12);color:#ffd07a}
+    .badge.gray{background:rgba(255,255,255,.06);color:var(--muted)}
+    .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .grid-4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+    .field label{
+      display:block;
+      margin-bottom:8px;
+      color:var(--muted);
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+    }
+    .input,.select,.textarea{
+      width:100%;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      background:#100b1c;
+      color:var(--ink);
+      font-size:14px;
+      padding:0 14px;
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .input,.select{height:42px}
+    .textarea{
+      min-height:104px;
+      padding:12px 14px;
+      resize:vertical;
+      line-height:1.45;
+    }
+    .input::placeholder,.textarea::placeholder{color:#9d92b3}
+    .row{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:14px;
+    }
+    .preview-grid{
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:12px;
+    }
+    .preview{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:12px;
+    }
+    .preview .head{
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      align-items:center;
+      margin-bottom:10px;
+      font-size:12px;
+      color:var(--muted);
+      text-transform:uppercase;
+      letter-spacing:.12em;
+    }
+    .preview .box{
+      min-height:96px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,.08);
+      background:
+        linear-gradient(135deg, rgba(255,61,232,.12), rgba(168,85,247,.12)),
+        rgba(255,255,255,.03);
+      display:grid;
+      place-items:center;
+      color:var(--ink);
+      font-size:13px;
+      text-align:center;
+      padding:14px;
+    }
+    .preview .url{font-size:12px;color:var(--magenta);word-break:break-all;margin-top:10px;line-height:1.45}
+    .user-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:14px;
+    }
+    .users-layout{
+      display:grid;
+      grid-template-columns:minmax(0,1.1fr) minmax(0,.9fr);
+      gap:14px;
+      align-items:start;
+    }
+    .users-summary{
+      display:grid;
+      grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:10px;
+      margin-bottom:14px;
+    }
+    .users-module{
+      padding:18px;
+    }
+    .users-module .section-title{
+      margin-bottom:12px;
+    }
+    .users-hero{
+      display:grid;
+      gap:8px;
+      margin-bottom:14px;
+      padding:14px;
+      border-radius:16px;
+      border:1px solid rgba(255,255,255,.06);
+      background:
+        linear-gradient(135deg, rgba(255,61,232,.12), rgba(168,85,247,.08)),
+        rgba(255,255,255,.03);
+    }
+    .users-hero .eyebrow{
+      font-size:11px;
+      color:var(--muted);
+      text-transform:uppercase;
+      letter-spacing:.12em;
+      font-weight:700;
+    }
+    .users-hero h3{
+      margin:0;
+      font-size:18px;
+      line-height:1.15;
+      letter-spacing:-.01em;
+    }
+    .users-hero p{
+      margin:0;
+      color:var(--muted);
+      font-size:13px;
+      line-height:1.5;
+    }
+    .users-kpis{
+      display:grid;
+      grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:10px;
+      margin-bottom:14px;
+    }
+    .users-kpi{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:12px 14px;
+      display:grid;
+      gap:6px;
+    }
+    .users-kpi span{
+      font-size:11px;
+      color:var(--muted);
+      text-transform:uppercase;
+      letter-spacing:.12em;
+      font-weight:700;
+    }
+    .users-kpi strong{
+      font-size:18px;
+      line-height:1.1;
+      color:var(--ink);
+    }
+    .users-kpi em{
+      font-style:normal;
+      color:var(--muted);
+      font-size:12px;
+      line-height:1.35;
+    }
+    .users-stack{display:grid;gap:14px}
+    .users-panel{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:14px;
+    }
+    .users-panel .panel-head{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:12px;
+      margin-bottom:12px;
+    }
+    .users-panel .panel-head strong{font-size:15px}
+    .users-panel .panel-head .meta{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45}
+    .users-panel .panel-head .tag{white-space:nowrap}
+    .compact-form{
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:12px;
+    }
+    .users-form-grid{
+      grid-template-columns:repeat(2,minmax(0,1fr));
+    }
+    .compact-form .field{min-width:0}
+    .compact-form .span-3{grid-column:1/-1}
+    .compact-form .span-2{grid-column:span 2}
+    .compact-form .span-1{grid-column:span 1}
+    .users-actions{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:14px;
+    }
+    .users-actions .hint{margin:0}
+    .users-list-card{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:14px;
+    }
+    .users-list-card .table-wrap{margin-top:12px}
+    .users-list-card table{min-width:0}
+    .users-list-card thead th,
+    .users-list-card tbody td{
+      padding-left:12px;
+      padding-right:12px;
+    }
+    .users-list-card tbody td:last-child{
+      white-space:nowrap;
+    }
+    .users-module .module-grid{
+      grid-template-columns:repeat(2,minmax(0,1fr));
+    }
+    .permission-panels{
+      display:grid;
+      grid-template-columns:1fr;
+      gap:14px;
+    }
+    .permission-box{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:14px;
+    }
+    .permission-box .section-title{
+      margin-bottom:12px;
+    }
+    .permission-box .section-title h2{font-size:14px}
+    .permission-box .section-title span{font-size:12px}
+    .user-card{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:14px;
+    }
+    .user-card .top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+    .user-card strong{font-size:14px}
+    .user-card .meta{font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45}
+    .user-card .tag{display:inline-flex;padding:7px 10px;border-radius:999px;background:rgba(34,197,94,.12);color:#7ef0a1;font-size:12px;font-weight:700}
+    .table-wrap{
+      overflow:auto;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+    }
+    table{width:100%;border-collapse:collapse;min-width:640px}
+    thead th{
+      text-align:left;
+      font-size:11px;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+      color:var(--muted);
+      padding:14px 16px;
+      border-bottom:1px solid rgba(255,255,255,.06);
+    }
+    tbody td{
+      padding:16px;
+      border-bottom:1px solid rgba(255,255,255,.05);
+      font-size:14px;
+      color:var(--ink);
+    }
+    tbody tr:last-child td{border-bottom:none}
+    .module-grid{
+      display:grid;
+      grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:10px;
+    }
+    .module{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:14px;
+      background:rgba(255,255,255,.03);
+      padding:12px 14px;
+    }
+    .module .name{display:block;font-size:13px;font-weight:700}
+    .module .desc{display:block;font-size:12px;color:var(--muted);margin-top:4px;line-height:1.45}
+    .module input{margin-right:8px}
+    .summary{display:grid;gap:10px}
+    .summary-chip{
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:14px;
+      background:rgba(255,255,255,.03);
+      padding:12px 14px;
+      font-size:13px;
+    }
+    .summary-chip span{color:var(--muted)}
+    .overview-chip{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:12px 14px;
+      display:grid;
+      gap:6px;
+    }
+    .overview-chip span{
+      font-size:11px;
+      color:var(--muted);
+      text-transform:uppercase;
+      letter-spacing:.12em;
+      font-weight:700;
+    }
+    .overview-chip strong{
+      font-size:18px;
+      line-height:1.1;
+      color:var(--ink);
+    }
+    .overview-chip em{
+      font-style:normal;
+      color:var(--muted);
+      font-size:12px;
+      line-height:1.35;
+    }
+    .users-list{
+      margin-bottom:14px;
+    }
+    .notice{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:14px;
+      font-size:12px;
+      color:var(--muted);
+      line-height:1.5;
+    }
+    .notice strong{color:var(--ink)}
+    .right-card{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:14px;
+    }
+    .right-card strong{
+      display:block;
+      font-size:12px;
+      color:var(--magenta);
+      text-transform:uppercase;
+      letter-spacing:.08em;
+      margin-bottom:6px;
+    }
+    .right-card span{display:block;font-size:13px;line-height:1.5;word-break:break-word}
+    @media (max-width:1180px){
+      .frame{grid-template-columns:1fr}
+      .sidebar{display:none}
+      .shell,.grid-2,.grid-3,.grid-4,.preview-grid,.user-grid,.module-grid,.users-layout,.users-summary,.users-kpis,.permission-panels,.compact-form{grid-template-columns:1fr}
+      .users-form-grid{grid-template-columns:1fr}
+      .users-list-card table{min-width:640px}
+    }
+    @media (max-width:720px){
+      .frame{width:100vw;min-height:100vh;margin:0;border-radius:0}
+      .content{padding:16px}
+      .topbar{flex-direction:column;align-items:stretch}
+      .controls{width:100%}
+      .search,.btn{width:100%}
+      .search{min-width:0}
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <aside class="sidebar">
+      <div class="lockup">
+        <div class="mark" aria-hidden="true"></div>
+        <div class="brand">SWAFLOW<span>Tactical innovation</span></div>
+      </div>
+      <div class="group">Operacion</div>
+      <nav class="nav">
+        <a href="#"><span>Dashboard</span></a>
+        <a href="#"><span>Inbox</span></a>
+      </nav>
+      <div class="group">Comercio</div>
+      <nav class="nav">
+        <a href="#"><span>Productos</span></a>
+        <a href="#"><span>Inventario</span></a>
+        <a href="#"><span>Ordenes</span></a>
+        <a href="#"><span>Citas</span></a>
+      </nav>
+      <div class="group">Automatizacion</div>
+      <nav class="nav">
+        <a href="#"><span>IA</span></a>
+        <a href="#"><span>Funnels</span></a>
+        <a href="#"><span>WhatsApp</span></a>
+        <a href="#"><span>Integraciones</span></a>
+      </nav>
+      <div class="group">Administracion</div>
+      <nav class="nav">
+        <a class="active" href="#"><span>Ajustes</span><span class="pill">Tenant</span></a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div class="title">
+          <h1>Ajustes</h1>
+          <p>Tenant, usuarios, roles y entorno operativo.</p>
+        </div>
+        <div class="controls">
+          <div class="search">⌕ Buscar usuario</div>
+          <button class="btn">Actualizar</button>
+          <button class="btn primary">Guardar perfil</button>
+          <div class="badge ok">Owner</div>
+        </div>
+      </header>
+
+      <div class="shell">
+        <section class="stack">
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Empresa</h2>
+                <span>Perfil del tenant visible en produccion</span>
+              </div>
+              <div class="badge gray">company_id</div>
+            </div>
+            <div class="grid-3">
+              <div class="field">
+                <label>Nombre comercial</label>
+                <input class="input" value="Swaflow" placeholder="Nombre visible del tenant" />
+              </div>
+              <div class="field">
+                <label>Correo de contacto</label>
+                <input class="input" value="contacto@swaflow.com" placeholder="contacto@empresa.com" />
+              </div>
+              <div class="field">
+                <label>Telefono de contacto</label>
+                <input class="input" value="+57 300 000 0000" placeholder="+57 300 000 0000" />
+              </div>
+              <div class="field">
+                <label>Moneda principal</label>
+                <input class="input" value="COP" placeholder="COP" />
+              </div>
+              <div class="field">
+                <label>Zona horaria</label>
+                <input class="input" value="America/Bogota" placeholder="America/Bogota" />
+              </div>
+              <div class="field">
+                <label>Modo de negocio</label>
+                <select class="select">
+                  <option>Sin configurar</option>
+                  <option>Venta de productos</option>
+                  <option>Agendamiento de citas</option>
+                  <option>Mixto</option>
+                </select>
+              </div>
+            </div>
+            <div class="row">
+              <div class="hint">Si existe un valor heredado, la UI lo muestra como modo legado antes de normalizarlo.</div>
+              <button class="btn primary">Guardar perfil</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Branding visual</h2>
+                <span>URLs reales del logo, banner y perfil</span>
+              </div>
+            </div>
+            <div class="grid-3">
+              <div class="field">
+                <label>Logo visible del shell</label>
+                <input class="input" value="https://cdn.ejemplo.com/logo.svg" />
+              </div>
+              <div class="field">
+                <label>Banner para comunicaciones</label>
+                <input class="input" value="https://cdn.ejemplo.com/banner.png" />
+              </div>
+              <div class="field">
+                <label>Perfil para comunicaciones</label>
+                <input class="input" value="https://cdn.ejemplo.com/profile.jpg" />
+              </div>
+            </div>
+            <div class="preview-grid" style="margin-top:12px">
+              <div class="preview">
+                <div class="head"><span>Logo</span><span>URL guardada</span></div>
+                <div class="box">Sin logo configurado para el shell.</div>
+                <div class="url">https://cdn.ejemplo.com/logo.svg</div>
+              </div>
+              <div class="preview">
+                <div class="head"><span>Banner</span><span>URL guardada</span></div>
+                <div class="box">Sin banner configurado para comunicaciones operativas.</div>
+                <div class="url">https://cdn.ejemplo.com/banner.png</div>
+              </div>
+              <div class="preview">
+                <div class="head"><span>Perfil</span><span>URL guardada</span></div>
+                <div class="box">Sin perfil visual configurado para comunicaciones operativas.</div>
+                <div class="url">https://cdn.ejemplo.com/profile.jpg</div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Cuenta</h2>
+                <span>Lectura rapida del usuario actual</span>
+              </div>
+            </div>
+            <div class="grid-4">
+              <div class="field">
+                <label>Nombre</label>
+                <input class="input" value="Superusuario Swateck" />
+              </div>
+              <div class="field">
+                <label>Usuario</label>
+                <input class="input" value="admin@swateck.com" />
+              </div>
+              <div class="field">
+                <label>Rol actual</label>
+                <input class="input" value="superadmin" />
+              </div>
+              <div class="field">
+                <label>Estado</label>
+                <input class="input" value="active" />
+              </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Seguridad</h2>
+                <span>Cambio de contrasena</span>
+              </div>
+            </div>
+            <div class="grid-3">
+              <div class="field">
+                <label>Contrasena actual</label>
+                <input class="input" value="" />
+              </div>
+              <div class="field">
+                <label>Nueva contrasena</label>
+                <input class="input" value="" />
+              </div>
+              <div class="field">
+                <label>Confirmar</label>
+                <input class="input" value="" />
+              </div>
+            </div>
+            <div class="row">
+              <div class="hint">El frontend valida coincidencia antes de enviar el cambio a `/auth/password`.</div>
+              <button class="btn primary">Actualizar contrasena</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Preferencias de cuenta</h2>
+                <span>Ajustes globales del tenant</span>
+              </div>
+            </div>
+            <div class="hint">Las preferencias que aparecen en la vista de produccion siguen siendo las del shell, notificaciones y aislamiento por tenant.</div>
+          </article>
+        </section>
+
+        <aside class="stack">
+          <article class="card users-module">
+            <div class="section-title">
+              <div>
+                <h2>Usuarios y accesos</h2>
+                <span>Alta, edicion y permisos del tenant en una columna amplia</span>
+              </div>
+              <div class="badge gray">3 usuarios activos</div>
+            </div>
+
+            <div class="users-hero">
+              <div class="eyebrow">Creacion destacada</div>
+              <h3>Usa todo el ancho del panel para crear usuarios</h3>
+              <p>
+                El bloque prioriza identidad, rol, estado y contrasena en una sola vista. Los
+                permisos quedan debajo como parte del mismo flujo, sin fragmentar la lectura.
+              </p>
+            </div>
+
+            <div class="users-kpis">
+              <div class="users-kpi">
+                <span>Activos</span>
+                <strong>3</strong>
+                <em>Todos los accesos base habilitados</em>
+              </div>
+              <div class="users-kpi">
+                <span>Inactivos</span>
+                <strong>0</strong>
+                <em>Sin cuentas pausadas en el tenant</em>
+              </div>
+              <div class="users-kpi">
+                <span>Roles altos</span>
+                <strong>2</strong>
+                <em>Owner y superadmin con acceso total</em>
+              </div>
+              <div class="users-kpi">
+                <span>Control</span>
+                <strong>Listo</strong>
+                <em>Crear, editar o revocar acceso desde este bloque</em>
+              </div>
+            </div>
+
+            <div class="users-panel">
+              <div class="panel-head">
+                <div>
+                  <strong>Alta y edicion</strong>
+                  <div class="meta">Completa el formulario para crear o actualizar acceso del tenant</div>
+                </div>
+                <span class="tag">detail</span>
+              </div>
+              <div class="compact-form users-form-grid">
+                <div class="field span-1">
+                  <label>Nombre completo</label>
+                  <input class="input" value="" placeholder="Nombre y apellido" />
+                </div>
+                <div class="field span-1">
+                  <label>Correo</label>
+                  <input class="input" value="" placeholder="correo@dominio.com" />
+                </div>
+                <div class="field">
+                  <label>Rol</label>
+                  <select class="select">
+                    <option>Agente</option>
+                    <option>Lector</option>
+                    <option>Administrador</option>
+                    <option>Propietario</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label>Estado</label>
+                  <select class="select">
+                    <option>Activo</option>
+                    <option>Inactivo</option>
+                  </select>
+                </div>
+                <div class="field span-2">
+                  <label>Contrasena temporal</label>
+                  <input class="input" value="" />
+                </div>
+              </div>
+              <div class="users-actions">
+                <div class="hint">Si cambias a un rol privilegiado, el backend conserva acceso total por diseno.</div>
+                <button class="btn primary">Crear usuario</button>
+              </div>
+            </div>
+
+            <div class="permission-panels" style="margin-top:14px">
+              <div class="permission-box">
+                <div class="section-title">
+                  <div>
+                    <h2 style="font-size:14px">Acceso base</h2>
+                    <span>Activado por defecto al crear usuarios adicionales</span>
+                  </div>
+                </div>
+                <div class="module-grid">
+                  <label class="module"><input type="checkbox" checked disabled /><span class="name">Dashboard</span><span class="desc">Resumen operativo y metricas del tenant.</span></label>
+                  <label class="module"><input type="checkbox" checked disabled /><span class="name">Inbox</span><span class="desc">Conversaciones, handoff y seguimiento humano.</span></label>
+                  <label class="module"><input type="checkbox" checked disabled /><span class="name">Productos</span><span class="desc">Catalogo y disponibilidad comercial.</span></label>
+                  <label class="module"><input type="checkbox" checked disabled /><span class="name">Inventario</span><span class="desc">Stock disponible, reservado y ajustes.</span></label>
+                  <label class="module"><input type="checkbox" checked disabled /><span class="name">Ordenes</span><span class="desc">Pedidos, estados y links de pago.</span></label>
+                  <label class="module"><input type="checkbox" checked disabled /><span class="name">Citas</span><span class="desc">Agenda operativa del tenant.</span></label>
+                </div>
+              </div>
+              <div class="permission-box">
+                <div class="section-title">
+                  <div>
+                    <h2 style="font-size:14px">Acceso restringido</h2>
+                    <span>Se habilita por modulo adicional</span>
+                  </div>
+                </div>
+                <div class="module-grid">
+                  <label class="module"><input type="checkbox" /><span class="name">WhatsApp</span><span class="desc">Cuenta Cloud API, webhooks y envios salientes.</span></label>
+                  <label class="module"><input type="checkbox" /><span class="name">IA</span><span class="desc">Agente, FAQs, templates e intents.</span></label>
+                  <label class="module"><input type="checkbox" /><span class="name">Funnels</span><span class="desc">Configuracion y edicion de embudos.</span></label>
+                  <label class="module"><input type="checkbox" /><span class="name">Integraciones</span><span class="desc">Calendario, correo, n8n y webhooks.</span></label>
+                  <label class="module"><input type="checkbox" /><span class="name">Configuracion</span><span class="desc">Perfil del tenant, usuarios y seguridad.</span></label>
+                </div>
+              </div>
+            </div>
+          </article>
+
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

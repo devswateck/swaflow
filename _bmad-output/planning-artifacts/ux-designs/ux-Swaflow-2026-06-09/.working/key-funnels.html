@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SWAFLOW - Funnels</title>
+  <style>
+    :root{
+      --bg:#0b0614;
+      --panel:#151023;
+      --panel-2:#1a1129;
+      --panel-3:#211833;
+      --line:#332646;
+      --ink:#f8f2ff;
+      --muted:#bfb5d1;
+      --muted-2:#8e7ea8;
+      --magenta:#ff3de8;
+      --violet:#a855f7;
+      --cyan:#0891b2;
+      --amber:#f59e0b;
+      --success:#22c55e;
+      --shadow:0 24px 60px rgba(0,0,0,.34);
+      --r-lg:18px;
+      --font:Sora, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      background:
+        radial-gradient(circle at 16% 0%, rgba(255,61,232,.12), transparent 24%),
+        radial-gradient(circle at 90% 10%, rgba(168,85,247,.15), transparent 22%),
+        linear-gradient(180deg, #0e0817 0%, #0b0614 100%);
+      color:var(--ink);
+      font-family:var(--font);
+      -webkit-font-smoothing:antialiased;
+      text-rendering:optimizeLegibility;
+    }
+    *:focus-visible{outline:2px solid rgba(255,61,232,.45);outline-offset:2px}
+    .frame{
+      width:min(1460px, calc(100vw - 32px));
+      min-height:calc(100vh - 32px);
+      margin:16px auto;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:28px;
+      overflow:hidden;
+      background:rgba(9,5,17,.72);
+      box-shadow:var(--shadow);
+      display:grid;
+      grid-template-columns:280px 1fr;
+      align-items:start;
+    }
+    .sidebar{
+      background:linear-gradient(180deg, #0b0614 0%, #120b1d 100%);
+      border-right:1px solid rgba(255,255,255,.06);
+      padding:22px 18px;
+      position:sticky;
+      top:16px;
+      height:calc(100vh - 32px);
+      overflow:auto;
+    }
+    .lockup{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+    .mark{
+      width:44px;height:44px;border-radius:14px;
+      background:linear-gradient(135deg, var(--magenta), var(--violet));
+      position:relative;
+      box-shadow:0 0 0 1px rgba(255,255,255,.05) inset;
+    }
+    .mark:before,.mark:after{
+      content:"";
+      position:absolute;
+      background:#fff;
+      opacity:.92;
+      border-radius:999px;
+    }
+    .mark:before{inset:10px 11px 24px 11px}
+    .mark:after{left:11px;right:11px;bottom:11px;height:5px}
+    .brand{
+      line-height:1.02;
+      letter-spacing:.12em;
+      font-size:12px;
+      font-weight:800;
+    }
+    .brand span{display:block;color:var(--muted);font-size:10px;letter-spacing:.16em;margin-top:3px}
+    .group{margin-top:18px;color:var(--muted-2);font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase}
+    .nav{display:grid;gap:6px;margin-top:10px}
+    .nav a{
+      text-decoration:none;
+      color:var(--muted);
+      padding:11px 12px;
+      border-radius:12px;
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      border:1px solid transparent;
+    }
+    .nav a.active{
+      color:var(--ink);
+      background:var(--panel-3);
+      border-color:rgba(255,61,232,.24);
+      box-shadow:inset 3px 0 0 var(--magenta);
+    }
+    .nav a:hover{background:rgba(255,255,255,.04)}
+    .pill{
+      font-size:11px;
+      padding:4px 8px;
+      border-radius:999px;
+      background:rgba(255,255,255,.06);
+      color:var(--ink);
+    }
+    .content{padding:22px}
+    .topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:16px;
+      margin-bottom:18px;
+    }
+    .title h1{margin:0;font-size:26px;line-height:1.15;letter-spacing:-.02em}
+    .title p{margin:4px 0 0;color:var(--muted);font-size:14px}
+    .controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+    .search,.btn{
+      border:1px solid rgba(255,255,255,.08);
+      background:rgba(255,255,255,.04);
+      color:var(--ink);
+      border-radius:12px;
+      height:42px;
+    }
+    .search{
+      min-width:190px;
+      padding:0 14px;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      color:var(--muted);
+      font-size:13px;
+    }
+    .btn{padding:0 14px;font-weight:700}
+    .btn.primary{
+      background:linear-gradient(135deg, var(--magenta), var(--violet));
+      border-color:transparent;
+    }
+    .shell{
+      display:grid;
+      grid-template-columns:340px 1fr;
+      gap:14px;
+      align-items:start;
+    }
+    .stack{display:grid;gap:14px}
+    .card{
+      background:linear-gradient(180deg, var(--panel) 0%, var(--panel-2) 100%);
+      border:1px solid rgba(255,255,255,.07);
+      border-radius:var(--r-lg);
+      padding:16px;
+      box-shadow:0 14px 28px rgba(0,0,0,.18);
+    }
+    .section-title{
+      display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:14px
+    }
+    .section-title h2{margin:0;font-size:15px;letter-spacing:.01em}
+    .section-title span{font-size:12px;color:var(--muted)}
+    .badge{
+      padding:8px 10px;
+      border-radius:999px;
+      background:rgba(255,255,255,.06);
+      color:var(--ink);
+      font-size:11px;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:.08em;
+    }
+    .badge.ok{background:rgba(34,197,94,.12);color:#7ef0a1}
+    .badge.warn{background:rgba(245,158,11,.12);color:#ffd07a}
+    .badge.gray{background:rgba(255,255,255,.06);color:var(--muted)}
+    .field label{
+      display:block;
+      margin-bottom:8px;
+      color:var(--muted);
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+    }
+    .input,.textarea{
+      width:100%;
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:12px;
+      background:#100b1c;
+      color:var(--ink);
+      font-size:14px;
+      padding:0 14px;
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .input{height:42px}
+    .textarea{
+      min-height:104px;
+      padding:12px 14px;
+      resize:vertical;
+      line-height:1.45;
+    }
+    .input::placeholder,.textarea::placeholder{color:#9d92b3}
+    .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+    .row{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      flex-wrap:wrap;
+      margin-top:14px;
+    }
+    .hint{
+      color:var(--muted);
+      font-size:12px;
+      line-height:1.5;
+    }
+    .list{
+      display:grid;
+      gap:10px;
+    }
+    .item{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:12px 14px;
+    }
+    .item .top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+    .item strong{font-size:14px}
+    .item .meta{font-size:12px;color:var(--muted);margin-top:4px}
+    .item .body{font-size:12px;color:var(--ink);margin-top:10px;line-height:1.5}
+    .item .tag-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    .item .tag-row span{
+      border:1px solid rgba(255,255,255,.08);
+      border-radius:999px;
+      padding:7px 10px;
+      font-size:12px;
+      background:rgba(255,255,255,.04);
+    }
+    .table-wrap{
+      overflow:auto;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+    }
+    table{width:100%;border-collapse:collapse;min-width:540px}
+    thead th{
+      text-align:left;
+      font-size:11px;
+      letter-spacing:.12em;
+      text-transform:uppercase;
+      color:var(--muted);
+      padding:14px 16px;
+      border-bottom:1px solid rgba(255,255,255,.06);
+    }
+    tbody td{
+      padding:16px;
+      border-bottom:1px solid rgba(255,255,255,.05);
+      font-size:14px;
+      color:var(--ink);
+    }
+    tbody tr:last-child td{border-bottom:none}
+    .status{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 12px;
+      border-radius:999px;
+      background:rgba(34,197,94,.12);
+      color:#7ef0a1;
+      font-size:12px;
+      font-weight:700;
+      white-space:nowrap;
+    }
+    .status:before{
+      content:"";
+      width:8px;height:8px;border-radius:999px;background:var(--success);
+      box-shadow:0 0 0 4px rgba(34,197,94,.12);
+    }
+    .classify{
+      display:grid;
+      grid-template-columns:1.1fr .9fr;
+      gap:14px;
+    }
+    .result{
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:16px;
+      background:rgba(255,255,255,.03);
+      padding:14px;
+    }
+    .result .metric{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+    .result .metric:last-child{border-bottom:none}
+    .result .metric span{color:var(--muted);font-size:12px}
+    .result .metric strong{font-size:13px}
+    .summary-list{display:grid;gap:10px}
+    .summary-chip{
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      border:1px solid rgba(255,255,255,.06);
+      border-radius:14px;
+      background:rgba(255,255,255,.03);
+      padding:12px 14px;
+      font-size:13px;
+    }
+    .summary-chip span{color:var(--muted)}
+    @media (max-width:1180px){
+      .frame{grid-template-columns:1fr}
+      .sidebar{display:none}
+      .shell,.classify,.grid-2,.grid-3{grid-template-columns:1fr}
+    }
+    @media (max-width:720px){
+      .frame{width:100vw;min-height:100vh;margin:0;border-radius:0}
+      .content{padding:16px}
+      .topbar{flex-direction:column;align-items:stretch}
+      .controls{width:100%}
+      .search,.btn{width:100%}
+      .search{min-width:0}
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <aside class="sidebar">
+      <div class="lockup">
+        <div class="mark" aria-hidden="true"></div>
+        <div class="brand">SWAFLOW<span>Tactical innovation</span></div>
+      </div>
+      <div class="group">Operacion</div>
+      <nav class="nav">
+        <a href="#"><span>Dashboard</span></a>
+        <a href="#"><span>Inbox</span></a>
+      </nav>
+      <div class="group">Comercio</div>
+      <nav class="nav">
+        <a href="#"><span>Productos</span></a>
+        <a href="#"><span>Inventario</span></a>
+        <a href="#"><span>Ordenes</span></a>
+        <a href="#"><span>Citas</span></a>
+      </nav>
+      <div class="group">Automatizacion</div>
+      <nav class="nav">
+        <a href="#"><span>IA</span><span class="pill">Flow</span></a>
+        <a class="active" href="#"><span>Funnels</span></a>
+        <a href="#"><span>WhatsApp</span></a>
+        <a href="#"><span>Integraciones</span></a>
+      </nav>
+      <div class="group">Administracion</div>
+      <nav class="nav">
+        <a href="#"><span>Ajustes</span></a>
+      </nav>
+    </aside>
+
+    <main class="content">
+      <header class="topbar">
+        <div class="title">
+          <h1>Funnels</h1>
+          <p>Define embudos por tenant y clasifica conversaciones.</p>
+        </div>
+        <div class="controls">
+          <div class="search">⌕ Buscar funnel</div>
+          <button class="btn">+ Nuevo</button>
+          <button class="btn primary">Guardar funnel</button>
+          <div class="badge gray">1 activo</div>
+        </div>
+      </header>
+
+      <div class="shell">
+        <section class="stack">
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Funnels del tenant</h2>
+                <span>Listado lateral y estado actual</span>
+              </div>
+              <div class="badge gray">1 funnel</div>
+            </div>
+            <div class="list">
+              <div class="item" style="border-color:rgba(255,61,232,.24);background:rgba(255,61,232,.06)">
+                <div class="top">
+                  <div>
+                    <strong>Funnel principal</strong>
+                    <div class="meta">3 pasos</div>
+                  </div>
+                  <span class="badge ok">active</span>
+                </div>
+                <div class="body">Embudo comercial para WhatsApp. Se usa como default del tenant.</div>
+              </div>
+              <div class="item">
+                <div class="top">
+                  <div>
+                    <strong>Nuevo funnel</strong>
+                    <div class="meta">Pendiente</div>
+                  </div>
+                  <span class="badge gray">draft</span>
+                </div>
+                <div class="body">Espacio para crear otro flujo sin sobreescribir el principal.</div>
+              </div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Datos del funnel</h2>
+                <span>Campos editables en produccion</span>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label>Nombre funnel</label>
+                <input class="input" value="Funnel principal" />
+              </div>
+              <div class="field">
+                <label>Descripcion</label>
+                <input class="input" value="Embudo comercial para WhatsApp." />
+              </div>
+            </div>
+            <div class="row">
+              <div class="hint">El formulario del frontend guarda `status: active` e `is_default: true` por defecto.</div>
+              <button class="btn primary">Guardar funnel</button>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Pasos del funnel</h2>
+                <span>position, code, prompt y criteria</span>
+              </div>
+              <button class="btn">+ Nuevo paso</button>
+            </div>
+            <div class="stack">
+              <div class="card" style="margin:0;padding:14px">
+                <div class="grid-3">
+                  <div class="field">
+                    <label>Paso</label>
+                    <input class="input" value="1" />
+                  </div>
+                  <div class="field">
+                    <label>Nombre</label>
+                    <input class="input" value="Bienvenida" />
+                  </div>
+                  <div class="field">
+                    <label>Codigo</label>
+                    <input class="input" value="bienvenida" />
+                  </div>
+                </div>
+                <div class="grid-2" style="margin-top:12px">
+                  <div class="field">
+                    <label>Prompt del paso</label>
+                    <textarea class="textarea">Da la bienvenida al cliente y detecta su interes principal.</textarea>
+                  </div>
+                  <div class="field">
+                    <label>Criterio de transicion</label>
+                    <textarea class="textarea">Cliente expresa necesidad o interes concreto.</textarea>
+                  </div>
+                </div>
+              </div>
+              <div class="card" style="margin:0;padding:14px">
+                <div class="grid-3">
+                  <div class="field">
+                    <label>Paso</label>
+                    <input class="input" value="2" />
+                  </div>
+                  <div class="field">
+                    <label>Nombre</label>
+                    <input class="input" value="Detectar intencion" />
+                  </div>
+                  <div class="field">
+                    <label>Codigo</label>
+                    <input class="input" value="detectar_intencion" />
+                  </div>
+                </div>
+                <div class="grid-2" style="margin-top:12px">
+                  <div class="field">
+                    <label>Prompt del paso</label>
+                    <textarea class="textarea">Clasifica la intencion: compra, soporte, agenda o humano.</textarea>
+                  </div>
+                  <div class="field">
+                    <label>Criterio de transicion</label>
+                    <textarea class="textarea">Intencion principal identificada.</textarea>
+                  </div>
+                </div>
+              </div>
+              <div class="card" style="margin:0;padding:14px">
+                <div class="grid-3">
+                  <div class="field">
+                    <label>Paso</label>
+                    <input class="input" value="3" />
+                  </div>
+                  <div class="field">
+                    <label>Nombre</label>
+                    <input class="input" value="Propuesta" />
+                  </div>
+                  <div class="field">
+                    <label>Codigo</label>
+                    <input class="input" value="propuesta" />
+                  </div>
+                </div>
+                <div class="grid-2" style="margin-top:12px">
+                  <div class="field">
+                    <label>Prompt del paso</label>
+                    <textarea class="textarea">Presenta la mejor recomendacion y siguiente paso.</textarea>
+                  </div>
+                  <div class="field">
+                    <label>Criterio de transicion</label>
+                    <textarea class="textarea">Cliente confirma accion siguiente.</textarea>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </article>
+        </section>
+
+        <aside class="stack">
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Prueba de clasificacion</h2>
+                <span>Resultado del clasificador de intencion</span>
+              </div>
+              <div class="badge ok">Activo</div>
+            </div>
+            <div class="field">
+              <label>Mensaje de prueba</label>
+              <textarea class="textarea">Quiero comprar una camiseta negra y agendar una cita</textarea>
+            </div>
+            <div class="row">
+              <div class="hint">El frontend usa la API y, si falla, puede resolver con fallback local.</div>
+              <button class="btn primary">Clasificar</button>
+            </div>
+            <div class="result" style="margin-top:14px">
+              <div class="metric"><span>Intencion</span><strong>purchase</strong></div>
+              <div class="metric"><span>Confianza</span><strong>89%</strong></div>
+              <div class="metric"><span>Entidades</span><strong>2</strong></div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Resumen</h2>
+                <span>Lectura rapida del estado</span>
+              </div>
+            </div>
+            <div class="summary-list">
+              <div class="summary-chip"><span>Funnel</span><strong>Funnel principal</strong></div>
+              <div class="summary-chip"><span>Pasos</span><strong>3</strong></div>
+              <div class="summary-chip"><span>Estado</span><strong>active</strong></div>
+              <div class="summary-chip"><span>Default</span><strong>true</strong></div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Acciones</h2>
+                <span>Botones reales del modulo</span>
+              </div>
+            </div>
+            <div class="summary-list">
+              <div class="summary-chip"><span>Crear</span><strong>+ Nuevo</strong></div>
+              <div class="summary-chip"><span>Guardar</span><strong>Guardar funnel</strong></div>
+              <div class="summary-chip"><span>Paso</span><strong>+ Nuevo paso</strong></div>
+              <div class="summary-chip"><span>Clasificar</span><strong>Analizar</strong></div>
+            </div>
+          </article>
+
+          <article class="card">
+            <div class="section-title">
+              <div>
+                <h2>Nota</h2>
+                <span>Sin opciones inventadas</span>
+              </div>
+            </div>
+            <div class="hint">
+              La vista conserva el diseno del dashboard y refleja exactamente lo que hoy administra el frontend: nombre, descripcion, pasos y clasificacion.
+            </div>
+          </article>
+        </aside>
+      </div>
+    </main>
+  </div>
+</body>
+</html>

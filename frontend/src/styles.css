@@ -3,15 +3,23 @@
 @tailwind utilities;
 
 :root {
-  color: #17211f;
-  background: #edf3ef;
+  color: #f8f2ff;
+  background: #0b0614;
+  color-scheme: dark;
   font-family:
     Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 :root.theme-dark {
-  color: #e7f0eb;
-  background: #0f1816;
+  color: #f8f2ff;
+  background: #0b0614;
+  color-scheme: dark;
+}
+
+:root.theme-light {
+  color: #14111f;
+  background: #f6f7fb;
+  color-scheme: light;
 }
 
 * {
@@ -22,57 +30,83 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  background: inherit;
+  color: inherit;
 }
 
 .theme-dark body,
-.theme-dark .bg-\[\#edf3ef\] {
-  background: #0f1816 !important;
-  color: #e7f0eb !important;
+.theme-dark .bg-background {
+  background: #0b0614 !important;
+  color: #f8f2ff !important;
 }
 
-.theme-dark .bg-white {
-  background: #162321 !important;
+.theme-light body,
+.theme-light .bg-background {
+  background: #f6f7fb !important;
+  color: #14111f !important;
 }
 
-.theme-dark .bg-panel {
-  background: #1b2a28 !important;
+.theme-dark .bg-white,
+.theme-dark .bg-surface {
+  background: #151023 !important;
+}
+
+.theme-dark .bg-panel,
+.theme-dark .bg-surfaceMuted {
+  background: #211833 !important;
+}
+
+.theme-dark .bg-brandAccentSoft {
+  background: #2b173a !important;
+}
+
+.theme-dark .bg-brandPanel {
+  background: #211833 !important;
 }
 
 .theme-dark .border-line {
-  border-color: #2a3d39 !important;
+  border-color: #332646 !important;
 }
 
 .theme-dark .text-ink {
-  color: #e7f0eb !important;
+  color: #f8f2ff !important;
+}
+
+.theme-dark .text-brand {
+  color: #ff70ec !important;
 }
 
 .theme-dark .text-slate-500 {
-  color: #9fb3ad !important;
+  color: #bfb5d1 !important;
 }
 
 .theme-dark .text-slate-600 {
-  color: #b8c8c3 !important;
+  color: #d4c9e7 !important;
 }
 
 .theme-dark .text-slate-700 {
-  color: #d2dfdb !important;
+  color: #ece3fb !important;
+}
+
+.theme-dark .text-slate-900 {
+  color: #ffffff !important;
 }
 
 .theme-dark .hover\:bg-panel:hover {
-  background: #223632 !important;
+  background: #2b2140 !important;
 }
 
 .theme-dark input,
 .theme-dark select,
 .theme-dark textarea {
-  background: #12211e !important;
-  color: #e7f0eb !important;
-  border-color: #2a3d39 !important;
+  background: #100b1c !important;
+  color: #f8f2ff !important;
+  border-color: #332646 !important;
 }
 
 .theme-dark input::placeholder,
 .theme-dark textarea::placeholder {
-  color: #8fa39d !important;
+  color: #9d92b3 !important;
 }
 
 button,
