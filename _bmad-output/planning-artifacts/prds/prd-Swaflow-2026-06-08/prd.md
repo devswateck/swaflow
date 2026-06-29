@@ -12,7 +12,7 @@ updated: "2026-06-09"
 > validacion del backend actual y la investigacion puntual de onboarding
 > WhatsApp/Meta.
 
-## Discovery Intake
+## Recolección de descubrimiento
 
 ### Vision Inicial
 
@@ -63,13 +63,13 @@ flujos.
 Discovery inicial completado en Coaching path. El PRD esta listo para auditoria,
 reviewer pass y resolucion de preguntas residuales.
 
-## Stakes Calibration
+## Calibración de riesgos
 
 Este PRD se trabajara con rigor de **lanzamiento comercial SaaS**. Debe ser
 suficiente para alinear producto, UX, arquitectura, implementacion y validacion
 de una plataforma vendible a multiples tenants.
 
-## Product Scope
+## Alcance del producto
 
 ### V1 Comercial
 
@@ -97,7 +97,7 @@ que hacen vendible el flujo comercial conversacional:
   Embedded Signup, reduciendo configuracion tecnica manual para clientes.
 - Self-service signup de tenants y alta autonoma sin intervencion de Swateck.
 
-### Non-Goals V1
+### No objetivos V1
 
 - Panel SuperUsuario avanzado.
 - Self-service signup de tenants.
@@ -120,9 +120,9 @@ operativa de crear/soportar tenants por medios administrativos actuales.
 En V1, cada tenant y su admin principal son creados por Swateck mediante un
 proceso operativo/admin. El alta self-service de tenants queda fuera de V1.
 
-## Launch Goal And Success Metrics
+## Objetivo de lanzamiento y métricas de éxito
 
-### Launch Goal
+### Objetivo de lanzamiento
 
 V1 comercial estara lista para vender cuando un tenant pueda operar el flujo
 completo de ventas conversacionales por WhatsApp de punta a punta, desde la
@@ -157,7 +157,7 @@ El flujo minimo exitoso de V1 debe permitir:
 13. El dashboard muestra metricas basicas de chats, pendientes, ventas,
     agendamientos y comportamiento en el tiempo.
 
-### Primary Success Metrics
+### Métricas principales de éxito
 
 - Tiempo desde creacion de tenant hasta primer mensaje WhatsApp recibido.
 - Porcentaje de tenants que completan la configuracion tecnica de WhatsApp V1
@@ -170,7 +170,7 @@ El flujo minimo exitoso de V1 debe permitir:
   cancelaciones/liberaciones eliminan reservas.
 - Disponibilidad percibida del inbox y actualizacion realtime durante operacion.
 
-### Counter-Metrics
+### Contramétricas
 
 - Cero fugas de datos entre tenants.
 - Cero pagos marcados como pagados sin confirmacion valida de la pasarela.
@@ -181,7 +181,7 @@ El flujo minimo exitoso de V1 debe permitir:
 - Webhooks o integraciones auxiliares fallidas no deben romper transacciones
   criticas ya confirmadas.
 
-## Functional Requirements
+## Requisitos funcionales
 
 ### Dashboard
 
@@ -622,7 +622,7 @@ comunicaciones al cliente.
 - **FR-132:** El sistema debe aplicar permisos configurados en la navegacion,
   rutas y acciones de backend, no solo ocultando elementos visuales.
 
-### Roles Y Permisos
+### Roles y permisos
 
 - **FR-133:** El sistema debe crear o mantener un usuario admin principal por
   tenant.
@@ -649,7 +649,7 @@ comunicaciones al cliente.
 - **FR-171:** El sistema no debe requerir self-service signup de tenants para el
   lanzamiento V1.
 
-### Retencion Y Exportacion
+### Retención y exportación
 
 - **FR-159:** Mientras el tenant este activo, el sistema debe conservar de forma
   indefinida mensajes, eventos, archivos y gestiones realizadas en la plataforma,
@@ -662,7 +662,7 @@ comunicaciones al cliente.
 - **FR-177:** Cada TXT de exportacion debe listar las interacciones/gestiones del
   modulo delimitadas por pipe `|`, con encabezado de columnas.
 
-## Non-Functional Requirements
+## Requisitos no funcionales
 
 ### Performance And Response Times
 

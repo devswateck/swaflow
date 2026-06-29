@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.contacts.models import Contact
 from app.contacts.service import get_contact
+from app.audit.service import record_audit_best_effort
 from app.conversations.models import Conversation
 from app.conversations.schemas import ConversationCreate
 from app.funnels.models import SalesFunnel, SalesFunnelStep
@@ -190,8 +191,11 @@ def assign_conversation(
     company_id: UUID,
     conversation_id: UUID,
     assigned_user_id: UUID | None,
+    actor_user: User | None = None,
 ) -> Conversation:
     conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
+    previous_assigned_user_id = conversation.assigned_user_id
+    previous_status = conversation.status
     if assigned_user_id is not None:
         assignee = db.scalar(
             select(User).where(User.company_id == company_id, User.id == assigned_user_id)
@@ -202,6 +206,23 @@ def assign_conversation(
     conversation.status = "waiting_human" if assigned_user_id else "open"
     db.commit()
     db.refresh(conversation)
+    record_audit_best_effort(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="conversation.assigned",
+        entity_type="conversation",
+        entity_id=conversation.id,
+        summary="Conversation reassigned",
+        metadata={
+            "previous_assigned_user_id": str(previous_assigned_user_id)
+            if previous_assigned_user_id is not None
+            else None,
+            "assigned_user_id": str(assigned_user_id) if assigned_user_id is not None else None,
+            "previous_status": previous_status,
+            "next_status": conversation.status,
+        },
+    )
     return conversation
 
 
@@ -213,14 +234,33 @@ def assign_conversation_funnel(
     funnel_id: UUID | None,
     funnel_step_id: UUID | None,
     current_step: str | None,
+    actor_user: User | None = None,
 ) -> Conversation:
     conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
     if funnel_id is None:
+        previous_funnel_id = conversation.funnel_id
+        previous_step_id = conversation.funnel_step_id
+        previous_current_step = conversation.current_step
         conversation.funnel_id = None
         conversation.funnel_step_id = None
         conversation.current_step = current_step
         db.commit()
         db.refresh(conversation)
+        record_audit_best_effort(
+            db,
+            company_id=company_id,
+            actor_user=actor_user,
+            action="conversation.funnel_assigned",
+            entity_type="conversation",
+            entity_id=conversation.id,
+            summary="Conversation funnel cleared",
+            metadata={
+                "previous_funnel_id": str(previous_funnel_id) if previous_funnel_id is not None else None,
+                "previous_funnel_step_id": str(previous_step_id) if previous_step_id is not None else None,
+                "previous_current_step": previous_current_step,
+                "current_step": current_step,
+            },
+        )
         return conversation
 
     funnel = db.scalar(
@@ -251,11 +291,31 @@ def assign_conversation_funnel(
         if not step_name_to_set:
             step_name_to_set = step.code
 
+    previous_funnel_id = conversation.funnel_id
+    previous_step_id = conversation.funnel_step_id
+    previous_current_step = conversation.current_step
     conversation.funnel_id = funnel.id
     conversation.funnel_step_id = step_id_to_set
     conversation.current_step = step_name_to_set
     db.commit()
     db.refresh(conversation)
+    record_audit_best_effort(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="conversation.funnel_assigned",
+        entity_type="conversation",
+        entity_id=conversation.id,
+        summary="Conversation funnel reassigned",
+        metadata={
+            "previous_funnel_id": str(previous_funnel_id) if previous_funnel_id is not None else None,
+            "previous_funnel_step_id": str(previous_step_id) if previous_step_id is not None else None,
+            "previous_current_step": previous_current_step,
+            "funnel_id": str(funnel.id),
+            "funnel_step_id": str(step_id_to_set) if step_id_to_set is not None else None,
+            "current_step": conversation.current_step,
+        },
+    )
     return conversation
 
 
@@ -295,6 +355,7 @@ def append_message(
     message_type: str = "text",
     external_message_id: str | None = None,
     metadata: dict | None = None,
+    actor_user: User | None = None,
 ):
     conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
     message = create_message(
@@ -314,4 +375,20 @@ def append_message(
         conversation.status = "open"
     db.commit()
     db.refresh(message)
+    record_audit_best_effort(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="message.created",
+        entity_type="message",
+        entity_id=message.id,
+        summary="Message appended to conversation",
+        metadata={
+            "conversation_id": str(conversation.id),
+            "sender_type": sender_type,
+            "message_type": message_type,
+            "external_message_id": external_message_id,
+            "content_length": len(content) if content is not None else 0,
+        },
+    )
     return message

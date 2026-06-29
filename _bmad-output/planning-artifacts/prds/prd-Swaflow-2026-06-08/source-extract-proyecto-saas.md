@@ -1,4 +1,4 @@
-# Source Extract: proyecto_saas_ia_comercial_multitenant.md
+# Extracto de fuente: `proyecto_saas_ia_comercial_multitenant.md`
 
 ## Producto
 
@@ -54,4 +54,3 @@
 ## Conflictos Con Decisiones Vigentes
 
 - La fuente historica recomienda PostgreSQL y Celery/RQ; `project-context.md` declara MySQL vigente y Redis sin colas activas. El PRD debe describir capacidades de producto y dejar estas decisiones tecnicas vigentes como restricciones, no reabrirlas.
-

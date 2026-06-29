@@ -87,6 +87,7 @@ def assign_conversation(
         company_id=current_user.company_id,
         conversation_id=conversation_id,
         assigned_user_id=payload.assigned_user_id,
+        actor_user=current_user,
     )
 
 
@@ -104,6 +105,7 @@ def assign_conversation_funnel(
         funnel_id=payload.funnel_id,
         funnel_step_id=payload.funnel_step_id,
         current_step=payload.current_step,
+        actor_user=current_user,
     )
 
 
@@ -142,4 +144,5 @@ def send_message(
         conversation_id=conversation_id,
         sender_type="agent",
         content=payload.content,
+        actor_user=current_user,
     )

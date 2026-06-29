@@ -9,15 +9,15 @@ inputDocuments:
   - _bmad-output/planning-artifacts/architecture/swaflow-frontend-architecture.md
 ---
 
-# Swaflow - Epic Breakdown
+# Swaflow - Desglose de épicas
 
-## Overview
+## Resumen general
 
 This document provides the complete epic y story breakdown for Swaflow, decomposing the requirements from the PRD, UX Design if it exists, y Architecture requirements into implementable stories.
 
-## Requirements Inventory
+## Inventario de requisitos
 
-### Functional Requirements
+### Requisitos funcionales
 
 - **FR-001:** El sistema debe mostrar tarjetas resumen con chats totales, chats pendientes por leer, ventas y agendamientos del tenant.
 - **FR-002:** El sistema debe mostrar graficos de ventas, agendamientos y chats en el tiempo.
@@ -438,7 +438,7 @@ FR176: Epic 7 - Superadmin, Auditoria y Retiro del Tenant
 FR177: Epic 7 - Superadmin, Auditoria y Retiro del Tenant
 
 
-## Epic List
+## Lista de épicas
 
 ### Epic 1: Base del Tenant, Roles y Configuracion del Asistente
 El tenant queda preparado para operar con identidad, usuarios, permisos, horarios, WhatsApp, IA, funnels e integraciones, de forma que el admin pueda dejar la cuenta lista para ventas conversacionales sin depender de configuraciones dispersas.

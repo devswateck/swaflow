@@ -1,4 +1,4 @@
-# Reconcile: WhatsApp Onboarding Research
+# Reconciliación: investigación de onboarding de WhatsApp
 
 ## Resultado
 
@@ -13,4 +13,3 @@ La investigacion se conserva como soporte para V2, no como alcance V1.
 ## Gaps
 
 - Para V2 hara falta especificacion dedicada de permisos Meta, revision de app, OAuth/Embedded Signup y flujo de activos WABA.
-

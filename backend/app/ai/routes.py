@@ -55,7 +55,12 @@ def create_agent(
     current_user: User = Depends(require_module_access("ai")),
     db: Session = Depends(get_db),
 ) -> AiAgent:
-    return service.create_agent(db, company_id=current_user.company_id, payload=payload)
+    return service.create_agent(
+        db,
+        company_id=current_user.company_id,
+        payload=payload,
+        actor_user=current_user,
+    )
 
 
 @router.put("/agents/{agent_id}", response_model=AiAgentRead)
@@ -66,7 +71,11 @@ def update_agent(
     db: Session = Depends(get_db),
 ) -> AiAgent:
     return service.update_agent(
-        db, company_id=current_user.company_id, agent_id=agent_id, payload=payload
+        db,
+        company_id=current_user.company_id,
+        agent_id=agent_id,
+        payload=payload,
+        actor_user=current_user,
     )
 
 
@@ -95,6 +104,7 @@ def update_operational_config(
         company_id=current_user.company_id,
         agent_id=agent_id,
         payload=payload,
+        actor_user=current_user,
     )
 
 
@@ -108,6 +118,7 @@ def publish_operational_config(
         db,
         company_id=current_user.company_id,
         agent_id=agent_id,
+        actor_user=current_user,
     )
 
 
@@ -146,7 +157,12 @@ def create_faq_entry(
     current_user: User = Depends(require_module_access("ai")),
     db: Session = Depends(get_db),
 ) -> AiFaqEntry:
-    return service.create_faq_entry(db, company_id=current_user.company_id, payload=payload)
+    return service.create_faq_entry(
+        db,
+        company_id=current_user.company_id,
+        payload=payload,
+        actor_user=current_user,
+    )
 
 
 @router.put("/faqs/{faq_id}", response_model=AiFaqEntryRead)
@@ -156,7 +172,13 @@ def update_faq_entry(
     current_user: User = Depends(require_module_access("ai")),
     db: Session = Depends(get_db),
 ) -> AiFaqEntry:
-    return service.update_faq_entry(db, company_id=current_user.company_id, faq_id=faq_id, payload=payload)
+    return service.update_faq_entry(
+        db,
+        company_id=current_user.company_id,
+        faq_id=faq_id,
+        payload=payload,
+        actor_user=current_user,
+    )
 
 
 @router.delete("/faqs/{faq_id}", status_code=204)
@@ -165,7 +187,12 @@ def delete_faq_entry(
     current_user: User = Depends(require_module_access("ai")),
     db: Session = Depends(get_db),
 ) -> None:
-    service.delete_faq_entry(db, company_id=current_user.company_id, faq_id=faq_id)
+    service.delete_faq_entry(
+        db,
+        company_id=current_user.company_id,
+        faq_id=faq_id,
+        actor_user=current_user,
+    )
 
 
 @router.post("/faqs/upload", response_model=AiFaqUploadResult)
@@ -181,6 +208,7 @@ async def upload_faq_entries(
         company_id=current_user.company_id,
         filename=filename,
         content=content,
+        actor_user=current_user,
     )
 
 
@@ -219,7 +247,12 @@ def create_interactive_template(
     current_user: User = Depends(require_module_access("ai")),
     db: Session = Depends(get_db),
 ) -> object:
-    return service.create_interactive_template(db, company_id=current_user.company_id, payload=payload)
+    return service.create_interactive_template(
+        db,
+        company_id=current_user.company_id,
+        payload=payload,
+        actor_user=current_user,
+    )
 
 
 @router.put("/interactive-templates/{template_id}", response_model=AiInteractiveTemplateRead)
@@ -234,6 +267,7 @@ def update_interactive_template(
         company_id=current_user.company_id,
         template_id=template_id,
         payload=payload,
+        actor_user=current_user,
     )
 
 
@@ -243,4 +277,9 @@ def delete_interactive_template(
     current_user: User = Depends(require_module_access("ai")),
     db: Session = Depends(get_db),
 ) -> None:
-    service.delete_interactive_template(db, company_id=current_user.company_id, template_id=template_id)
+    service.delete_interactive_template(
+        db,
+        company_id=current_user.company_id,
+        template_id=template_id,
+        actor_user=current_user,
+    )

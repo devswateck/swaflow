@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.contacts.service import get_contact
-from app.audit.service import record_audit
+from app.audit.service import record_audit_best_effort
 from app.conversations.service import get_conversation
 from app.events.service import create_event
 from app.inventory.models import Inventory
@@ -134,7 +134,9 @@ def create_order(
         event_type="order.created",
         payload={"order_id": str(order.id), "total": str(order.total), "currency": order.currency},
     )
-    record_audit(
+    db.commit()
+    db.refresh(order)
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -144,8 +146,6 @@ def create_order(
         summary="Order created",
         metadata={"total": str(order.total), "currency": order.currency},
     )
-    db.commit()
-    db.refresh(order)
     return get_order(db, company_id=company_id, order_id=order.id)
 
 
@@ -221,7 +221,9 @@ def generate_payment_link(
         event_type="order.waiting_payment",
         payload={"order_id": str(order.id), "payment_reference": reference},
     )
-    record_audit(
+    db.commit()
+    db.refresh(order)
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -231,8 +233,6 @@ def generate_payment_link(
         summary="Payment link generated",
         metadata={"payment_reference": reference, "provider": order.payment_provider},
     )
-    db.commit()
-    db.refresh(order)
     return order
 
 
@@ -260,7 +260,9 @@ def cancel_order(
         event_type="order.cancelled",
         payload={"order_id": str(order.id)},
     )
-    record_audit(
+    db.commit()
+    db.refresh(order)
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -269,8 +271,6 @@ def cancel_order(
         entity_id=order.id,
         summary="Order cancelled",
     )
-    db.commit()
-    db.refresh(order)
     return order
 
 
@@ -303,7 +303,9 @@ def _mark_order_paid(db: Session, *, order: Order, actor_user=None) -> Order:
         event_type="order.paid",
         payload={"order_id": str(order.id), "payment_reference": order.payment_reference},
     )
-    record_audit(
+    db.commit()
+    db.refresh(order)
+    record_audit_best_effort(
         db,
         company_id=order.company_id,
         actor_user=actor_user,
@@ -313,8 +315,6 @@ def _mark_order_paid(db: Session, *, order: Order, actor_user=None) -> Order:
         summary="Order marked as paid",
         metadata={"payment_reference": order.payment_reference, "payment_provider": order.payment_provider},
     )
-    db.commit()
-    db.refresh(order)
     try:
         notify_order_paid(db, order=order)
     except Exception:
@@ -361,7 +361,9 @@ def update_payment_status(db: Session, *, order: Order, payment_status: str, act
             "payment_status": order.payment_status,
         },
     )
-    record_audit(
+    db.commit()
+    db.refresh(order)
+    record_audit_best_effort(
         db,
         company_id=order.company_id,
         actor_user=actor_user,
@@ -374,8 +376,6 @@ def update_payment_status(db: Session, *, order: Order, payment_status: str, act
             "payment_status": order.payment_status,
         },
     )
-    db.commit()
-    db.refresh(order)
     return order
 
 

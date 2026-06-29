@@ -1,9 +1,9 @@
-# PRD Addendum: Technical Details
+# Addendum del PRD: Detalles técnicos
 
 Este addendum conserva detalle tecnico que apoya el PRD, sin convertir el PRD
 principal en documento de arquitectura.
 
-## Payment Gateway Adapter Contract
+## Contrato del adaptador de pasarela de pago
 
 ### Objetivo
 
@@ -20,7 +20,7 @@ codigo ad hoc sin cumplir este contrato minimo.
 - Todo procesamiento de webhook debe ser idempotente.
 - Las credenciales se guardan cifradas y no se exponen completas en UI/logs.
 
-### Capacidades Obligatorias Del Adaptador
+### Capacidades obligatorias del adaptador
 
 Cada adaptador debe implementar:
 
@@ -33,7 +33,7 @@ Cada adaptador debe implementar:
 - Evitar doble procesamiento por referencia/transaccion/event ID.
 - Exponer errores entendibles para soporte/admin.
 
-### Configuracion Por Tenant
+### Configuración por tenant
 
 Cada integracion de pagos debe almacenar configuracion tenant-scoped:
 
@@ -63,7 +63,7 @@ El adaptador debe documentar cuales campos son obligatorios y cuales son
 opcionales. Swaflow debe impedir activar una pasarela si faltan datos minimos
 para crear links, validar webhooks y mapear estados.
 
-### Crear Link De Pago
+### Crear enlace de pago
 
 Entrada normalizada:
 
@@ -99,7 +99,7 @@ Reglas:
 - El monto y moneda deben venir de la orden, no de la IA ni del frontend.
 - El vencimiento por defecto es 120 minutos, configurable por tenant.
 
-### Webhook De Pago
+### Webhook de pago
 
 Entrada esperada:
 
@@ -135,7 +135,7 @@ Reglas:
 - Si el estado recibido no es terminal, actualizar metadata sin consumir
   inventario salvo que el estado normalizado lo requiera.
 
-### Estados Normalizados
+### Estados normalizados
 
 El adaptador debe mapear estados del proveedor a:
 
@@ -174,7 +174,7 @@ doble descuento de inventario, doble venta o doble notificacion.
 - Rechazar webhooks de proveedor diferente al configurado para la orden.
 - No aceptar cambios cross-tenant por referencia externa ambigua.
 
-### Errores Normalizados
+### Errores normalizados
 
 El adaptador debe traducir errores a categorias:
 
@@ -188,7 +188,7 @@ El adaptador debe traducir errores a categorias:
 - `unknown_provider_status`.
 - `duplicate_event`.
 
-### Checklist De Certificacion De Pasarela
+### Lista de verificación de certificación de pasarela
 
 Antes de habilitar una pasarela para un tenant real:
 
@@ -203,7 +203,7 @@ Antes de habilitar una pasarela para un tenant real:
 - Confirmar que errores no exponen secretos.
 - Confirmar eventos internos y notificaciones auxiliares.
 
-### Referencias Tecnicas
+### Referencias técnicas
 
 - Stripe API docs: Idempotent requests — https://docs.stripe.com/api/idempotent_requests
 - Stripe docs: Webhook signature verification — https://docs.stripe.com/webhooks/signature

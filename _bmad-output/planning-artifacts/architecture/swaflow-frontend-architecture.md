@@ -28,7 +28,7 @@ sources:
 
 Este documento define la estructura de frontend que debe seguirse antes de ampliar o refactorizar la aplicacion. Su objetivo es evitar que UX, arquitectura e implementacion se mezclen de forma prematura.
 
-## Decision Summary
+## Resumen de decisiones
 
 SWAFLOW seguira siendo una app React/Vite en una sola superficie principal, con `App.tsx` como shell de transicion mientras el sistema se ordena. La arquitectura no introduce un router nuevo ni un rediseño funcional general en esta fase.
 
@@ -41,7 +41,7 @@ La primera version arquitectonica se apoya en cuatro capas:
 
 El objetivo es que Dashboard, Inbox y los modulos operativos hereden una base consistente antes de cambiar su comportamiento profundo.
 
-## Architecture Goals
+## Objetivos de arquitectura
 
 - Separar identidad visual de comportamiento funcional.
 - Mantener dark mode como default cuando no exista preferencia guardada.
@@ -50,7 +50,7 @@ El objetivo es que Dashboard, Inbox y los modulos operativos hereden una base co
 - Permitir que Dashboard use Recharts sin obligar a reescribir todo el frontend.
 - Dejar Inbox listo para un rail contextual posterior, pero no implementarlo aqui.
 
-## Non-Goals
+## No objetivos
 
 - No redisenar backend.
 - No cambiar el modelo de multi-tenant.
@@ -58,9 +58,9 @@ El objetivo es que Dashboard, Inbox y los modulos operativos hereden una base co
 - No rehacer Dashboard ni Inbox por completo en esta etapa.
 - No agregar dependencias nuevas fuera de lo ya aprobado para la historia correspondiente.
 
-## Frontend Layers
+## Capas del frontend
 
-### 1. Design Tokens
+### 1. Tokens de diseño
 
 Los tokens de color y superficie son la fuente de verdad visual.
 
@@ -71,7 +71,7 @@ Los tokens de color y superficie son la fuente de verdad visual.
 
 Regla: una clase de componente no debe definir por su cuenta la identidad de marca salvo excepcion puntual.
 
-### 2. App Shell
+### 2. Shell de la aplicación
 
 El shell es responsable de:
 
@@ -84,7 +84,7 @@ El shell es responsable de:
 
 Este shell puede seguir viviendo en `App.tsx` mientras no exista una extraccion clara que reduzca complejidad real.
 
-### 3. Page Modules
+### 3. Módulos de página
 
 Los modulos de pagina se comportan como superficies independientes que consumen el shell:
 
@@ -102,7 +102,7 @@ Los modulos de pagina se comportan como superficies independientes que consumen 
 
 Cada modulo debe usar patrones comunes de pagina, encabezado, tabla, estado vacio, error y carga para que la app no se sienta fragmentada.
 
-### 4. Shared UI Primitives
+### 4. Primitivos UI compartidos
 
 Los primitivos compartidos deben emerger cuando reduzcan duplicacion real.
 
@@ -120,7 +120,7 @@ Objetivo de extraccion:
 
 No extraer por moda ni por anticipacion; extraer cuando un patron aparezca varias veces y ya tenga forma estable.
 
-### 5. Data and State
+### 5. Datos y estado
 
 La app usa dos tipos de estado:
 
@@ -134,7 +134,7 @@ Reglas:
 - `localStorage` debe tener fallback seguro para navegadores restringidos.
 - Ninguna vista debe depender de una respuesta inventada si el backend no provee el dato.
 
-### 6. Charts
+### 6. Gráficas
 
 Dashboard usara Recharts como libreria de graficas.
 
@@ -149,7 +149,7 @@ Limite:
 - Solo se usa donde el dato justifique la grafica.
 - Si no hay serie real, se muestra estado vacio o resumen textual honesto.
 
-### 7. Inbox Structure
+### 7. Estructura del Inbox
 
 Inbox se modela como un workspace de tres zonas en desktop:
 
@@ -165,7 +165,7 @@ Decisiones:
 - El rail contextual concentra acciones que hoy estan dispersas.
 - El composer conserva borrador si el envio falla.
 
-## Sequence of Implementation
+## Secuencia de implementación
 
 La secuencia correcta es:
 
@@ -177,7 +177,7 @@ La secuencia correcta es:
 
 No debe invertirse ese orden salvo una decision explicita del producto.
 
-## Acceptance Gate
+## Puerta de aceptación
 
 Antes de permitir implementacion nueva, deben cumplirse estas condiciones:
 
@@ -187,24 +187,24 @@ Antes de permitir implementacion nueva, deben cumplirse estas condiciones:
 - Recharts aprobado para Dashboard.
 - No quedan dudas abiertas sobre que parte es documentación y que parte es codigo.
 
-## Open Decisions
+## Decisiones abiertas
 
 - Nombre y entrega final del logo de aplicacion.
 - Momento exacto de extraccion de primitivos compartidos.
 - Si el Dashboard inicial deriva series de datos existentes o espera nuevos endpoints.
 - Si Inbox requiere estructura de datos adicional antes del rail contextual.
 
-## Project Context Analysis
+## Análisis del contexto del proyecto
 
-### Requirements Overview
+### Resumen de requisitos
 
-**Functional Requirements:**
+**Requisitos funcionales:**
 
 Swaflow debe operar como una plataforma SaaS multi-tenant para ventas conversacionales por WhatsApp, con IA como capa de orquestacion y backend como fuente de verdad. Las capacidades arquitectonicamente relevantes incluyen dashboard operativo, inbox en tiempo real, configuracion del tenant, usuarios y permisos, WhatsApp Cloud API, catalogo Meta, inventario, ordenes, links de pago, citas, funnels, integraciones auxiliares, webhooks salientes y exportacion del retiro del tenant.
 
 El sistema necesita soportar reglas de negocio criticas: aislamiento por `company_id`, asignacion y reasignacion de chats, activacion y desactivacion de IA por conversacion, reservas de inventario, confirmacion de pagos por webhook, sincronizacion opcional de calendario, y auditoria de cambios operativos.
 
-**Non-Functional Requirements:**
+**Requisitos no funcionales:**
 
 - Aislamiento multi-tenant estricto en toda consulta y mutacion de datos de negocio.
 - Seguridad fuerte para secretos, tokens y credenciales cifradas.
@@ -213,7 +213,7 @@ El sistema necesita soportar reglas de negocio criticas: aislamiento por `compan
 - Resiliencia operativa: fallos de IA, WhatsApp, calendario o n8n no deben bloquear la gestion humana ni corromper estados confirmados.
 - Rendimiento perceptible en listas, dashboard e inbox con actualizacion cercana a tiempo real.
 
-**Scale & Complexity:**
+**Escala y complejidad:**
 
 El proyecto tiene complejidad alta y exige una arquitectura full-stack orientada a dominios. Los componentes arquitectonicos principales ya visibles son:
 
@@ -233,7 +233,7 @@ El proyecto tiene complejidad alta y exige una arquitectura full-stack orientada
 - Complexity level: high
 - Estimated architectural components: 11+
 
-### Technical Constraints & Dependencies
+### Restricciones técnicas y dependencias
 
 - Backend actual: Python 3.12+, FastAPI, SQLAlchemy 2, Alembic, Pydantic Settings, Uvicorn.
 - Base de datos vigente: MySQL con `mysql+pymysql`; PostgreSQL queda fuera de la decision activa.
@@ -244,7 +244,7 @@ El proyecto tiene complejidad alta y exige una arquitectura full-stack orientada
 - El PRD ya fija un contrato tecnico minimo para adaptadores de pasarela de pago.
 - Ya existe una arquitectura frontend; el siguiente frente real es backend y dominios.
 
-### Cross-Cutting Concerns Identified
+### Preocupaciones transversales identificadas
 
 - Aislamiento multi-tenant por `company_id`.
 - Autorizacion por rol y por modulo.
@@ -257,7 +257,7 @@ El proyecto tiene complejidad alta y exige una arquitectura full-stack orientada
 - Integraciones externas tolerantes a fallos.
 - UI sin datos inventados y con estados vacios honestos.
 
-## Starter Template Evaluation
+## Evaluación de la plantilla inicial
 
 ### Primary Technology Domain
 

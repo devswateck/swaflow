@@ -30,9 +30,34 @@ from app.ai.operational import (
     simulation_summary,
     validate_operational_config,
 )
+from app.audit.service import record_audit_best_effort
 from app.companies.models import Company
+from app.users.models import User
 
 MAX_FAQ_ENTRIES_PER_TENANT = 10
+
+
+def _audit_ai_action(
+    db: Session,
+    *,
+    company_id: UUID,
+    actor_user: User | None,
+    action: str,
+    entity_type: str,
+    entity_id: UUID | None,
+    summary: str,
+    metadata: dict | None = None,
+) -> None:
+    record_audit_best_effort(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        summary=summary,
+        metadata=metadata or {},
+    )
 
 
 def _agent_rules_copy(agent: AiAgent | None) -> dict:
@@ -99,7 +124,13 @@ def _cleanup_extra_agents(db: Session, *, company_id: UUID, keep_id: UUID) -> No
         db.delete(extra)
 
 
-def create_agent(db: Session, *, company_id: UUID, payload: AiAgentCreate) -> AiAgent:
+def create_agent(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: AiAgentCreate,
+    actor_user: User | None = None,
+) -> AiAgent:
     existing = db.scalar(
         select(AiAgent)
         .where(AiAgent.company_id == company_id)
@@ -141,6 +172,16 @@ def create_agent(db: Session, *, company_id: UUID, payload: AiAgentCreate) -> Ai
         _cleanup_extra_agents(db, company_id=company_id, keep_id=agent.id)
         db.commit()
         db.refresh(agent)
+        _audit_ai_action(
+            db,
+            company_id=company_id,
+            actor_user=actor_user,
+            action="ai.agent.saved",
+            entity_type="ai_agent",
+            entity_id=agent.id,
+            summary="AI agent saved",
+            metadata={"name": agent.name, "active": agent.active},
+        )
         return agent
     except IntegrityError:
         db.rollback()
@@ -162,6 +203,16 @@ def create_agent(db: Session, *, company_id: UUID, payload: AiAgentCreate) -> Ai
         _cleanup_extra_agents(db, company_id=company_id, keep_id=agent.id)
         db.commit()
         db.refresh(agent)
+        _audit_ai_action(
+            db,
+            company_id=company_id,
+            actor_user=actor_user,
+            action="ai.agent.saved",
+            entity_type="ai_agent",
+            entity_id=agent.id,
+            summary="AI agent saved",
+            metadata={"name": agent.name, "active": agent.active},
+        )
         return agent
 
 
@@ -173,7 +224,12 @@ def get_agent(db: Session, *, company_id: UUID, agent_id: UUID) -> AiAgent:
 
 
 def update_agent(
-    db: Session, *, company_id: UUID, agent_id: UUID, payload: AiAgentUpdate
+    db: Session,
+    *,
+    company_id: UUID,
+    agent_id: UUID,
+    payload: AiAgentUpdate,
+    actor_user: User | None = None,
 ) -> AiAgent:
     agent = get_agent(db, company_id=company_id, agent_id=agent_id)
     data = payload.model_dump(exclude_unset=True)
@@ -191,6 +247,16 @@ def update_agent(
     _cleanup_extra_agents(db, company_id=company_id, keep_id=agent.id)
     db.commit()
     db.refresh(agent)
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.agent.updated",
+        entity_type="ai_agent",
+        entity_id=agent.id,
+        summary="AI agent updated",
+        metadata={"name": agent.name, "active": agent.active},
+    )
     return agent
 
 
@@ -216,7 +282,13 @@ def _normalize_faq_payload(question: str, answer: str) -> tuple[str, str]:
     return question.strip(), answer.strip()
 
 
-def create_faq_entry(db: Session, *, company_id: UUID, payload: AiFaqEntryCreate) -> AiFaqEntry:
+def create_faq_entry(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: AiFaqEntryCreate,
+    actor_user: User | None = None,
+) -> AiFaqEntry:
     if _count_faq_entries(db, company_id=company_id) >= MAX_FAQ_ENTRIES_PER_TENANT:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -232,6 +304,16 @@ def create_faq_entry(db: Session, *, company_id: UUID, payload: AiFaqEntryCreate
     db.add(entry)
     db.commit()
     db.refresh(entry)
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.faq_entry.created",
+        entity_type="ai_faq_entry",
+        entity_id=entry.id,
+        summary="FAQ entry created",
+        metadata={"question": entry.question, "active": entry.active},
+    )
     return entry
 
 
@@ -248,7 +330,12 @@ def get_faq_entry(db: Session, *, company_id: UUID, faq_id: UUID) -> AiFaqEntry:
 
 
 def update_faq_entry(
-    db: Session, *, company_id: UUID, faq_id: UUID, payload: AiFaqEntryUpdate
+    db: Session,
+    *,
+    company_id: UUID,
+    faq_id: UUID,
+    payload: AiFaqEntryUpdate,
+    actor_user: User | None = None,
 ) -> AiFaqEntry:
     entry = get_faq_entry(db, company_id=company_id, faq_id=faq_id)
     data = payload.model_dump(exclude_unset=True)
@@ -262,13 +349,40 @@ def update_faq_entry(
         setattr(entry, field, value)
     db.commit()
     db.refresh(entry)
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.faq_entry.updated",
+        entity_type="ai_faq_entry",
+        entity_id=entry.id,
+        summary="FAQ entry updated",
+        metadata={"question": entry.question, "active": entry.active},
+    )
     return entry
 
 
-def delete_faq_entry(db: Session, *, company_id: UUID, faq_id: UUID) -> None:
+def delete_faq_entry(
+    db: Session,
+    *,
+    company_id: UUID,
+    faq_id: UUID,
+    actor_user: User | None = None,
+) -> None:
     entry = get_faq_entry(db, company_id=company_id, faq_id=faq_id)
+    entry_id = entry.id
     db.delete(entry)
     db.commit()
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.faq_entry.deleted",
+        entity_type="ai_faq_entry",
+        entity_id=entry_id,
+        summary="FAQ entry deleted",
+        metadata={"question": entry.question},
+    )
 
 
 def _decode_upload(content: bytes) -> str:
@@ -411,6 +525,7 @@ def upload_faq_entries(
     company_id: UUID,
     filename: str,
     content: bytes,
+    actor_user: User | None = None,
 ) -> AiFaqUploadResult:
     rows = _parse_faq_file(filename, content)
     if not rows:
@@ -465,6 +580,16 @@ def upload_faq_entries(
         current.active = True
         updated += 1
     db.commit()
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.faq_entries.uploaded",
+        entity_type="ai_faq_entry",
+        entity_id=None,
+        summary="FAQ file uploaded",
+        metadata={"filename": filename, "created": created, "updated": updated, "total": len(cleaned_rows)},
+    )
     return AiFaqUploadResult(total_read=len(cleaned_rows), created=created, updated=updated)
 
 
@@ -479,7 +604,11 @@ def list_interactive_templates(db: Session, *, company_id: UUID) -> list[AiInter
 
 
 def create_interactive_template(
-    db: Session, *, company_id: UUID, payload: AiInteractiveTemplateCreate
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: AiInteractiveTemplateCreate,
+    actor_user: User | None = None,
 ) -> AiInteractiveTemplate:
     action_key = payload.action_key.strip().lower()
     template = db.scalar(
@@ -506,6 +635,16 @@ def create_interactive_template(
     template.active = payload.active
     db.commit()
     db.refresh(template)
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.interactive_template.saved",
+        entity_type="ai_interactive_template",
+        entity_id=template.id,
+        summary="Interactive template saved",
+        metadata={"action_key": template.action_key, "template_type": template.template_type},
+    )
     return template
 
 
@@ -529,6 +668,7 @@ def update_interactive_template(
     company_id: UUID,
     template_id: UUID,
     payload: AiInteractiveTemplateUpdate,
+    actor_user: User | None = None,
 ) -> AiInteractiveTemplate:
     template = get_interactive_template(db, company_id=company_id, template_id=template_id)
     data = payload.model_dump(exclude_unset=True)
@@ -558,13 +698,40 @@ def update_interactive_template(
         setattr(template, field, value)
     db.commit()
     db.refresh(template)
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.interactive_template.updated",
+        entity_type="ai_interactive_template",
+        entity_id=template.id,
+        summary="Interactive template updated",
+        metadata={"action_key": template.action_key, "template_type": template.template_type},
+    )
     return template
 
 
-def delete_interactive_template(db: Session, *, company_id: UUID, template_id: UUID) -> None:
+def delete_interactive_template(
+    db: Session,
+    *,
+    company_id: UUID,
+    template_id: UUID,
+    actor_user: User | None = None,
+) -> None:
     template = get_interactive_template(db, company_id=company_id, template_id=template_id)
+    template_id_value = template.id
     db.delete(template)
     db.commit()
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.interactive_template.deleted",
+        entity_type="ai_interactive_template",
+        entity_id=template_id_value,
+        summary="Interactive template deleted",
+        metadata={"action_key": template.action_key},
+    )
 
 
 def get_operational_config(db: Session, *, company_id: UUID, agent_id: UUID) -> AiOperationalConfigRead:
@@ -587,6 +754,7 @@ def update_operational_config(
     company_id: UUID,
     agent_id: UUID,
     payload: dict,
+    actor_user: User | None = None,
 ) -> AiAgent:
     agent = get_agent(db, company_id=company_id, agent_id=agent_id)
     fallback_timezone = _agent_timezone(db, company_id=company_id)
@@ -599,6 +767,16 @@ def update_operational_config(
     agent.rules = rules
     db.commit()
     db.refresh(agent)
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.operational_config.updated",
+        entity_type="ai_agent",
+        entity_id=agent.id,
+        summary="Operational AI config updated",
+        metadata={"status": agent.operational_status},
+    )
     return agent
 
 
@@ -607,6 +785,7 @@ def publish_operational_config_for_agent(
     *,
     company_id: UUID,
     agent_id: UUID,
+    actor_user: User | None = None,
 ) -> AiAgent:
     agent = get_agent(db, company_id=company_id, agent_id=agent_id)
     fallback_timezone = _agent_timezone(db, company_id=company_id)
@@ -618,6 +797,16 @@ def publish_operational_config_for_agent(
     agent.rules = rules
     db.commit()
     db.refresh(agent)
+    _audit_ai_action(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="ai.operational_config.published",
+        entity_type="ai_agent",
+        entity_id=agent.id,
+        summary="Operational AI config published",
+        metadata={"status": agent.operational_status},
+    )
     return agent
 
 

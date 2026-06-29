@@ -1,5 +1,5 @@
 # generated: 2026-06-10
-# last_updated: 2026-06-25
+# last_updated: 2026-06-29
 # project: Swaflow
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,15 +35,15 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-10
-last_updated: 2026-06-26
+last_updated: 2026-06-29
 project: Swaflow
 project_key: NOKEY
 tracking_system: file-system
 story_location: /Users/camilosanchez/Documents/Swateck/SwaFlow/_bmad-output/implementation-artifacts
 
 development_status:
-  epic-1: in-progress
-  1-1-configurar-identidad-y-perfil-comercial-del-tenant: Done
+  epic-1: done
+  1-1-configurar-identidad-y-perfil-comercial-del-tenant: done
   1-2-gestionar-branding-visual-del-tenant: done
   1-3-administrar-usuarios-roles-y-permisos-del-tenant: done
   1-4-configurar-whatsapp-cloud-api-del-tenant: done
@@ -51,9 +51,9 @@ development_status:
   1-6-configurar-ia-comercial-base: done
   1-7-configurar-seguridad-y-comportamiento-operativo-de-la-ia: done
   1-8-configurar-pasarela-de-pagos-y-contrato-de-integracion: done
-  1-9-configurar-calendario-del-tenant: backlog
-  1-10-configurar-notificaciones-por-correo-y-webhooks-salientes: backlog
-  1-11-operar-acceso-superadmin-y-auditoria-transversal: backlog
+  1-9-configurar-calendario-del-tenant: done
+  1-10-configurar-notificaciones-por-correo-y-webhooks-salientes: done
+  1-11-operar-acceso-superadmin-y-auditoria-transversal: done
   epic-1-retrospective: optional
 
   epic-2: backlog

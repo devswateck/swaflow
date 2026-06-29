@@ -11,6 +11,11 @@ Spawn as many subagents as needed for the task, as long as each one has a narrow
 - Use it for any part of the repo, not just backend or architecture tasks.
 - Prefer parallel subagents when the task has distinct axes that do not block each other.
 
+## Repository Workflow Rules
+
+- Each user story must be implemented on its own branch.
+- The branch name should include the story id, such as `1-8/...` or `1-9/...`, and that branch should not be reused for another story.
+
 ## When To Spawn
 
 - Architecture decisions that span several domains.

@@ -5,7 +5,7 @@ updated: 2026-06-09
 concept_image: swaflow-logo-concept-v1.png
 ---
 
-# Brief de logo - SWAFLOW
+# Brief del logo - SWAFLOW
 
 ## Objetivo
 
@@ -65,4 +65,3 @@ Usar el **lockup combinado** como base:
 - No usar el logo del cliente/tenant como identidad principal de la plataforma.
 - No depender de efectos 3D, glow fuerte o sombras para reconocer el logo.
 - Mantener `SWAFLOW` como texto visible de producto.
-

@@ -9,11 +9,11 @@ sources:
 updated: 2026-06-10
 ---
 
-# SWAFLOW - Experience Spine
+# SWAFLOW - Columna vertebral de la experiencia
 
 Este spine gana en conflicto contra cualquier mockup, screenshot o borrador de implementacion. La identidad visual y tokens viven en `DESIGN.md`; este documento gobierna estructura, comportamiento, estados, interacciones, accesibilidad y flujos.
 
-## Foundation
+## Fundamentos
 
 Web SaaS de escritorio construida con React, Vite, TypeScript, Tailwind CSS, Zustand, TanStack Query y lucide-react. El frontend actual esta concentrado en `frontend/src/App.tsx`, asi que la primera pasada de implementacion debe mantener comportamiento estable y extraer/estandarizar componentes solo donde reduzca complejidad real.
 
@@ -23,7 +23,7 @@ Postura principal: consola operacional. El producto debe abrir directo al trabaj
 
 No hay version mobile en este ciclo. La experiencia se diseña y valida para desktop/laptop solamente.
 
-## Information Architecture
+## Arquitectura de información
 
 La navegacion sigue siendo una sola app, pero debe agruparse para reducir complejidad percibida.
 
@@ -54,7 +54,7 @@ Movil:
 - Fuera de alcance en este ciclo.
 - No se diseña ni valida version mobile.
 
-## Voice and Tone
+## Voz y tono
 
 Microcopy en espanol, operacional y directa. La voz de marca vive en `DESIGN.md`; el copy de producto ayuda a actuar rapido.
 
@@ -68,7 +68,7 @@ Microcopy en espanol, operacional y directa. La voz de marca vive en `DESIGN.md`
 
 Usar nombres de estado en espanol para usuarios, aunque los codigos internos esten en ingles.
 
-## Component Patterns
+## Patrones de componentes
 
 Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 
@@ -87,7 +87,7 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 | Data table | Productos, Ordenes, Citas | Escaneable: columnas estables, badges compactos, acciones de fila al final, estado vacio bajo header. |
 | Notice / Toast | Global | Error usa `role="alert"`, success usa `role="status"`. Mensajes cortos y accionables. |
 
-## State Patterns
+## Patrones de estado
 
 | Estado | Superficie | Tratamiento |
 |---|---|---|
@@ -107,7 +107,7 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 | Permiso denegado | Cualquier modulo | Ocultar acciones no autorizadas cuando sea posible. Si hay acceso directo, mostrar estado bloqueado conciso. |
 | Offline/realtime desconectado | Global / Inbox | Banner o estado en header: "Conexion en tiempo real pausada". Refresh manual disponible. |
 
-## Interaction Primitives
+## Primitivos de interacción
 
 - Click/tap para navegar y actuar.
 - Busqueda global permanece en el header; una futura command palette puede reutilizarla.
@@ -126,7 +126,7 @@ Prohibido en esta pasada:
 - Infinite scroll para tablas operativas sin limite/cargando claro.
 - Fondos con gradiente morado como superficie principal de la app.
 
-## Accessibility Floor
+## Piso de accesibilidad
 
 El contraste visual vive en `DESIGN.md`. Piso de accesibilidad conductual:
 
@@ -140,7 +140,7 @@ El contraste visual vive en `DESIGN.md`. Piso de accesibilidad conductual:
 - Targets tactiles de al menos 40px en web.
 - No truncar labels criticos como estado de pago, paso de funnel o alertas de inventario sin tooltip/title.
 
-## Responsive & Platform
+## Adaptabilidad y plataforma
 
 | Breakpoint | Comportamiento |
 |---|---|
@@ -151,7 +151,7 @@ El contraste visual vive en `DESIGN.md`. Piso de accesibilidad conductual:
 
 El producto es web de escritorio en este ciclo. No se define comportamiento mobile hasta una iteracion posterior.
 
-## Inspiration & Anti-patterns
+## Inspiraciones y anti-patrones
 
 Inspiraciones utiles:
 
@@ -179,9 +179,9 @@ Rechazado:
 8. Normalizar naming de marca: reemplazar el texto actual "Swatek Flow AI" por `SWAFLOW`.
 9. Usar la tipografia Sora definida por el concepto del logo como familia tipografica principal de la aplicacion.
 
-## Key Flows
+## Flujos clave
 
-### Flow 1 - Revision operacional de la manana (Laura, admin de tenant, 8:20am)
+### Flujo 1 - Revisión operacional de la mañana (Laura, admin de tenant, 8:20 a. m.)
 
 1. Laura abre SWAFLOW en su laptop.
 2. Dashboard carga cuatro KPI: chats que requieren accion, pagos pendientes, ventas confirmadas, citas de hoy.
@@ -192,7 +192,7 @@ Rechazado:
 
 Falla: datos de grafica no disponibles. Dashboard mantiene KPIs y muestra estado vacio: "No pudimos cargar esta grafica. Reintentar." No hay valores falsos.
 
-### Flow 2 - Asesor toma un chat de venta (Mateo, asesor comercial, medio dia)
+### Flujo 2 - El asesor toma un chat de venta (Mateo, asesor comercial, mediodía)
 
 1. Mateo abre Inbox.
 2. La lista esta ordenada por actividad reciente y destaca no leidos.
@@ -204,7 +204,7 @@ Falla: datos de grafica no disponibles. Dashboard mantiene KPIs y muestra estado
 
 Falla: envio fallido. El draft queda en composer y el error inline dice "No se pudo enviar. Reintentar."
 
-### Flow 3 - Seguimiento de pago desde chat (Diana, operadora, tarde)
+### Flujo 3 - Seguimiento de pago desde el chat (Diana, operadora, tarde)
 
 1. Diana entra a Inbox desde alerta de Dashboard: "3 pagos por vencer".
 2. La conversacion seleccionada muestra pago pendiente en el rail con tiempo de expiracion.
@@ -214,7 +214,7 @@ Falla: envio fallido. El draft queda en composer y el error inline dice "No se p
 
 Falla: pago expira. El rail cambia a expirado/seguimiento pendiente. UI no confirma pago, no extiende inventario y no genera nuevo link sin servicio backend.
 
-### Flow 4 - Admin revisa readiness de IA (Camilo, owner, antes de onboarding)
+### Flujo 4 - El admin revisa la preparación de la IA (Camilo, owner, antes del onboarding)
 
 1. Camilo abre Dashboard y ve banda de salud con "IA requiere revision".
 2. Abre IA desde la banda.

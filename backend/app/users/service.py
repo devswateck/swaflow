@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.companies.models import Company
 from app.core.security import hash_password
-from app.audit.service import record_audit
+from app.audit.service import record_audit_best_effort, record_superadmin_access
 from app.users.models import User
 from app.users.permissions import normalize_module_permissions
 from app.users.schemas import UserCreate, UserPasswordReset, UserUpdate
@@ -81,15 +81,44 @@ def _ensure_privileged_tenant_preserved(
         )
 
 
-def list_users(db: Session, *, company_id: UUID | None, limit: int, offset: int) -> list[User]:
+def list_users(
+    db: Session,
+    *,
+    company_id: UUID | None,
+    limit: int,
+    offset: int,
+    actor_user: User | None = None,
+) -> list[User]:
     statement = select(User)
     if company_id is not None:
         statement = statement.where(User.company_id == company_id)
     statement = statement.order_by(User.created_at.desc()).limit(limit).offset(offset)
-    return list(db.scalars(statement))
+    users = list(db.scalars(statement))
+    if actor_user is not None and actor_user.role == "superadmin":
+        record_superadmin_access(
+            db,
+            company_id=company_id or actor_user.company_id,
+            actor_user=actor_user,
+            action="superadmin.list_users",
+            entity_type="user",
+            summary="Superadmin listed users",
+            metadata={
+                "requested_company_id": str(company_id) if company_id is not None else None,
+                "scope": "all" if company_id is None else "tenant",
+            },
+            access_scope="platform_wide",
+        )
+    return users
 
 
-def get_user(db: Session, *, company_id: UUID | None, user_id: UUID, for_update: bool = False) -> User:
+def get_user(
+    db: Session,
+    *,
+    company_id: UUID | None,
+    user_id: UUID,
+    for_update: bool = False,
+    actor_user: User | None = None,
+) -> User:
     statement = select(User).where(User.id == user_id)
     if company_id is not None:
         statement = statement.where(User.company_id == company_id)
@@ -98,6 +127,17 @@ def get_user(db: Session, *, company_id: UUID | None, user_id: UUID, for_update:
     user = db.scalar(statement)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if actor_user is not None and actor_user.role == "superadmin" and user.company_id != actor_user.company_id:
+        record_superadmin_access(
+            db,
+            company_id=user.company_id,
+            actor_user=actor_user,
+            action="superadmin.access_user",
+            entity_type="user",
+            entity_id=user.id,
+            summary="Superadmin accessed tenant user",
+            metadata={"requested_company_id": str(company_id) if company_id is not None else None},
+        )
     return user
 
 
@@ -129,7 +169,18 @@ def create_user(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists") from None
     db.refresh(user)
-    record_audit(
+    if actor_user is not None and actor_user.role == "superadmin" and company_id != actor_user.company_id:
+        record_superadmin_access(
+            db,
+            company_id=company_id,
+            actor_user=actor_user,
+            action="superadmin.create_user",
+            entity_type="user",
+            entity_id=user.id,
+            summary="Superadmin created tenant user",
+            metadata={"email": user.email, "role": user.role},
+        )
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -139,7 +190,6 @@ def create_user(
         summary="User created",
         metadata={"email": user.email, "role": user.role},
     )
-    db.commit()
     return user
 
 
@@ -152,7 +202,7 @@ def update_user(
     allow_superadmin: bool = False,
     actor_user: User | None = None,
 ) -> User:
-    user = get_user(db, company_id=company_id, user_id=user_id)
+    user = get_user(db, company_id=company_id, user_id=user_id, actor_user=actor_user)
     _lock_tenant_scope(db, company_id=user.company_id)
     data = payload.model_dump(exclude_unset=True)
     if "role" in data:
@@ -189,7 +239,18 @@ def update_user(
         db.rollback()
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Email already exists") from None
     db.refresh(user)
-    record_audit(
+    if actor_user is not None and actor_user.role == "superadmin" and user.company_id != actor_user.company_id:
+        record_superadmin_access(
+            db,
+            company_id=user.company_id,
+            actor_user=actor_user,
+            action="superadmin.update_user",
+            entity_type="user",
+            entity_id=user.id,
+            summary="Superadmin updated tenant user",
+            metadata={"user_id": str(user.id)},
+        )
+    record_audit_best_effort(
         db,
         company_id=user.company_id,
         actor_user=actor_user,
@@ -199,7 +260,6 @@ def update_user(
         summary="User updated",
         metadata=payload.model_dump(exclude_unset=True),
     )
-    db.commit()
     return user
 
 
@@ -211,10 +271,22 @@ def reset_user_password(
     payload: UserPasswordReset,
     actor_user: User | None = None,
 ) -> None:
-    user = get_user(db, company_id=company_id, user_id=user_id)
+    user = get_user(db, company_id=company_id, user_id=user_id, actor_user=actor_user)
     _lock_tenant_scope(db, company_id=user.company_id)
     user.password_hash = hash_password(payload.password)
-    record_audit(
+    db.commit()
+    db.refresh(user)
+    if actor_user is not None and actor_user.role == "superadmin" and user.company_id != actor_user.company_id:
+        record_superadmin_access(
+            db,
+            company_id=user.company_id,
+            actor_user=actor_user,
+            action="superadmin.reset_user_password",
+            entity_type="user",
+            entity_id=user.id,
+            summary="Superadmin reset tenant user password",
+        )
+    record_audit_best_effort(
         db,
         company_id=user.company_id,
         actor_user=actor_user,
@@ -223,7 +295,6 @@ def reset_user_password(
         entity_id=user.id,
         summary="User password reset",
     )
-    db.commit()
 
 
 def deactivate_user(
@@ -233,7 +304,7 @@ def deactivate_user(
     user_id: UUID,
     actor_user: User | None = None,
 ) -> None:
-    user = get_user(db, company_id=company_id, user_id=user_id)
+    user = get_user(db, company_id=company_id, user_id=user_id, actor_user=actor_user)
     _lock_tenant_scope(db, company_id=user.company_id)
     _ensure_privileged_tenant_preserved(
         db,
@@ -242,7 +313,19 @@ def deactivate_user(
         next_status="inactive",
     )
     user.status = "inactive"
-    record_audit(
+    db.commit()
+    db.refresh(user)
+    if actor_user is not None and actor_user.role == "superadmin" and user.company_id != actor_user.company_id:
+        record_superadmin_access(
+            db,
+            company_id=user.company_id,
+            actor_user=actor_user,
+            action="superadmin.deactivate_user",
+            entity_type="user",
+            entity_id=user.id,
+            summary="Superadmin deactivated tenant user",
+        )
+    record_audit_best_effort(
         db,
         company_id=user.company_id,
         actor_user=actor_user,
@@ -251,4 +334,3 @@ def deactivate_user(
         entity_id=user.id,
         summary="User deactivated",
     )
-    db.commit()

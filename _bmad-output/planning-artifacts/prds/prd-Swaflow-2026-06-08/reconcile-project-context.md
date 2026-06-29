@@ -1,4 +1,4 @@
-# Reconcile: project-context.md
+# Reconciliación: `project-context.md`
 
 ## Resultado
 
@@ -19,4 +19,3 @@
 ## Gaps
 
 - Ningun gap bloqueante detectado.
-

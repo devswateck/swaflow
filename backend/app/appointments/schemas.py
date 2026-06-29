@@ -21,7 +21,6 @@ class AppointmentUpdate(BaseModel):
     duration_minutes: int | None = Field(default=None, ge=15, le=480)
     status: str | None = Field(default=None, max_length=50)
     notes: str | None = None
-    external_calendar_event_id: str | None = Field(default=None, max_length=255)
 
 
 class AppointmentRead(TimestampedRead):
@@ -34,4 +33,7 @@ class AppointmentRead(TimestampedRead):
     status: str
     notes: str | None
     external_calendar_event_id: str | None
-
+    calendar_sync_status: str | None
+    calendar_sync_error: str | None
+    calendar_synced_at: datetime | None
+    calendar_sync_obsolete_at: datetime | None

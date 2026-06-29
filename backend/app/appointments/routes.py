@@ -31,7 +31,12 @@ def create_appointment(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Appointment:
-    return service.create_appointment(db, company_id=current_user.company_id, payload=payload)
+    return service.create_appointment(
+        db,
+        company_id=current_user.company_id,
+        payload=payload,
+        actor_user=current_user,
+    )
 
 
 @router.get("/{appointment_id}", response_model=AppointmentRead)
@@ -53,7 +58,11 @@ def update_appointment(
     db: Session = Depends(get_db),
 ) -> Appointment:
     return service.update_appointment(
-        db, company_id=current_user.company_id, appointment_id=appointment_id, payload=payload
+        db,
+        company_id=current_user.company_id,
+        appointment_id=appointment_id,
+        payload=payload,
+        actor_user=current_user,
     )
 
 
@@ -64,6 +73,8 @@ def cancel_appointment(
     db: Session = Depends(get_db),
 ) -> Appointment:
     return service.cancel_appointment(
-        db, company_id=current_user.company_id, appointment_id=appointment_id
+        db,
+        company_id=current_user.company_id,
+        appointment_id=appointment_id,
+        actor_user=current_user,
     )
-

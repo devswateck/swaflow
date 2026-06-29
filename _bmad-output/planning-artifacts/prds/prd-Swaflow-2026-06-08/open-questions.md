@@ -1,6 +1,6 @@
-# Open Questions
+# Preguntas abiertas
 
-## Phase-Blocking
+## Bloqueantes de fase
 
 _Sin preguntas bloqueantes abiertas._
 
@@ -25,6 +25,6 @@ _Sin preguntas bloqueantes abiertas._
    - si el cliente responde, la IA puede continuar el flujo,
    - si el cliente no responde, la IA no insiste otra vez automaticamente en V1.
 
-## Non-Blocking / Deferible
+## No bloqueantes / diferibles
 
 _Sin preguntas abiertas._

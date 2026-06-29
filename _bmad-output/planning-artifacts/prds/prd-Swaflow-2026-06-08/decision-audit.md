@@ -1,4 +1,4 @@
-# Decision Audit
+# Auditoría de decisiones
 
 ## Resultado
 
@@ -24,13 +24,12 @@ Las decisiones de `.decision-log.md` estan capturadas en `prd.md`.
 - Integraciones nativas limitadas a pagos, calendario, correo/notificaciones y webhooks.
 - Retencion indefinida mientras tenant activo y paquete de exportacion al retiro.
 
-## Decisiones Superseded / Aclaradas
+## Decisiones sustituidas / aclaradas
 
 - Investigacion inicial sugeria Embedded Signup como flujo principal. El usuario corrigio alcance: V1 conserva configuracion tecnica actual; V2 tendra popup Meta.
 - La disponibilidad de citas sin calendario se habia descrito como "horario del modulo Citas"; el usuario aclaro que el horario operativo es unico y compartido para IA y Citas.
 
-## Acciones Antes Del Reviewer Pass
+## Acciones antes del pase de revisión
 
 - Limpiar texto de Discovery ya resuelto.
 - Reubicar FRs tardios en secciones correctas manteniendo IDs estables.
-

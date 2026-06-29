@@ -15,6 +15,7 @@ from app.events.routes import router as events_router
 from app.funnels.routes import router as funnels_router
 from app.integrations.routes import router as integrations_router
 from app.inventory.routes import router as inventory_router
+from app.offboarding.routes import router as offboarding_router
 from app.orders.routes import router as orders_router
 from app.payments.routes import router as payments_router
 from app.products.routes import router as products_router
@@ -70,6 +71,7 @@ api_router.include_router(ai_router)
 api_router.include_router(audit_router)
 api_router.include_router(funnels_router)
 api_router.include_router(integrations_router)
+api_router.include_router(offboarding_router)
 api_router.include_router(events_router)
 api_router.include_router(realtime_router)
 

@@ -859,15 +859,17 @@ const integrationDefinitions: IntegrationDefinition[] = [
   {
     type: "calendar",
     title: "Calendario",
-    subtitle: "Citas comerciales y recordatorios",
+    subtitle: "Citas comerciales y sincronizacion HTTP",
     icon: CalendarDays,
-    secretLabel: "Credencial OAuth o API key",
+    secretLabel: "Token OAuth, API key o headers JSON",
     defaultConfig: {
       provider: "google_calendar",
       calendar_id: "primary",
       timezone: "America/Bogota",
-      event_duration_minutes: "30",
-      reminder_minutes: "15",
+      api_base_url: "https://www.googleapis.com/calendar/v3",
+      create_event_path: "calendars/{calendar_id}/events",
+      update_event_path: "calendars/{calendar_id}/events/{event_id}",
+      response_event_id_path: "id",
     },
     fields: [
       {
@@ -875,20 +877,29 @@ const integrationDefinitions: IntegrationDefinition[] = [
         label: "Proveedor",
         options: [
           { value: "google_calendar", label: "Google Calendar" },
-          { value: "outlook_calendar", label: "Outlook Calendar" },
-          { value: "calendly", label: "Calendly" },
+          { value: "microsoft_calendar", label: "Microsoft Calendar" },
         ],
       },
       { key: "calendar_id", label: "Calendar ID", placeholder: "primary" },
       { key: "timezone", label: "Zona horaria", placeholder: "America/Bogota" },
-      { key: "event_duration_minutes", label: "Duracion cita", placeholder: "30" },
-      { key: "reminder_minutes", label: "Recordatorio", placeholder: "15" },
+      { key: "api_base_url", label: "API base URL", placeholder: "https://www.googleapis.com/calendar/v3" },
+      {
+        key: "create_event_path",
+        label: "Ruta crear evento",
+        placeholder: "calendars/{calendar_id}/events",
+      },
+      {
+        key: "update_event_path",
+        label: "Ruta actualizar evento",
+        placeholder: "calendars/{calendar_id}/events/{event_id}",
+      },
+      { key: "response_event_id_path", label: "Ruta ID respuesta", placeholder: "id" },
     ],
   },
   {
     type: "email",
     title: "Correo",
-    subtitle: "Notificaciones transaccionales",
+    subtitle: "Correos operativos del tenant",
     icon: Mail,
     secretLabel: "Password SMTP o API key",
     defaultConfig: {
@@ -960,7 +971,7 @@ const integrationDefinitions: IntegrationDefinition[] = [
   {
     type: "automation",
     title: "Automatizaciones",
-    subtitle: "n8n y servicios auxiliares",
+    subtitle: "n8n, email y servicios auxiliares",
     icon: Link2,
     secretLabel: "Token compartido",
     defaultConfig: {
@@ -6225,6 +6236,22 @@ function SettingsPage({
           />
           <KeyValue label="Tenant actual" value={currentUser.company_id.slice(0, 8)} />
           <KeyValue label="API" value={window.location.origin} />
+        </InfoPanel>
+        <InfoPanel title="Soporte y exportación" icon={ShieldCheck}>
+          <KeyValue
+            label="Auditoría transversal"
+            value={currentUser.role === "superadmin" ? "Disponible en backend" : "Solo lectura de tu tenant"}
+            strong={currentUser.role === "superadmin"}
+          />
+          <KeyValue
+            label="Exportación al retiro"
+            value={currentUser.role === "superadmin" ? "ZIP + TXT por módulo" : "No disponible"}
+            strong={currentUser.role === "superadmin"}
+          />
+          <KeyValue
+            label="Formato V1"
+            value="contactos, conversaciones, mensajes, órdenes, citas, eventos, auditoría"
+          />
         </InfoPanel>
       </div>
     </div>

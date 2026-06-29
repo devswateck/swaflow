@@ -1,4 +1,4 @@
-# Reconcile: proyecto_saas_ia_comercial_multitenant.md
+# Reconciliación: `proyecto_saas_ia_comercial_multitenant.md`
 
 ## Resultado
 
@@ -22,4 +22,3 @@ El PRD conserva el enfoque de producto del documento historico y aplica las deci
 ## Gaps
 
 - Ningun gap bloqueante detectado.
-

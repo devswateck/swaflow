@@ -1,42 +1,42 @@
-# Review Resolution
+# Resolución de revisión
 
-## Resolved High Findings
+## Hallazgos altos resueltos
 
-### Tenant provisioning under-specified
+### Provisionamiento de tenants insuficientemente especificado
 
-Resolution:
+Resolución:
 
 - V1: Swateck crea cada tenant y su admin principal mediante proceso operativo/admin.
-- Self-service signup de tenants queda fuera de V1.
+- El self-service signup de tenants queda fuera de V1.
 
-Updated in:
+Actualizado en:
 
-- `prd.md` Product Scope / V2 / Non-Goals V1 / FR-170 / FR-171.
+- `prd.md` Product Scope / V2 / No objetivos V1 / FR-170 / FR-171.
 - `.decision-log.md`.
 
-### Payment gateway abstraction under-specified
+### Abstracción de pasarela de pago insuficientemente especificada
 
-Resolution:
+Resolución:
 
 - V1 soporta pasarelas mediante adaptadores o proveedores configurados/certificados por Swateck.
-- Cada adaptador debe implementar contrato comun: crear link de pago, expiracion, validacion de webhook, mapeo de estados e idempotencia.
+- Cada adaptador debe implementar el contrato común: crear enlace de pago, expiración, validación de webhook, mapeo de estados e idempotencia.
 
-Updated in:
+Actualizado en:
 
 - `prd.md` Integraciones / FR-167 / FR-168 / FR-169.
 - `.decision-log.md`.
 
-## Resolved High Finding
+## Hallazgo alto resuelto
 
-### Autoasignacion cuando existe exactamente un usuario adicional
+### Autoasignación cuando existe exactamente un usuario adicional
 
-Resolution:
+Resolución:
 
-- Se mantiene autoasignacion por defecto cuando existe exactamente un usuario adicional.
-- El admin puede desactivar esa autoasignacion para que chats nuevos queden disponibles/no asignados.
-- El admin conserva capacidad de ver, asignar y reasignar chats.
+- Se mantiene la autoasignación por defecto cuando existe exactamente un usuario adicional.
+- El admin puede desactivar esa autoasignación para que los chats nuevos queden disponibles o sin asignar.
+- El admin conserva la capacidad de ver, asignar y reasignar chats.
 
-Updated in:
+Actualizado en:
 
 - `prd.md` Inbox / FR-172 / FR-173.
 - `.decision-log.md`.

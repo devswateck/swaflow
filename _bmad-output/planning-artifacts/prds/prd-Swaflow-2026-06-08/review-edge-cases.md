@@ -1,40 +1,39 @@
-# Edge Case Review — Swaflow PRD
+# Revisión de casos límite - PRD de Swaflow
 
-## Verdict
+## Veredicto
 
-The PRD covers major happy paths and several failure paths. Remaining edge cases are mostly operational and integration-bound, not conceptual.
+El PRD cubre los caminos felices principales y varios caminos de error. Los casos límite restantes son más operativos y de integración que conceptuales.
 
-## High Findings
+## Hallazgos altos
 
-1. **One additional user auto-assignment can surprise tenants.**
-   - Location: FR-021.
-   - Risk: If exactly one additional user exists, all chats go to that user by default, even if admin expects shared visibility or temporary user coverage.
-   - Recommended fix: add admin override and visibility: admin can disable auto-assignment, reassign, and see all chats.
+1. **La autoasignación cuando existe un usuario adicional puede sorprender a los tenants.**
+   - Ubicación: FR-021.
+   - Riesgo: si existe exactamente un usuario adicional, todos los chats van a ese usuario por defecto, aunque el admin espere visibilidad compartida o cobertura temporal.
+   - Fix recomendado: agregar override y visibilidad para admin: puede desactivar autoasignación, reasignar y ver todos los chats.
 
-## Medium Findings
+## Hallazgos medios
 
-1. **IA reactivation context needs boundary rules.**
-   - Location: FR-014.
-   - Risk: Reactivating IA after human intervention should not cause it to contradict human promises or repeat the welcome funnel.
-   - Recommended fix: state that IA must summarize/reuse recent human context, avoid re-running welcome when already completed, and respect commitments recorded in the chat only when they do not violate backend truth.
+1. **El contexto al reactivar la IA necesita reglas de frontera.**
+   - Ubicación: FR-014.
+   - Riesgo: reactivar la IA después de intervención humana no debe hacer que contradiga promesas humanas ni repita el funnel de bienvenida.
+   - Fix recomendado: indicar que la IA debe resumir/reusar el contexto humano reciente, evitar reejecutar el welcome cuando ya se completó y respetar compromisos registrados en el chat solo cuando no contradigan la verdad del backend.
 
-2. **Payment expiry follow-up needs cadence limit.**
-   - Location: FR-145.
-   - Risk: IA could spam follow-ups after expiry.
-   - Recommended fix: add a configurable or default follow-up limit, e.g. one follow-up after expiry unless customer responds.
+2. **El seguimiento por expiración de pago necesita límite de cadencia.**
+   - Ubicación: FR-145.
+   - Riesgo: la IA podría spamear seguimientos después de la expiración.
+   - Fix recomendado: agregar un límite configurable o por defecto, por ejemplo un solo seguimiento después del vencimiento salvo que el cliente responda.
 
-3. **Appointment options in different days can fail in sparse availability.**
-   - Location: FR-150, FR-166.
-   - Risk: In the next 7 days there may be fewer than three distinct days available.
-   - Recommended fix: define fallback: propose fewer options with clear message, or allow multiple slots same day if configured.
+3. **Las opciones de cita en días distintos pueden fallar con disponibilidad escasa.**
+   - Ubicación: FR-150, FR-166.
+   - Riesgo: en los próximos 7 días puede haber menos de tres días distintos disponibles.
+   - Fix recomendado: definir fallback: proponer menos opciones con un mensaje claro, o permitir múltiples slots el mismo día si está configurado.
 
-## Low Findings
+## Hallazgos bajos
 
-1. **Manual chat reassignment should notify or visibly update the previous assignee.**
-   - Location: FR-026.
-   - Recommended fix: require realtime update/notification when admin reassigns.
+1. **La reasignación manual de chats debería notificar o actualizar visiblemente al asignado anterior.**
+   - Ubicación: FR-026.
+   - Fix recomendado: exigir actualización/realtime cuando el admin reasigna.
 
-2. **Users with access to Products but not WhatsApp may see Meta sync status but not credentials.**
-   - Location: Roles/Productos.
-   - Recommended fix: clarify read-only catalog visibility vs WhatsApp configuration access.
-
+2. **Los usuarios con acceso a Productos pero no a WhatsApp podrían ver el estado de sincronización Meta sin credenciales.**
+   - Ubicación: Roles/Productos.
+   - Fix recomendado: aclarar la visibilidad de solo lectura del catálogo versus el acceso a configuración de WhatsApp.

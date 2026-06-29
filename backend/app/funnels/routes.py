@@ -28,7 +28,12 @@ def create_funnel(
     current_user: User = Depends(require_module_access("funnels")),
     db: Session = Depends(get_db),
 ) -> SalesFunnel:
-    return service.create_funnel(db, company_id=current_user.company_id, payload=payload)
+    return service.create_funnel(
+        db,
+        company_id=current_user.company_id,
+        payload=payload,
+        actor_user=current_user,
+    )
 
 
 @router.put("/{funnel_id}", response_model=FunnelRead)
@@ -39,7 +44,11 @@ def update_funnel(
     db: Session = Depends(get_db),
 ) -> SalesFunnel:
     return service.update_funnel(
-        db, company_id=current_user.company_id, funnel_id=funnel_id, payload=payload
+        db,
+        company_id=current_user.company_id,
+        funnel_id=funnel_id,
+        payload=payload,
+        actor_user=current_user,
     )
 
 
@@ -49,5 +58,10 @@ def delete_funnel(
     current_user: User = Depends(require_module_access("funnels")),
     db: Session = Depends(get_db),
 ) -> MessageResponse:
-    service.delete_funnel(db, company_id=current_user.company_id, funnel_id=funnel_id)
+    service.delete_funnel(
+        db,
+        company_id=current_user.company_id,
+        funnel_id=funnel_id,
+        actor_user=current_user,
+    )
     return MessageResponse(detail="Funnel eliminado")

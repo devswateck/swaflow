@@ -29,7 +29,7 @@ def list_companies(
     current_user: User = Depends(require_roles("superadmin")),
     db: Session = Depends(get_db),
 ) -> list[object]:
-    return service.list_companies(db, limit=limit, offset=offset)
+    return service.list_companies(db, limit=limit, offset=offset, actor_user=current_user)
 
 
 @router.get("/{company_id}", response_model=CompanyRead)
@@ -44,6 +44,7 @@ def get_company(
         company_id=company_id,
         current_company_id=current_user.company_id,
         is_superuser=is_superadmin(current_user),
+        actor_user=current_user,
     )
 
 

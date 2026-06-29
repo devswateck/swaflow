@@ -6,7 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.crypto import decrypt_secret, encrypt_secret
-from app.audit.service import record_audit
+from app.audit.service import record_audit_best_effort
+from app.integrations.calendar import normalize_calendar_config, validate_calendar_integration_config
 from app.integrations.models import CompanyIntegration, OutboundWebhook
 from app.integrations.schemas import (
     IntegrationCreate,
@@ -34,20 +35,33 @@ def create_integration(
     payload: IntegrationCreate,
     actor_user=None,
 ) -> CompanyIntegration:
+    raw_config = payload.config if isinstance(payload.config, dict) else {}
+    config = normalize_calendar_config(raw_config) if payload.type == "calendar" else payload.config
+    credentials_raw = payload.credentials
     if payload.type == "payments":
         validate_payment_integration_config(
-            config=payload.config,
-            credentials_raw=payload.credentials,
+            config=config,
+            credentials_raw=credentials_raw,
             integration_status="active",
         )
+    if payload.type == "calendar":
+        validate_calendar_integration_config(
+            config=raw_config,
+            credentials_raw=credentials_raw,
+            integration_status="active",
+        )
+    if payload.type == "payments":
+        config = payload.config
     integration = CompanyIntegration(
         company_id=company_id,
         type=payload.type,
-        credentials_encrypted=encrypt_secret(payload.credentials) if payload.credentials else None,
-        config=payload.config,
+        credentials_encrypted=encrypt_secret(credentials_raw) if credentials_raw else None,
+        config=config,
     )
     db.add(integration)
-    record_audit(
+    db.commit()
+    db.refresh(integration)
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -57,8 +71,6 @@ def create_integration(
         entity_id=integration.id,
         metadata={"type": payload.type, "status": "active"},
     )
-    db.commit()
-    db.refresh(integration)
     return integration
 
 
@@ -115,9 +127,12 @@ def update_integration(
 ) -> CompanyIntegration:
     integration = get_integration(db, company_id=company_id, integration_id=integration_id)
     data = payload.model_dump(exclude_unset=True)
-    next_config = data.get("config") if data.get("config") is not None else integration.config
+    raw_next_config = data.get("config") if data.get("config") is not None else integration.config
+    next_config = raw_next_config
     if isinstance(next_config, dict) is False:
         next_config = integration.config if isinstance(integration.config, dict) else {}
+    if integration.type == "calendar":
+        next_config = normalize_calendar_config(next_config)
     next_status = str(data.get("status") or integration.status or "active")
     next_credentials_raw: str | None
     if "credentials" in data:
@@ -134,6 +149,12 @@ def update_integration(
             credentials_raw=next_credentials_raw,
             integration_status=next_status,
         )
+    if integration.type == "calendar":
+        validate_calendar_integration_config(
+            config=raw_next_config if isinstance(raw_next_config, dict) else {},
+            credentials_raw=next_credentials_raw,
+            integration_status=next_status,
+        )
     if "credentials" in data:
         credentials = data.pop("credentials")
         if credentials:
@@ -143,8 +164,12 @@ def update_integration(
         elif credentials is None:
             integration.credentials_encrypted = None
     for field, value in data.items():
+        if field == "config" and integration.type == "calendar" and isinstance(value, dict):
+            value = normalize_calendar_config(value)
         setattr(integration, field, value)
-    record_audit(
+    db.commit()
+    db.refresh(integration)
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -154,8 +179,6 @@ def update_integration(
         summary="Integration updated",
         metadata=_safe_audit_metadata(payload.model_dump(exclude_unset=True)),
     )
-    db.commit()
-    db.refresh(integration)
     return integration
 
 
@@ -184,7 +207,9 @@ def create_outbound_webhook(
         active=payload.active,
     )
     db.add(webhook)
-    record_audit(
+    db.commit()
+    db.refresh(webhook)
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -194,8 +219,6 @@ def create_outbound_webhook(
         summary="Outbound webhook created",
         metadata={"event_type": payload.event_type, "target_url": str(payload.target_url)},
     )
-    db.commit()
-    db.refresh(webhook)
     return webhook
 
 
@@ -228,7 +251,9 @@ def update_outbound_webhook(
         data["target_url"] = str(data["target_url"])
     for field, value in data.items():
         setattr(webhook, field, value)
-    record_audit(
+    db.commit()
+    db.refresh(webhook)
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -238,8 +263,6 @@ def update_outbound_webhook(
         summary="Outbound webhook updated",
         metadata=_safe_audit_metadata(payload.model_dump(exclude_unset=True)),
     )
-    db.commit()
-    db.refresh(webhook)
     return webhook
 
 
@@ -251,7 +274,9 @@ def delete_outbound_webhook(
     actor_user=None,
 ) -> None:
     webhook = get_outbound_webhook(db, company_id=company_id, webhook_id=webhook_id)
-    record_audit(
+    db.delete(webhook)
+    db.commit()
+    record_audit_best_effort(
         db,
         company_id=company_id,
         actor_user=actor_user,
@@ -261,5 +286,3 @@ def delete_outbound_webhook(
         summary="Outbound webhook deleted",
         metadata={"event_type": webhook.event_type, "target_url": webhook.target_url},
     )
-    db.delete(webhook)
-    db.commit()

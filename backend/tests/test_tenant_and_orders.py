@@ -1,9 +1,12 @@
 import json
+import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -36,6 +39,9 @@ from app.companies import service
 from app.companies.schemas import CompanyCreate, CompanyUpdate
 from app.companies.service import create_company_with_owner, update_company
 from app.contacts.models import Contact
+from app.appointments.schemas import AppointmentCreate, AppointmentUpdate
+from app.appointments.service import create_appointment, update_appointment
+from app.events.models import Event
 from app.core.crypto import decrypt_secret
 from app.core.schemas import OwnerCreate
 from app.ai.runtime import (
@@ -74,6 +80,7 @@ from app.integrations.service import (
     update_integration,
     update_outbound_webhook,
 )
+from app.payments.notifications import notify_order_paid
 from app.payments.service import process_payment_webhook
 from app.orders.schemas import OrderCreate, OrderItemCreate
 from app.orders.service import create_order, generate_payment_link, mark_paid_by_reference
@@ -179,19 +186,18 @@ def test_company_bootstrap_rolls_back_if_welcome_funnel_bootstrap_fails(db, monk
     assert db.scalar(select(Company).where(Company.name == "Acme")) is None
 
 
-def test_company_bootstrap_rolls_back_if_audit_write_fails(db, monkeypatch):
+def test_company_bootstrap_still_succeeds_if_audit_write_fails(db, monkeypatch):
     def boom(*args, **kwargs):
         raise RuntimeError("audit failed")
 
-    monkeypatch.setattr(service, "record_audit", boom)
+    monkeypatch.setattr(service, "record_audit_best_effort", boom)
 
-    with pytest.raises(RuntimeError, match="audit failed"):
-        bootstrap_company(db, "Acme")
+    company, owner = bootstrap_company(db, "Acme")
 
-    assert db.scalar(select(Company).where(Company.name == "Acme")) is None
-    assert db.scalar(
-        select(User).where(User.email == "owner@acme.example.com")
-    ) is None
+    assert company.name == "Acme"
+    assert owner.email == "owner@acme.example.com"
+    assert db.scalar(select(Company).where(Company.name == "Acme")) is not None
+    assert db.scalar(select(User).where(User.email == "owner@acme.example.com")) is not None
 
 
 def test_company_bootstrap_creates_default_welcome_funnel(db):
@@ -2046,6 +2052,690 @@ def test_audit_logs_redact_integration_secrets(db):
     )
     assert "credentials" not in webhook_log.metadata_json
     assert "secret_token" not in webhook_log.metadata_json
+
+
+def test_email_notification_uses_tenant_brand_and_recipient_headers(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(
+        company_id=company.id,
+        name="Cliente Demo",
+        email="cliente@acme.com",
+        phone="573000000000",
+    )
+    db.add(contact)
+    db.flush()
+
+    create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="email",
+            credentials=json.dumps({"password": "smtp-secret"}),
+            config={
+                "provider": "smtp",
+                "from_email": "notificaciones@acme.com",
+                "smtp_host": "smtp.acme.com",
+                "smtp_port": "587",
+            },
+        ),
+    )
+
+    order = Order(
+        company_id=company.id,
+        contact_id=contact.id,
+        status="paid",
+        payment_status="paid",
+        total=Decimal("125000.00"),
+        currency="COP",
+        payment_reference="ref-123",
+    )
+    db.add(order)
+    db.commit()
+
+    captured: dict[str, object] = {}
+
+    class FakeSMTP:
+        def __init__(self, host, port, timeout):
+            captured["host"] = host
+            captured["port"] = port
+            captured["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def starttls(self):
+            captured["starttls"] = True
+
+        def login(self, username, password):
+            captured["login"] = (username, password)
+
+        def send_message(self, message):
+            captured["message"] = message
+
+    monkeypatch.setattr("app.payments.notifications.smtplib.SMTP", FakeSMTP)
+
+    notify_order_paid(db, order=order)
+
+    message = captured["message"]
+    assert captured["host"] == "smtp.acme.com"
+    assert captured["port"] == 587
+    assert captured["starttls"] is True
+    assert captured["login"] == ("notificaciones@acme.com", "smtp-secret")
+    assert message["From"] == "Acme <notificaciones@acme.com>"
+    assert message["Subject"] == f"Pago confirmado - Acme - Orden {str(order.id)[:8]}"
+    assert "Pago confirmado en Acme." in message.get_content()
+    assert "Empresa: Acme" in message.get_content()
+    assert "Correo cliente: cliente@acme.com" in message.get_content()
+
+
+def test_email_notification_delivery_failure_is_audited_without_breaking_flow(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(
+        company_id=company.id,
+        name="Cliente Demo",
+        email="cliente@acme.com",
+        phone="573000000000",
+    )
+    db.add(contact)
+    db.flush()
+
+    create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="email",
+            credentials=json.dumps({"password": "smtp-secret"}),
+            config={
+                "provider": "smtp",
+                "from_email": "notificaciones@acme.com",
+                "smtp_host": "smtp.acme.com",
+                "smtp_port": "587",
+            },
+        ),
+    )
+
+    order = Order(
+        company_id=company.id,
+        contact_id=contact.id,
+        status="paid",
+        payment_status="paid",
+        total=Decimal("125000.00"),
+        currency="COP",
+        payment_reference="ref-456",
+    )
+    db.add(order)
+    db.commit()
+
+    class FailingSMTP:
+        def __init__(self, host, port, timeout):
+            self.host = host
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def starttls(self):
+            return None
+
+        def login(self, username, password):
+            return None
+
+        def send_message(self, message):
+            raise RuntimeError("smtp down")
+
+    monkeypatch.setattr("app.payments.notifications.smtplib.SMTP", FailingSMTP)
+
+    notify_order_paid(db, order=order)
+
+    audit_log = next(
+        log
+        for log in list_audit_logs(db, company_id=company.id, limit=20, offset=0)
+        if log.action == "email_notification.delivery_failed"
+    )
+    assert audit_log.entity_id is not None
+    assert audit_log.metadata_json["channel"] == "email"
+    assert audit_log.metadata_json["company_name"] == "Acme"
+    assert audit_log.metadata_json["order_id"] == str(order.id)
+    assert audit_log.metadata_json["order_reference"] == "ref-456"
+    assert audit_log.metadata_json["recipient_count"] == 2
+    assert audit_log.metadata_json["error_type"] == "RuntimeError"
+    assert "smtp-secret" not in audit_log.metadata_json
+
+
+def test_email_notification_missing_smtp_config_is_audited_without_breaking_flow(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(
+        company_id=company.id,
+        name="Cliente Demo",
+        email="cliente@acme.com",
+        phone="573000000000",
+    )
+    db.add(contact)
+    db.flush()
+
+    create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="email",
+            credentials=json.dumps({"password": "smtp-secret"}),
+            config={
+                "provider": "smtp",
+                "from_email": "notificaciones@acme.com",
+            },
+        ),
+    )
+
+    order = Order(
+        company_id=company.id,
+        contact_id=contact.id,
+        status="paid",
+        payment_status="paid",
+        total=Decimal("125000.00"),
+        currency="COP",
+        payment_reference="ref-789",
+    )
+    db.add(order)
+    db.commit()
+
+    called = {"smtp": False}
+
+    class UnexpectedSMTP:
+        def __init__(self, host, port, timeout):
+            called["smtp"] = True
+
+    monkeypatch.setattr("app.payments.notifications.smtplib.SMTP", UnexpectedSMTP)
+
+    notify_order_paid(db, order=order)
+
+    audit_log = next(
+        log
+        for log in list_audit_logs(db, company_id=company.id, limit=20, offset=0)
+        if log.action == "email_notification.delivery_failed"
+    )
+    assert audit_log.metadata_json["channel"] == "email"
+    assert audit_log.metadata_json["order_id"] == str(order.id)
+    assert audit_log.metadata_json["error_type"] == "ValueError"
+    assert called["smtp"] is False
+
+
+def test_outbound_webhook_dispatch_signs_secret_and_records_delivery_failure(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    secret = "webhook-secret"
+
+    failing_webhook = create_outbound_webhook(
+        db,
+        company_id=company.id,
+        payload=OutboundWebhookCreate(
+            event_type="order.paid",
+            target_url="https://example.com/webhooks/fail",
+            active=True,
+        ),
+    )
+    signed_webhook = create_outbound_webhook(
+        db,
+        company_id=company.id,
+        payload=OutboundWebhookCreate(
+            event_type="order.paid",
+            target_url="https://example.com/webhooks/signed",
+            secret_token=secret,
+            active=True,
+        ),
+    )
+    create_outbound_webhook(
+        db,
+        company_id=company.id,
+        payload=OutboundWebhookCreate(
+            event_type="order.paid",
+            target_url="https://example.com/webhooks/inactive",
+            active=False,
+        ),
+    )
+
+    calls: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            if self.status_code >= 400:
+                raise httpx.HTTPStatusError(
+                    "boom",
+                    request=httpx.Request("POST", "https://example.com/webhooks/fail"),
+                    response=httpx.Response(self.status_code),
+                )
+
+    class FakeClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, target_url, content=None, headers=None):
+            calls.append(
+                {
+                    "target_url": target_url,
+                    "content": content,
+                    "headers": headers,
+                }
+            )
+            if target_url.endswith("/fail"):
+                return FakeResponse(503)
+            return FakeResponse(204)
+
+    monkeypatch.setattr("app.events.dispatcher.httpx.Client", FakeClient)
+
+    event = Event(
+        company_id=company.id,
+        event_type="order.paid",
+        payload={"order_id": "order-123", "total": "125000.00"},
+        status="pending",
+    )
+    db.add(event)
+    db.flush()
+
+    from app.events.dispatcher import dispatch_event
+
+    dispatch_event(db, event)
+    db.commit()
+    db.refresh(event)
+
+    assert event.status == "delivery_failed"
+    assert len(calls) == 2
+    assert all(call["target_url"] != "https://example.com/webhooks/inactive" for call in calls)
+
+    signed_call = next(call for call in calls if call["target_url"] == "https://example.com/webhooks/signed")
+    expected_signature = "sha256=" + hmac.new(
+        secret.encode("utf-8"),
+        signed_call["content"],
+        hashlib.sha256,
+    ).hexdigest()
+    assert signed_call["headers"]["X-SwaFlow-Signature"] == expected_signature
+    assert signed_call["headers"]["X-SwaFlow-Event"] == "order.paid"
+    assert signed_call["headers"]["X-SwaFlow-Event-Id"] == str(event.id)
+
+    failure_log = next(
+        log
+        for log in list_audit_logs(db, company_id=company.id, limit=20, offset=0)
+        if log.action == "outbound_webhook.delivery_failed"
+    )
+    assert failure_log.entity_id == failing_webhook.id
+    assert failure_log.metadata_json["event_id"] == str(event.id)
+    assert failure_log.metadata_json["event_type"] == "order.paid"
+    assert failure_log.metadata_json["target_url"] == "https://example.com/webhooks/fail"
+    assert failure_log.metadata_json["response_status_code"] == 503
+
+
+def test_outbound_webhook_dispatch_survives_audit_failure(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+
+    create_outbound_webhook(
+        db,
+        company_id=company.id,
+        payload=OutboundWebhookCreate(
+            event_type="order.paid",
+            target_url="https://example.com/webhooks/fail",
+            active=True,
+        ),
+    )
+
+    class FakeResponse:
+        def __init__(self, status_code: int) -> None:
+            self.status_code = status_code
+
+        def raise_for_status(self) -> None:
+            raise httpx.HTTPStatusError(
+                "boom",
+                request=httpx.Request("POST", "https://example.com/webhooks/fail"),
+                response=httpx.Response(self.status_code),
+            )
+
+    class FakeClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, target_url, content=None, headers=None):
+            return FakeResponse(503)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("audit down")
+
+    monkeypatch.setattr("app.events.dispatcher.httpx.Client", FakeClient)
+    monkeypatch.setattr("app.events.dispatcher.record_audit", boom)
+
+    event = Event(
+        company_id=company.id,
+        event_type="order.paid",
+        payload={"order_id": "order-456"},
+        status="pending",
+    )
+    db.add(event)
+    db.flush()
+
+    from app.events.dispatcher import dispatch_event
+
+    dispatch_event(db, event)
+    db.commit()
+    db.refresh(event)
+
+    assert event.status == "delivery_failed"
+    assert event.processed_at is not None
+
+
+def test_calendar_integration_validates_provider_and_normalizes_alias(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_integration(
+            db,
+            company_id=company.id,
+            payload=IntegrationCreate(
+                type="calendar",
+                credentials="calendar-secret",
+                config={
+                    "provider": "calendly",
+                    "calendar_id": "primary",
+                    "timezone": "America/Bogota",
+                },
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Google Calendar or Microsoft Calendar" in str(exc_info.value.detail)
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_integration(
+            db,
+            company_id=company.id,
+            payload=IntegrationCreate(
+                type="calendar",
+                credentials="calendar-secret",
+                config={
+                    "calendar_id": "primary",
+                    "timezone": "America/Bogota",
+                },
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Calendar provider is required" in str(exc_info.value.detail)
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_integration(
+            db,
+            company_id=company.id,
+            payload=IntegrationCreate(
+                type="calendar",
+                credentials="",
+                config={
+                    "provider": "google_calendar",
+                    "calendar_id": "primary",
+                    "timezone": "America/Bogota",
+                },
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Calendar credentials are required" in str(exc_info.value.detail)
+
+    integration = create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="calendar",
+            credentials="calendar-secret",
+            config={
+                "provider": "outlook_calendar",
+                "calendar_id": "primary",
+                "timezone": "America/Bogota",
+            },
+        ),
+    )
+
+    assert integration.config["provider"] == "microsoft_calendar"
+    assert integration.config["api_base_url"] == "https://graph.microsoft.com/v1.0"
+    assert integration.config["create_event_path"] == "me/calendars/{calendar_id}/events"
+    assert integration.config["update_event_path"] == "me/events/{event_id}"
+    assert integration.config["response_event_id_path"] == "id"
+    stored = db.scalar(select(CompanyIntegration).where(CompanyIntegration.id == integration.id))
+    assert stored is not None
+    assert decrypt_secret(stored.credentials_encrypted or "") == "calendar-secret"
+
+
+def test_calendar_integration_is_tenant_scoped(db):
+    company, _ = bootstrap_company(db, "Acme")
+    other_company, _ = bootstrap_company(db, "Beta")
+
+    integration = create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="calendar",
+            credentials="calendar-secret",
+            config={
+                "provider": "google_calendar",
+                "calendar_id": "primary",
+                "timezone": "America/Bogota",
+            },
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        update_integration(
+            db,
+            company_id=other_company.id,
+            integration_id=integration.id,
+            payload=IntegrationUpdate(
+                config={
+                    "provider": "microsoft_calendar",
+                    "calendar_id": "primary",
+                    "timezone": "America/Bogota",
+                }
+            ),
+        )
+    assert exc_info.value.status_code == 404
+
+
+def test_calendar_appointment_syncs_on_create_and_update(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente Demo", phone="573000000000")
+    db.add(contact)
+    db.commit()
+
+    create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="calendar",
+            credentials="calendar-secret",
+            config={
+                "provider": "microsoft_calendar",
+                "calendar_id": "primary",
+                "timezone": "America/Bogota",
+                "api_base_url": "https://graph.microsoft.com/v1.0",
+                "create_event_path": "me/calendars/{calendar_id}/events",
+                "update_event_path": "me/events/{event_id}",
+                "response_event_id_path": "id",
+            },
+        ),
+    )
+
+    requests: list[dict[str, object]] = []
+
+    class FakeResponse:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+            self.headers = {"Location": "https://graph.microsoft.com/v1.0/me/events/evt-001"}
+
+        def json(self) -> dict[str, object]:
+            return self._payload
+
+        def raise_for_status(self) -> None:
+            return None
+
+    class FakeClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, json=None, headers=None):
+            requests.append({"method": method, "url": url, "json": json, "headers": headers})
+            if method == "POST":
+                return FakeResponse({"id": "evt-001"})
+            return FakeResponse({"id": "evt-002"})
+
+    monkeypatch.setattr("app.integrations.calendar.httpx.Client", FakeClient)
+
+    appointment = create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=contact.id,
+            scheduled_at=datetime(2026, 1, 15, 10, 30, tzinfo=UTC),
+            duration_minutes=45,
+            notes="Primera cita",
+        ),
+    )
+    assert appointment.external_calendar_event_id == "evt-001"
+    assert appointment.calendar_sync_status == "synced"
+    assert appointment.calendar_synced_at is not None
+    assert appointment.calendar_sync_obsolete_at is None
+
+    updated = update_appointment(
+        db,
+        company_id=company.id,
+        appointment_id=appointment.id,
+        payload=AppointmentUpdate(notes="Cita reprogramada"),
+    )
+    assert updated.external_calendar_event_id == "evt-001"
+    assert updated.calendar_sync_status == "synced"
+    assert updated.calendar_synced_at is not None
+    assert updated.calendar_sync_obsolete_at is None
+    assert updated.notes == "Cita reprogramada"
+    assert len(requests) == 2
+    assert requests[0]["method"] == "POST"
+    assert requests[1]["method"] == "PATCH"
+
+    synced_events = list(
+        db.scalars(
+            select(Event).where(
+                Event.company_id == company.id,
+                Event.event_type == "appointment.calendar_synced",
+            )
+        )
+    )
+    assert len(synced_events) == 2
+
+
+def test_calendar_appointment_failed_resync_marks_appointment_obsolete(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente Demo", phone="573000000000")
+    db.add(contact)
+    db.commit()
+
+    create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="calendar",
+            credentials="calendar-secret",
+            config={
+                "provider": "google_calendar",
+                "calendar_id": "primary",
+                "timezone": "America/Bogota",
+                "api_base_url": "https://www.googleapis.com/calendar/v3",
+                "create_event_path": "calendars/{calendar_id}/events",
+                "update_event_path": "calendars/{calendar_id}/events/{event_id}",
+                "response_event_id_path": "id",
+            },
+        ),
+    )
+
+    calls: list[str] = []
+
+    class SuccessfulThenFailingClient:
+        def __init__(self, timeout: int) -> None:
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def request(self, method, url, json=None, headers=None):
+            calls.append(method)
+            if len(calls) == 1:
+                return SimpleNamespace(
+                    headers={"Location": "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt-123"},
+                    json=lambda: {"id": "evt-123"},
+                    raise_for_status=lambda: None,
+                )
+            raise httpx.ConnectError(
+                "calendar down",
+                request=httpx.Request(method, url),
+            )
+
+    monkeypatch.setattr("app.integrations.calendar.httpx.Client", SuccessfulThenFailingClient)
+
+    appointment = create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=contact.id,
+            scheduled_at=datetime(2026, 1, 15, 11, 0, tzinfo=UTC),
+            duration_minutes=30,
+            notes="Cita inicial",
+        ),
+    )
+    assert appointment.external_calendar_event_id == "evt-123"
+    assert appointment.calendar_sync_status == "synced"
+    assert appointment.calendar_synced_at is not None
+    assert appointment.calendar_sync_obsolete_at is None
+
+    updated = update_appointment(
+        db,
+        company_id=company.id,
+        appointment_id=appointment.id,
+        payload=AppointmentUpdate(notes="Cita ajustada"),
+    )
+    assert updated.external_calendar_event_id == "evt-123"
+    assert updated.calendar_sync_status == "obsolete"
+    assert updated.calendar_sync_error
+    assert "calendar down" in updated.calendar_sync_error
+    assert updated.calendar_sync_obsolete_at is not None
+    assert updated.notes == "Cita ajustada"
+    assert len(calls) == 2
+
+    failed_events = list(
+        db.scalars(
+            select(Event).where(
+                Event.company_id == company.id,
+                Event.event_type == "appointment.calendar_sync_failed",
+            )
+        )
+    )
+    assert len(failed_events) == 1
+    assert failed_events[0].payload["sync_status"] == "obsolete"
+    assert failed_events[0].payload["external_calendar_event_id"] == "evt-123"
 
 
 def test_payment_link_ttl_applies_custom_and_default_values(db, monkeypatch):

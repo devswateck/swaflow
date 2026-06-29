@@ -88,6 +88,7 @@ Este archivo contiene reglas criticas para agentes de IA que implementen codigo 
 
 - Backend local: `cd backend`, preparar `.env`, `docker compose up -d`, instalar `.[dev]`, ejecutar `alembic upgrade head`, correr `uvicorn app.main:app --reload`.
 - Frontend local: `cd frontend`, preparar `.env`, `npm install`, `npm run dev`; build esperado con `npm run build` y lint con `npm run lint`.
+- Cada historia de usuario debe trabajarse en una rama independiente cuya base incluya el id de la historia, por ejemplo `1-8/...`, `1-9/...`; no reutilizar ramas entre historias.
 - Antes de cambios de schema, revisar modelos actuales y migraciones existentes bajo `backend/migrations/versions`; no editar migraciones antiguas aplicadas salvo instruccion explicita.
 - Para MySQL remoto por tunel, usar `DATABASE_URL` con `127.0.0.1:3307` segun README; no documentar credenciales reales.
 - n8n queda como automatizacion auxiliar para notificaciones, sincronizaciones, calendarios, resumenes y webhooks perifericos; no convertirlo en fuente de verdad.

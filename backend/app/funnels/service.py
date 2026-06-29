@@ -5,9 +5,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
+from app.audit.service import record_audit_best_effort
 from app.companies.models import Company
 from app.funnels.models import SalesFunnel, SalesFunnelStep
 from app.funnels.schemas import FunnelCreate, FunnelStepWrite, FunnelUpdate
+from app.users.models import User
 
 WELCOME_FUNNEL_SYSTEM_KEY = "welcome"
 WELCOME_FUNNEL_NAME = "Funnel de bienvenida"
@@ -133,6 +135,28 @@ def _default_welcome_funnel_payload() -> FunnelCreate:
         capture_fields=list(WELCOME_CAPTURE_FIELDS),
         assignment_criteria=WELCOME_ASSIGNMENT_CRITERIA,
         steps=[step.model_copy(deep=True) for step in WELCOME_STEPS],
+    )
+
+
+def _audit_funnel_change(
+    db: Session,
+    *,
+    company_id: UUID,
+    actor_user: User | None,
+    action: str,
+    entity_id: UUID,
+    summary: str,
+    metadata: dict | None = None,
+) -> None:
+    record_audit_best_effort(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action=action,
+        entity_type="sales_funnel",
+        entity_id=entity_id,
+        summary=summary,
+        metadata=metadata or {},
     )
 
 
@@ -268,7 +292,13 @@ def _sync_steps(
     db.flush()
 
 
-def create_funnel(db: Session, *, company_id: UUID, payload: FunnelCreate) -> SalesFunnel:
+def create_funnel(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: FunnelCreate,
+    actor_user: User | None = None,
+) -> SalesFunnel:
     if payload.is_default:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -295,11 +325,26 @@ def create_funnel(db: Session, *, company_id: UUID, payload: FunnelCreate) -> Sa
             status_code=status.HTTP_409_CONFLICT,
             detail="Ya existe un funnel con ese nombre",
         ) from exc
-    return get_funnel(db, company_id=company_id, funnel_id=funnel.id)
+    funnel = get_funnel(db, company_id=company_id, funnel_id=funnel.id)
+    _audit_funnel_change(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="funnel.created",
+        entity_id=funnel.id,
+        summary="Funnel created",
+        metadata={"name": funnel.name, "is_default": funnel.is_default},
+    )
+    return funnel
 
 
 def update_funnel(
-    db: Session, *, company_id: UUID, funnel_id: UUID, payload: FunnelUpdate
+    db: Session,
+    *,
+    company_id: UUID,
+    funnel_id: UUID,
+    payload: FunnelUpdate,
+    actor_user: User | None = None,
 ) -> SalesFunnel:
     funnel = get_funnel(db, company_id=company_id, funnel_id=funnel_id)
     data = payload.model_dump(exclude_unset=True)
@@ -335,15 +380,41 @@ def update_funnel(
             status_code=status.HTTP_409_CONFLICT,
             detail="Ya existe un funnel con ese nombre",
         ) from exc
-    return get_funnel(db, company_id=company_id, funnel_id=funnel.id)
+    funnel = get_funnel(db, company_id=company_id, funnel_id=funnel.id)
+    _audit_funnel_change(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="funnel.updated",
+        entity_id=funnel.id,
+        summary="Funnel updated",
+        metadata={"name": funnel.name, "is_default": funnel.is_default, "status": funnel.status},
+    )
+    return funnel
 
 
-def delete_funnel(db: Session, *, company_id: UUID, funnel_id: UUID) -> None:
+def delete_funnel(
+    db: Session,
+    *,
+    company_id: UUID,
+    funnel_id: UUID,
+    actor_user: User | None = None,
+) -> None:
     funnel = get_funnel(db, company_id=company_id, funnel_id=funnel_id)
     if funnel.system_key == WELCOME_FUNNEL_SYSTEM_KEY or funnel.is_default:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="No se puede eliminar el funnel de bienvenida",
         )
+    funnel_name = funnel.name
     db.delete(funnel)
     db.commit()
+    _audit_funnel_change(
+        db,
+        company_id=company_id,
+        actor_user=actor_user,
+        action="funnel.deleted",
+        entity_id=funnel_id,
+        summary="Funnel deleted",
+        metadata={"name": funnel_name},
+    )

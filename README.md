@@ -33,3 +33,8 @@ cp .env.example .env
 npm install
 npm run dev
 ```
+
+## Flujo De Trabajo
+
+- Cada historia de usuario debe desarrollarse en una rama independiente.
+- El nombre de la rama debe incluir el id de la historia, por ejemplo `1-8/...`, `1-9/...`, y no debe reutilizarse para otra historia.

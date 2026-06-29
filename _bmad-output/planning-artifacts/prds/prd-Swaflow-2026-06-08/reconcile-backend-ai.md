@@ -1,4 +1,4 @@
-# Reconcile: Backend AI Validation
+# Reconciliación: validación del backend de IA
 
 ## Resultado
 
@@ -18,4 +18,3 @@ El PRD trata el modulo IA como base existente y exige una experiencia completa s
 ## Gaps
 
 - Ningun gap bloqueante detectado.
-

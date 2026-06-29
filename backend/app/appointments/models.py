@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -25,4 +25,7 @@ class Appointment(Base, IdMixin, TenantMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="scheduled")
     notes: Mapped[str | None] = mapped_column(Text)
     external_calendar_event_id: Mapped[str | None] = mapped_column(String(255))
-
+    calendar_sync_status: Mapped[str | None] = mapped_column(String(30))
+    calendar_sync_error: Mapped[str | None] = mapped_column(Text)
+    calendar_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    calendar_sync_obsolete_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

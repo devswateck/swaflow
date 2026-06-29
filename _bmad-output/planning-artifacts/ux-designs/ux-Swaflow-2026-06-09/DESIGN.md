@@ -174,7 +174,7 @@ components:
     border: '#FFD0DA'
 ---
 
-## Brand & Style
+## Marca y estilo
 
 SWAFLOW es un SaaS operacional para ventas conversacionales por WhatsApp. La interfaz debe sentirse precisa, comercial y controlada: una consola de trabajo para equipos que gestionan clientes, ordenes, pagos, citas, funnels e IA.
 
@@ -182,7 +182,7 @@ La imagen Swa Tech aporta la identidad corporativa: base oscura tactica, marca b
 
 Dark mode es el tema por defecto. Light mode queda como alternativa operativa para usuarios que prefieran mayor luminosidad durante jornadas largas, pero la expresion principal de marca vive en dark mode.
 
-## Colors
+## Colores
 
 - **Brand Night (`#0B0614`)** ancla la identidad Swa Tech. Usar como fondo base del tema por defecto, sidebar desktop, identidad del chat IA y zonas de marca de alta jerarquia. En light mode, usarlo con mas restriccion.
 - **Brand Accent (`#FF3DE8`)** viene de la barra y aro del logo. Usar para foco, seleccion, acentos de grafica, focus ring y un enfasis principal por panel.
@@ -193,7 +193,7 @@ Dark mode es el tema por defecto. Light mode queda como alternativa operativa pa
 
 Evitar: acentos verdes/teal, grandes gradientes morados, blobs decorativos, texto neon en areas blancas amplias y usar magenta en todos los botones o badges.
 
-## Typography
+## Tipografía
 
 Usar Sora en toda la app. SWAFLOW es una interfaz operacional densa; la tipografia debe priorizar escaneo, alineacion y lectura rapida.
 
@@ -204,7 +204,7 @@ Usar Sora en toda la app. SWAFLOW es una interfaz operacional densa; la tipograf
 
 Letter spacing permanece en `0`. No usar labels mayusculos espaciados dentro de controles densos; el logo puede cargar ese estilo, pero la aplicacion debe ser legible.
 
-## Layout & Spacing
+## Diseño y espaciado
 
 Usar ritmo basado en 8px con densidad SaaS compacta. Tarjetas y paneles deben sentirse organizados, no editoriales.
 
@@ -216,7 +216,7 @@ Usar ritmo basado en 8px con densidad SaaS compacta. Tarjetas y paneles deben se
 
 No poner cards dentro de cards. Las secciones de pagina deben ser areas de contenido; las cards son para items repetidos, paneles y herramientas enfocadas.
 
-## Elevation & Depth
+## Elevación y profundidad
 
 La profundidad debe ser sobria. Usar bordes y capas tonales primero, sombra despues.
 
@@ -226,7 +226,7 @@ La profundidad debe ser sobria. Usar bordes y capas tonales primero, sombra desp
 
 Evitar sombras pesadas, contenedores brillantes y fondos decorativos.
 
-## Shapes
+## Formas
 
 Los radios son precisos y profesionales:
 
@@ -237,7 +237,7 @@ Los radios son precisos y profesionales:
 
 El logo usa circulo, pero la aplicacion no debe convertir circulos en patron general.
 
-## Components
+## Componentes
 
 - **App shell** - Dark mode usa `{colors.background-dark}`, `{colors.surface-dark}` y `{colors.brand-night}` por defecto. Light mode usa `{colors.background}` y `{colors.surface}` como alternativa.
 - **Brand lockup** - Reemplazar el sparkle verde por tratamiento SWAFLOW. El concepto v1 vive en `brand/swaflow-logo-concept-v1.png`; antes de produccion debe redibujarse como SVG. Usar lockup horizontal en login/sidebar expandido y monograma en favicon/loading/sidebar compacto.
@@ -251,7 +251,7 @@ El logo usa circulo, pero la aplicacion no debe convertir circulos en patron gen
 - **Status badge** - Color semantico por estado. Confirmado usa cyan/azul, espera usa amber, error usa rose. Mantener copy en espanol.
 - **Data table** - Header en superficie muted, filas con hover, badges compactos y accion principal al final de fila.
 
-## Do's and Don'ts
+## Lo que se debe y no se debe hacer
 
 | Do | Don't |
 |---|---|

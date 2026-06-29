@@ -22,7 +22,13 @@ def list_users(
     db: Session = Depends(get_db),
 ) -> list[User]:
     target_company_id = company_id if is_superadmin(current_user) else current_user.company_id
-    return service.list_users(db, company_id=target_company_id, limit=limit, offset=offset)
+    return service.list_users(
+        db,
+        company_id=target_company_id,
+        limit=limit,
+        offset=offset,
+        actor_user=current_user,
+    )
 
 
 @router.post("", response_model=UserRead, status_code=201)
@@ -52,7 +58,7 @@ def get_user(
     db: Session = Depends(get_db),
 ) -> User:
     company_id = None if is_superadmin(current_user) else current_user.company_id
-    return service.get_user(db, company_id=company_id, user_id=user_id)
+    return service.get_user(db, company_id=company_id, user_id=user_id, actor_user=current_user)
 
 
 @router.put("/{user_id}", response_model=UserRead)

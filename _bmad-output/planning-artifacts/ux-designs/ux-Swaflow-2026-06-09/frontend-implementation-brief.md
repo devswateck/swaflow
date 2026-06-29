@@ -12,11 +12,11 @@ sources:
   - ../../../../frontend/tailwind.config.ts
 ---
 
-# Brief de implementacion frontend
+# Brief de implementación frontend
 
 Usar `DESIGN.md`, `EXPERIENCE.md` y `../architecture/swaflow-frontend-architecture.md` como contrato. Este brief traduce esos spines a una primera pasada practica para el frontend, pero no autoriza implementacion hasta que arquitectura y UX esten cerrados.
 
-## Alcance de primera pasada
+## Alcance de la primera pasada
 
 1. Reemplazar el sistema visual verde por tokens Swa Tech.
 2. Simplificar navegacion con grupos en el sidebar.
@@ -32,11 +32,11 @@ Usar `DESIGN.md`, `EXPERIENCE.md` y `../architecture/swaflow-frontend-architectu
 - `frontend/src/lib/api.ts` - helper API y manejo de errores.
 - `frontend/src/lib/auth.ts` - store de auth y token.
 
-## Gate de arquitectura
+## Puerta de arquitectura
 
 Antes de tocar codigo, revisar y aprobar `../architecture/swaflow-frontend-architecture.md`. Ese documento define la secuencia correcta de shell, tokens, Dashboard e Inbox, y aclara que la historia visual no debe saltar directamente a implementacion.
 
-## Orden de implementacion
+## Orden de implementación
 
 1. Actualizar tokens Tailwind:
    - Reemplazar `brand: "#0f766e"` con valores Swa Tech desde `DESIGN.md`.
@@ -93,14 +93,14 @@ Antes de tocar codigo, revisar y aprobar `../architecture/swaflow-frontend-archi
    - Productos, Inventario, Ordenes, Citas, Funnels, IA, WhatsApp, Integraciones y Ajustes pueden recibir refresh visual de tokens en primera pasada.
    - Evitar reconstruir todos los flujos de modulo salvo pedido explicito.
 
-## Guia de datos y dependencias
+## Guía de datos y dependencias
 
 - No inventar datos backend.
 - Si no existe time series lista para graficas, derivar resumenes simples desde arrays actuales y etiquetarlos honestamente.
 - Agregar y usar Recharts para las graficas del Dashboard: line charts, bar charts, areas, tooltips, leyendas y ejes responsivos.
 - Mantener aislamiento tenant. Frontend nunca salta scoping de API.
 
-## Checklist de aceptacion
+## Lista de verificación de aceptación
 
 - No quedan acentos verdes/teal visibles en shell, nav, botones, estados activos, burbujas, progress bars o foco.
 - Dashboard tiene paneles tipo grafica con datos reales o estados vacios honestos, no placeholders decorativos.
