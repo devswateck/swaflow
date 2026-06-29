@@ -1,0 +1,85 @@
+name: Deploy production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: swaflow-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build, test and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Test backend
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+          python -m pytest -q
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure SSH
+        env:
+          SWAFLOW_DEPLOY_HOST: ${{ secrets.SWAFLOW_DEPLOY_HOST }}
+          SWAFLOW_DEPLOY_KEY: ${{ secrets.SWAFLOW_DEPLOY_KEY }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SWAFLOW_DEPLOY_KEY" > ~/.ssh/swaflow_deploy
+          chmod 600 ~/.ssh/swaflow_deploy
+          ssh-keyscan -H "$SWAFLOW_DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Sync app files
+        env:
+          SWAFLOW_DEPLOY_HOST: ${{ secrets.SWAFLOW_DEPLOY_HOST }}
+          SWAFLOW_DEPLOY_USER: ${{ secrets.SWAFLOW_DEPLOY_USER }}
+        run: |
+          rsync -az --delete \
+            --exclude '.venv/' \
+            --exclude '__pycache__/' \
+            --exclude '.pytest_cache/' \
+            -e "ssh -i ~/.ssh/swaflow_deploy" \
+            backend/ "$SWAFLOW_DEPLOY_USER@$SWAFLOW_DEPLOY_HOST:/docker/swaflow/app/backend/"
+
+          rsync -az --delete \
+            --exclude 'node_modules/' \
+            --exclude 'dist/' \
+            -e "ssh -i ~/.ssh/swaflow_deploy" \
+            frontend/ "$SWAFLOW_DEPLOY_USER@$SWAFLOW_DEPLOY_HOST:/docker/swaflow/app/frontend/"
+
+      - name: Restart production
+        env:
+          SWAFLOW_DEPLOY_HOST: ${{ secrets.SWAFLOW_DEPLOY_HOST }}
+          SWAFLOW_DEPLOY_USER: ${{ secrets.SWAFLOW_DEPLOY_USER }}
+        run: |
+          ssh -i ~/.ssh/swaflow_deploy \
+            "$SWAFLOW_DEPLOY_USER@$SWAFLOW_DEPLOY_HOST" \
+            "sudo /usr/local/sbin/swaflow-deploy"
