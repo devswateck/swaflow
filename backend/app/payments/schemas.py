@@ -7,6 +7,12 @@ class MockPaymentWebhook(BaseModel):
     provider: str = Field(default="mock")
 
 
+class PaymentWebhookPayload(BaseModel):
+    payment_reference: str = Field(min_length=1)
+    status: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+
+
 class PaymentWebhookResponse(BaseModel):
     status: str
     order_id: str | None = None

@@ -882,6 +882,92 @@ Para que pueda avanzar la oportunidad comercial sin salir del Inbox.
 **Entonces** el Inbox conserva el contexto suficiente para que la IA o el humano retomen el hilo
 **Y** la informacion permanece aislada al tenant correspondiente
 
+## Epic 8: Estabilizacion Operativa y Endurecimiento del Inbox
+
+### Historia 8.1: Blindaje de Inbox contra estado obsoleto
+Como usuario autorizado del tenant,
+Quiero que el Inbox mantenga el hilo correcto y el estado mas reciente bajo eventos concurrentes,
+Para que la operacion no muestre conversaciones obsoletas ni borre contexto valido.
+
+**Criterios de aceptacion:**
+
+**Dado** que llegan eventos fuera de orden o concurrentes
+**Cuando** el usuario cambia de conversacion o la vista refresca
+**Entonces** el hilo seleccionado sigue siendo el correcto
+**Y** el composer, el detalle y la timeline se mantienen consistentes
+
+### Historia 8.2: Locking y auditoria en asignacion
+Como admin o usuario autorizado del tenant,
+Quiero que la asignacion y la autoasignacion no dupliquen responsables ni eventos,
+Para que cada chat tenga un unico responsable trazable.
+
+**Criterios de aceptacion:**
+
+**Dado** que dos acciones intentan asignar el mismo chat
+**Cuando** el backend procesa la mutacion
+**Entonces** solo una puede consolidarse
+**Y** la auditoria registra un unico cambio valido por transicion
+
+### Historia 8.3: Redaccion de secretos y validacion de contratos criticos
+Como operador del sistema,
+Quiero que las integraciones criticas redaccionen secretos y validen contratos antes de activarse,
+Para que auditoria, logs y respuestas no expongan credenciales ni acepten configuraciones invalidas.
+
+**Criterios de aceptacion:**
+
+**Dado** que una integracion, pago o webhook se configura o actualiza
+**Cuando** el payload incluye secretos o contratos incompletos
+**Entonces** el backend redacciona la informacion sensible y rechaza lo invalido
+**Y** ningun secreto queda persistido en texto claro
+
+### Historia 8.4: Separacion de estados humano, IA y clasificacion
+Como usuario del Inbox,
+Quiero ver separados el responsable humano, el estado de la IA y la clasificacion comercial,
+Para que la operacion sea clara y no mezcle conceptos distintos en la UI.
+
+**Criterios de aceptacion:**
+
+**Dado** que una conversacion cambia de responsable, IA o funnel
+**Cuando** el usuario la revisa en Inbox
+**Entonces** cada estado aparece con su propio contrato y etiqueta
+**Y** el backend valida los permisos antes de mutar cualquier cambio
+
+### Historia 8.5: Rehidratacion de agenda desde snapshot persistido
+Como usuario autorizado del tenant,
+Quiero que la intencion de agenda se reconstruya desde un snapshot persistido,
+Para que el contexto de agenda no dependa de memoria local ni de carreras de UI.
+
+**Criterios de aceptacion:**
+
+**Dado** que existe un snapshot de agenda preparado
+**Cuando** el usuario vuelve a abrir el hilo o filtra la bandeja
+**Entonces** el contexto se rehidrata desde backend
+**Y** no se sobreescribe por eventos concurrentes
+
+### Historia 8.6: Permisos backend para acciones criticas
+Como operador del sistema,
+Quiero que las acciones criticas del Inbox e integraciones se validen en backend,
+Para que el frontend no sea la unica barrera de seguridad.
+
+**Criterios de aceptacion:**
+
+**Dado** que un usuario sin permiso o de otro tenant intenta mutar un recurso
+**Cuando** la solicitud llega al backend
+**Entonces** el sistema bloquea la accion con el error correcto
+**Y** no inventa cambios locales en la UI
+
+### Historia 8.7: Regresion automatizada continua
+Como equipo de desarrollo,
+Quiero cobertura automatizada sobre los puntos que ya mostraron fragilidad,
+Para que las regresiones no reaparezcan en reviews futuras.
+
+**Criterios de aceptacion:**
+
+**Dado** que una zona del Inbox, asignacion o integraciones ha fallado antes en review
+**Cuando** se cambie el codigo
+**Entonces** existe una prueba de regresion que cubra ese comportamiento
+**Y** el set de tests protege los puntos de borde conocidos
+
 ## Epic 3: Catalogo e Inventario Comercial
 
 ### Historia 3.1: Sincronizar el catalogo Meta del tenant

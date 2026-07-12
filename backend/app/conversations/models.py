@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
@@ -16,6 +16,12 @@ class Conversation(Base, IdMixin, TenantMixin, TimestampMixin):
     )
     channel: Mapped[str] = mapped_column(String(50), nullable=False, default="whatsapp")
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="open")
+    ai_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default=text("true"),
+    )
     assigned_user_id: Mapped[object | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("users.id")
     )

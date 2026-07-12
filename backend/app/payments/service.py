@@ -4,6 +4,8 @@ from sqlalchemy.orm import Session
 
 from app.orders.service import update_payment_status
 from app.payments.contract import (
+    LEGACY_PAYMENT_WEBHOOK_PROVIDERS,
+    LegacyPaymentWebhookAdapter,
     find_order_for_payment_event,
     get_active_payment_integration,
     get_payment_adapter,
@@ -20,9 +22,15 @@ def process_payment_webhook(
     provider: str,
     payload: dict,
     header_checksum: str | None = None,
+    raw_body: bytes | None = None,
 ) -> PaymentWebhookResponse:
-    adapter = get_payment_adapter(provider)
+    normalized_provider = str(provider or "").strip().lower()
+    if normalized_provider in LEGACY_PAYMENT_WEBHOOK_PROVIDERS:
+        adapter = LegacyPaymentWebhookAdapter()
+    else:
+        adapter = get_payment_adapter(provider)
     transaction = adapter.extract_transaction(payload)
+    mapped_status = adapter.map_payment_status(transaction)
     payment_reference = str(
         transaction.get("reference")
         or transaction.get("sku")
@@ -49,6 +57,22 @@ def process_payment_webhook(
             payload,
             credentials_raw=credentials_raw,
             header_checksum=header_checksum,
+            raw_body=raw_body,
+        )
+
+    if order.status in {"paid", "cancelled", "expired"}:
+        return PaymentWebhookResponse(
+            status="ignored",
+            order_id=str(order.id),
+            payment_reference=payment_reference or order.payment_reference,
+        )
+
+    normalized_status = mapped_status.strip().lower()
+    if normalized_status in {"declined", "voided", "error", "failed"} and order.payment_status == "failed":
+        return PaymentWebhookResponse(
+            status="ignored",
+            order_id=str(order.id),
+            payment_reference=payment_reference or order.payment_reference,
         )
 
     transaction_id = str(transaction.get("id") or "").strip()
@@ -56,6 +80,7 @@ def process_payment_webhook(
         order,
         transaction_id=transaction_id or None,
         payment_reference=payment_reference or None,
+        payment_link_id=payment_link_id or None,
     ):
         return PaymentWebhookResponse(
             status="ignored",
@@ -72,7 +97,7 @@ def process_payment_webhook(
     order = update_payment_status(
         db,
         order=order,
-        payment_status=adapter.map_payment_status(transaction),
+        payment_status=normalized_status,
     )
     return PaymentWebhookResponse(
         status="processed",

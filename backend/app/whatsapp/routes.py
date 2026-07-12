@@ -82,7 +82,7 @@ def get_whatsapp_setup(
 ) -> WhatsAppSetupRead:
     settings = get_settings()
     return WhatsAppSetupRead(
-        callback_url=f"{settings.public_base_url.rstrip('/')}/webhooks/whatsapp",
+        callback_url=f"{settings.public_base_url.rstrip('/')}/api/v1/webhooks/whatsapp",
         verify_token=settings.whatsapp_verify_token,
         graph_api_version=settings.whatsapp_graph_api_version,
         app_secret_configured=bool(settings.whatsapp_app_secret),

@@ -4,6 +4,7 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from urllib.parse import quote
 from uuid import UUID
 
@@ -23,12 +24,14 @@ CALENDAR_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
         "api_base_url": "https://www.googleapis.com/calendar/v3",
         "create_event_path": "calendars/{calendar_id}/events",
         "update_event_path": "calendars/{calendar_id}/events/{event_id}",
+        "availability_path": "freeBusy",
         "response_event_id_path": "id",
     },
     "microsoft_calendar": {
         "api_base_url": "https://graph.microsoft.com/v1.0",
         "create_event_path": "me/calendars/{calendar_id}/events",
         "update_event_path": "me/events/{event_id}",
+        "availability_path": "me/calendar/getSchedule",
         "response_event_id_path": "id",
     },
 }
@@ -38,6 +41,12 @@ CALENDAR_PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
 class CalendarSyncResult:
     external_event_id: str
     raw: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class CalendarBusyInterval:
+    start: datetime
+    end: datetime
 
 
 class CalendarAdapter(Protocol):
@@ -64,6 +73,16 @@ class CalendarAdapter(Protocol):
         credentials_raw: str | None,
     ) -> CalendarSyncResult: ...
 
+    def fetch_busy_intervals(
+        self,
+        *,
+        company_id: UUID,
+        time_min: datetime,
+        time_max: datetime,
+        config: dict[str, Any],
+        credentials_raw: str | None,
+    ) -> list[CalendarBusyInterval]: ...
+
 
 def normalize_calendar_provider(provider: str | None) -> str:
     normalized = str(provider or DEFAULT_CALENDAR_PROVIDER).strip().lower() or DEFAULT_CALENDAR_PROVIDER
@@ -79,11 +98,10 @@ def normalize_calendar_config(config: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(config, dict):
         return {}
     next_config = dict(config)
-    if "provider" in next_config and next_config.get("provider") is not None:
-        provider = normalize_calendar_provider(next_config.get("provider"))
-        next_config["provider"] = provider
-        for key, value in _provider_defaults(provider).items():
-            next_config.setdefault(key, value)
+    provider = normalize_calendar_provider(next_config.get("provider"))
+    next_config["provider"] = provider
+    for key, value in _provider_defaults(provider).items():
+        next_config.setdefault(key, value)
     return next_config
 
 
@@ -110,10 +128,77 @@ def _require_calendar_config_value(config: dict[str, Any], key: str) -> str:
     return value
 
 
-def _normalize_datetime(value: datetime) -> datetime:
+def _normalize_datetime(value: datetime, timezone_name: str | None = None) -> datetime:
     if value.tzinfo is None:
+        if timezone_name:
+            try:
+                return value.replace(tzinfo=ZoneInfo(timezone_name)).astimezone(UTC)
+            except ZoneInfoNotFoundError:
+                pass
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _parse_datetime(value: str, timezone_name: str | None = None) -> datetime:
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return _normalize_datetime(parsed, timezone_name)
+
+
+def _busy_intervals_from_google(response_json: dict[str, Any], calendar_id: str) -> list[CalendarBusyInterval]:
+    calendars = response_json.get("calendars")
+    if not isinstance(calendars, dict):
+        raise ValueError("Google freeBusy response missing calendars")
+    calendar_payload = calendars.get(calendar_id)
+    if not isinstance(calendar_payload, dict):
+        raise ValueError("Google freeBusy response missing calendar payload")
+    intervals = calendar_payload.get("busy")
+    if not isinstance(intervals, list):
+        raise ValueError("Google freeBusy response missing busy intervals")
+    result: list[CalendarBusyInterval] = []
+    for interval in intervals:
+        if not isinstance(interval, dict):
+            continue
+        start_raw = str(interval.get("start") or "").strip()
+        end_raw = str(interval.get("end") or "").strip()
+        if not start_raw or not end_raw:
+            continue
+        result.append(CalendarBusyInterval(start=_parse_datetime(start_raw), end=_parse_datetime(end_raw)))
+    return result
+
+
+def _busy_intervals_from_microsoft(response_json: dict[str, Any]) -> list[CalendarBusyInterval]:
+    values = response_json.get("value")
+    if not isinstance(values, list):
+        raise ValueError("Microsoft getSchedule response missing schedules")
+    result: list[CalendarBusyInterval] = []
+    for schedule in values:
+        if not isinstance(schedule, dict):
+            continue
+        schedule_items = schedule.get("scheduleItems")
+        if not isinstance(schedule_items, list):
+            raise ValueError("Microsoft getSchedule response missing scheduleItems")
+        for item in schedule_items:
+            if not isinstance(item, dict):
+                continue
+            start_payload = item.get("start")
+            end_payload = item.get("end")
+            if not isinstance(start_payload, dict) or not isinstance(end_payload, dict):
+                continue
+            start_raw = str(start_payload.get("dateTime") or "").strip()
+            end_raw = str(end_payload.get("dateTime") or "").strip()
+            if not start_raw or not end_raw:
+                continue
+            timezone_name = str(start_payload.get("timeZone") or end_payload.get("timeZone") or "").strip() or None
+            status_value = str(item.get("status") or item.get("availability") or "").strip().lower()
+            if status_value in {"free", "available"}:
+                continue
+            result.append(
+                CalendarBusyInterval(
+                    start=_parse_datetime(start_raw, timezone_name),
+                    end=_parse_datetime(end_raw, timezone_name),
+                )
+            )
+    return result
 
 
 def _build_url(base_url: str, path: str) -> str:
@@ -298,6 +383,67 @@ class HttpCalendarAdapter:
                 },
             },
         )
+
+    def fetch_busy_intervals(
+        self,
+        *,
+        company_id: UUID,
+        time_min: datetime,
+        time_max: datetime,
+        config: dict[str, Any],
+        credentials_raw: str | None,
+    ) -> list[CalendarBusyInterval]:
+        provider = normalize_calendar_provider(_require_calendar_config_value(config, "provider") or self.provider)
+        if provider not in SUPPORTED_CALENDAR_PROVIDERS:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="Calendar provider must be Google Calendar or Microsoft Calendar",
+            )
+        headers = _parse_credentials_headers(credentials_raw)
+        calendar_id = _require_calendar_config_value(config, "calendar_id")
+        timezone = _require_calendar_config_value(config, "timezone")
+        api_base_url = _require_calendar_config_value(config, "api_base_url")
+        availability_path = _require_calendar_config_value(config, "availability_path")
+        normalized_time_min = _normalize_datetime(time_min)
+        normalized_time_max = _normalize_datetime(time_max)
+
+        if provider == "google_calendar":
+            url = _build_url(api_base_url, availability_path)
+            request_payload = {
+                "timeMin": normalized_time_min.isoformat(),
+                "timeMax": normalized_time_max.isoformat(),
+                "timeZone": timezone,
+                "items": [{"id": calendar_id}],
+            }
+            with httpx.Client(timeout=10) as client:
+                response = client.request("POST", url, json=request_payload, headers=headers)
+                response.raise_for_status()
+            response_json = response.json()
+            if not isinstance(response_json, dict):
+                return []
+            return _busy_intervals_from_google(response_json, calendar_id)
+
+        url = _build_url(api_base_url, availability_path)
+        provider_timezone = ZoneInfo(timezone)
+        request_payload = {
+            "schedules": [calendar_id],
+            "startTime": {
+                "dateTime": normalized_time_min.astimezone(provider_timezone).replace(tzinfo=None).isoformat(timespec="seconds"),
+                "timeZone": timezone,
+            },
+            "endTime": {
+                "dateTime": normalized_time_max.astimezone(provider_timezone).replace(tzinfo=None).isoformat(timespec="seconds"),
+                "timeZone": timezone,
+            },
+            "availabilityViewInterval": 30,
+        }
+        with httpx.Client(timeout=10) as client:
+            response = client.request("POST", url, json=request_payload, headers=headers)
+            response.raise_for_status()
+        response_json = response.json()
+        if not isinstance(response_json, dict):
+            return []
+        return _busy_intervals_from_microsoft(response_json)
 
 
 def get_calendar_adapter(provider: str | None) -> CalendarAdapter:

@@ -13,7 +13,7 @@ class OrderItemCreate(BaseModel):
 
 class OrderCreate(BaseModel):
     contact_id: UUID
-    conversation_id: UUID | None = None
+    conversation_id: UUID
     items: list[OrderItemCreate] = Field(min_length=1)
     metadata: dict = Field(default_factory=dict)
 
@@ -46,4 +46,3 @@ class OrderRead(TimestampedRead):
 class PaymentLinkRead(BaseModel):
     payment_link: str
     payment_reference: str
-

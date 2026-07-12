@@ -1,4 +1,5 @@
 from sqlalchemy import ForeignKey, UniqueConstraint
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -15,3 +16,11 @@ class Inventory(Base, IdMixin, TenantMixin, UpdatedAtMixin):
     )
     quantity_available: Mapped[int] = mapped_column(nullable=False, default=0)
     quantity_reserved: Mapped[int] = mapped_column(nullable=False, default=0)
+
+    @hybrid_property
+    def available_units(self) -> int:
+        return self.quantity_available - self.quantity_reserved
+
+    @available_units.expression
+    def available_units(cls):
+        return cls.quantity_available - cls.quantity_reserved

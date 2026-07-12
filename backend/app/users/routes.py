@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.auth.service import is_superadmin, require_roles
+from app.auth.service import get_current_user, is_superadmin, require_roles
 from app.core.database import get_db
 from app.core.schemas import MessageResponse
 from app.users import service
@@ -25,6 +25,22 @@ def list_users(
     return service.list_users(
         db,
         company_id=target_company_id,
+        limit=limit,
+        offset=offset,
+        actor_user=current_user,
+    )
+
+
+@router.get("/tenant", response_model=list[UserRead])
+def list_tenant_users(
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[User]:
+    return service.list_users(
+        db,
+        company_id=current_user.company_id,
         limit=limit,
         offset=offset,
         actor_user=current_user,

@@ -3,11 +3,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from app.auth.service import get_current_user
+from app.auth.service import get_current_user, require_module_access
 from app.conversations import service
 from app.conversations.models import Conversation
 from app.conversations.schemas import (
     ConversationAssign,
+    ConversationAppointmentIntentRead,
     ConversationCreate,
     ConversationDetailRead,
     ConversationFunnelAssign,
@@ -69,9 +70,13 @@ def get_conversation(
     messages = service.get_conversation_messages(
         db, company_id=current_user.company_id, conversation_id=conversation_id
     )
+    events = service.get_conversation_events(
+        db, company_id=current_user.company_id, conversation_id=conversation_id
+    )
     return {
         **service.conversation_to_inbox_item(db, conversation=conversation),
         "messages": messages,
+        "events": events,
     }
 
 
@@ -79,7 +84,7 @@ def get_conversation(
 def assign_conversation(
     conversation_id: UUID,
     payload: ConversationAssign,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> Conversation:
     return service.assign_conversation(
@@ -95,7 +100,7 @@ def assign_conversation(
 def assign_conversation_funnel(
     conversation_id: UUID,
     payload: ConversationFunnelAssign,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> Conversation:
     return service.assign_conversation_funnel(
@@ -109,6 +114,33 @@ def assign_conversation_funnel(
     )
 
 
+@router.post("/{conversation_id}/prepare-appointment", response_model=ConversationAppointmentIntentRead)
+def prepare_conversation_appointment_intent(
+    conversation_id: UUID,
+    current_user: User = Depends(require_module_access("inbox")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return service.prepare_conversation_appointment_intent(
+        db,
+        company_id=current_user.company_id,
+        conversation_id=conversation_id,
+        actor_user=current_user,
+    )
+
+
+@router.get("/{conversation_id}/appointment-intent", response_model=ConversationAppointmentIntentRead)
+def get_conversation_appointment_intent(
+    conversation_id: UUID,
+    current_user: User = Depends(require_module_access("inbox")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return service.get_conversation_appointment_intent(
+        db,
+        company_id=current_user.company_id,
+        conversation_id=conversation_id,
+    )
+
+
 @router.post("/{conversation_id}/close", response_model=ConversationRead)
 def close_conversation(
     conversation_id: UUID,
@@ -117,6 +149,36 @@ def close_conversation(
 ) -> Conversation:
     return service.close_conversation(
         db, company_id=current_user.company_id, conversation_id=conversation_id
+    )
+
+
+@router.post("/{conversation_id}/ai/pause", response_model=ConversationRead)
+def pause_conversation_ai(
+    conversation_id: UUID,
+    current_user: User = Depends(require_module_access("inbox")),
+    db: Session = Depends(get_db),
+) -> Conversation:
+    return service.set_conversation_ai_enabled(
+        db,
+        company_id=current_user.company_id,
+        conversation_id=conversation_id,
+        ai_enabled=False,
+        actor_user=current_user,
+    )
+
+
+@router.post("/{conversation_id}/ai/resume", response_model=ConversationRead)
+def resume_conversation_ai(
+    conversation_id: UUID,
+    current_user: User = Depends(require_module_access("inbox")),
+    db: Session = Depends(get_db),
+) -> Conversation:
+    return service.set_conversation_ai_enabled(
+        db,
+        company_id=current_user.company_id,
+        conversation_id=conversation_id,
+        ai_enabled=True,
+        actor_user=current_user,
     )
 
 

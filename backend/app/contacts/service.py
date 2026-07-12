@@ -1,12 +1,16 @@
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.contacts.models import Contact
 from app.contacts.schemas import ContactCreate, ContactUpdate
+
+
+def _normalize_phone(phone: str) -> str:
+    return "".join(char for char in phone if char.isdigit())
 
 
 def list_contacts(db: Session, *, company_id: UUID, limit: int, offset: int) -> list[Contact]:
@@ -37,14 +41,49 @@ def get_or_create_contact(
     source: str = "whatsapp",
     metadata: dict | None = None,
 ) -> Contact:
-    contact = db.scalar(select(Contact).where(Contact.company_id == company_id, Contact.phone == phone))
+    normalized_phone = _normalize_phone(phone)
+    contact = db.scalar(
+        select(Contact).where(
+            Contact.company_id == company_id,
+            Contact.phone == normalized_phone,
+        )
+    )
     if contact is not None:
         if name and not contact.name:
             contact.name = name
         return contact
+    legacy_phone_expr = func.replace(
+        func.replace(
+            func.replace(
+                func.replace(
+                    func.replace(Contact.phone, "+", ""),
+                    " ",
+                    "",
+                ),
+                "-",
+                "",
+            ),
+            "(",
+            "",
+        ),
+        ")",
+        "",
+    )
+    contact = db.scalar(
+        select(Contact).where(
+            Contact.company_id == company_id,
+            legacy_phone_expr == normalized_phone,
+        )
+    )
+    if contact is not None:
+        if name and not contact.name:
+            contact.name = name
+        if contact.phone != normalized_phone:
+            contact.phone = normalized_phone
+        return contact
     contact = Contact(
         company_id=company_id,
-        phone=phone,
+        phone=normalized_phone,
         name=name,
         source=source,
         metadata_json=metadata or {},
@@ -58,7 +97,7 @@ def create_contact(db: Session, *, company_id: UUID, payload: ContactCreate) -> 
     contact = Contact(
         company_id=company_id,
         name=payload.name,
-        phone=payload.phone,
+        phone=_normalize_phone(payload.phone),
         email=str(payload.email).lower() if payload.email else None,
         source=payload.source,
         metadata_json=payload.metadata,
@@ -80,6 +119,8 @@ def update_contact(
     data = payload.model_dump(exclude_unset=True)
     if "email" in data and data["email"] is not None:
         data["email"] = str(data["email"]).lower()
+    if "phone" in data and data["phone"] is not None:
+        data["phone"] = _normalize_phone(str(data["phone"]))
     if "metadata" in data:
         data["metadata_json"] = data.pop("metadata")
     for field, value in data.items():
@@ -91,4 +132,3 @@ def update_contact(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Phone already exists") from None
     db.refresh(contact)
     return contact
-

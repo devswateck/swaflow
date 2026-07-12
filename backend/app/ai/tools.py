@@ -11,13 +11,17 @@ from app.ai.schemas import (
 from app.inventory.service import available_units, get_inventory_by_product
 from app.orders.schemas import OrderCreate
 from app.orders.service import create_order, generate_payment_link
-from app.products.service import search_active_products
+from app.products.service import (
+    get_product,
+    is_meta_synced_product,
+    search_meta_synced_products,
+)
 
 
 def search_products_tool(
     db: Session, *, company_id: UUID, query: str
 ) -> SearchProductsToolResponse:
-    products = search_active_products(db, company_id=company_id, query=query)
+    products = search_meta_synced_products(db, company_id=company_id, query=query)
     result: list[ProductToolRead] = []
     for product in products:
         try:
@@ -45,6 +49,9 @@ def check_stock_tool(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Quantity must be greater than zero",
         )
+    product = get_product(db, company_id=company_id, product_id=product_id)
+    if not is_meta_synced_product(product):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventory not found")
     inventory = get_inventory_by_product(db, company_id=company_id, product_id=product_id)
     return CheckStockToolResponse(
         available=available_units(inventory) >= quantity,
@@ -58,4 +65,3 @@ def create_order_tool(db: Session, *, company_id: UUID, payload: OrderCreate):
 
 def generate_payment_link_tool(db: Session, *, company_id: UUID, order_id: UUID):
     return generate_payment_link(db, company_id=company_id, order_id=order_id)
-

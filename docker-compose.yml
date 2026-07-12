@@ -1,0 +1,29 @@
+services:
+  swaflow-redis:
+    image: redis:7
+    restart: unless-stopped
+
+  swaflow-backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    env_file:
+      - ./backend.env
+    environment:
+      APP_ENV: production
+      REDIS_URL: redis://swaflow-redis:6379/0
+    expose:
+      - "8000"
+    depends_on:
+      - swaflow-redis
+
+  swaflow-frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - swaflow-backend

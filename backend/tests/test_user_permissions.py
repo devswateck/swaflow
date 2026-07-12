@@ -7,11 +7,14 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.auth.service import build_current_user_payload, build_token
-from app.companies.service import create_company_with_owner
-from app.companies.schemas import CompanyCreate
+from app.companies.service import create_company_with_owner, update_company
+from app.companies.schemas import CompanyCreate, CompanyUpdate
+from app.contacts.models import Contact
 from app.core.database import get_db
 from app.core.schemas import OwnerCreate
 from app.main import app
+from app.conversations.schemas import ConversationCreate
+from app.conversations.service import assign_conversation, create_conversation
 from app.users.permissions import can_access_module, default_module_permissions, ensure_module_access
 from app.users.schemas import UserCreate, UserPasswordReset, UserUpdate
 from app.users.service import create_user, deactivate_user, get_user, reset_user_password, update_user
@@ -346,6 +349,197 @@ def test_restricted_routes_return_403_without_module_permission(db, client):
     owner_headers = {"Authorization": f"Bearer {owner_token}"}
     response = client.get("/api/v1/users", headers=owner_headers)
     assert response.status_code == 200
+
+
+def test_tenant_users_lookup_is_available_to_authenticated_tenant_members(db, client):
+    company, owner = bootstrap_company(db, "Acme")
+    agent = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Agente Acme",
+            email="agent-tenant@acme.example.com",
+            password="super-secret-6",
+            role="agent",
+        ),
+    )
+    other_company, _ = bootstrap_company(db, "Other")
+    create_user(
+        db,
+        company_id=other_company.id,
+        payload=UserCreate(
+            name="Otro agente",
+            email="other-agent@other.example.com",
+            password="super-secret-7",
+            role="agent",
+        ),
+    )
+
+    headers = {"Authorization": f"Bearer {build_token(agent)}"}
+    response = client.get("/api/v1/users/tenant", headers=headers)
+
+    assert response.status_code == 200
+    assert {user["id"] for user in response.json()} == {str(owner.id), str(agent.id)}
+    assert all(user["company_id"] == str(company.id) for user in response.json())
+
+
+def test_conversation_ai_controls_require_inbox_module_permission(db, client):
+    company, _ = bootstrap_company(db, "Acme")
+    agent = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Agente sin inbox",
+            email="agent-no-inbox@acme.example.com",
+            password="super-secret-7",
+            role="agent",
+            module_permissions={"inbox": False},
+        ),
+    )
+
+    headers = {"Authorization": f"Bearer {build_token(agent)}"}
+
+    response = client.post(
+        "/api/v1/conversations/00000000-0000-0000-0000-000000000000/ai/pause",
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+    response = client.post(
+        "/api/v1/conversations/00000000-0000-0000-0000-000000000000/ai/resume",
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+    response = client.post(
+        "/api/v1/conversations/00000000-0000-0000-0000-000000000000/assign",
+        headers=headers,
+        json={"assigned_user_id": str(agent.id)},
+    )
+    assert response.status_code == 403
+
+
+def test_conversation_take_chat_blocks_stealing_an_assigned_thread(db, client):
+    company, owner = bootstrap_company(db, "Acme")
+    update_company(
+        db,
+        company_id=company.id,
+        current_company_id=company.id,
+        payload=CompanyUpdate(auto_assign_single_additional_user_chats=False),
+        actor_user=owner,
+    )
+    agent = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Agente con inbox",
+            email="agent-take@acme.example.com",
+            password="super-secret-8",
+            role="agent",
+            module_permissions={"inbox": True},
+        ),
+    )
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    assert conversation.assigned_user_id is None
+    assign_conversation(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        assigned_user_id=owner.id,
+        actor_user=owner,
+    )
+    db.refresh(conversation)
+    assert conversation.assigned_user_id == owner.id
+
+    headers = {"Authorization": f"Bearer {build_token(agent)}"}
+    response = client.post(
+        f"/api/v1/conversations/{conversation.id}/assign",
+        headers=headers,
+        json={"assigned_user_id": str(agent.id)},
+    )
+    assert response.status_code == 403
+
+    db.refresh(conversation)
+    assert conversation.assigned_user_id == owner.id
+
+
+def test_privileged_take_chat_can_overwrite_another_user_assignment(db):
+    company, owner = bootstrap_company(db, "Acme")
+    admin = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Admin con inbox",
+            email="admin-take@acme.example.com",
+            password="super-secret-12",
+            role="agent",
+            module_permissions={"inbox": True},
+        ),
+    )
+    admin.role = "admin"
+    db.commit()
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112234")
+    db.add(contact)
+    db.commit()
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    assign_conversation(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        assigned_user_id=owner.id,
+        actor_user=owner,
+    )
+    db.refresh(conversation)
+    assert conversation.assigned_user_id == owner.id
+
+    reassigned = assign_conversation(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        assigned_user_id=admin.id,
+        actor_user=admin,
+    )
+    assert reassigned.assigned_user_id == admin.id
+
+    db.refresh(conversation)
+    assert conversation.assigned_user_id == admin.id
+
+
+def test_company_auto_assign_toggle_requires_owner_or_admin(db, client):
+    company, _ = bootstrap_company(db, "Acme")
+    agent = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Agente con settings",
+            email="agent-autoassign@acme.example.com",
+            password="super-secret-8",
+            role="agent",
+            module_permissions={"settings": True},
+        ),
+    )
+
+    headers = {"Authorization": f"Bearer {build_token(agent)}"}
+
+    response = client.put(
+        f"/api/v1/companies/{company.id}",
+        headers=headers,
+        json={
+            "auto_assign_single_additional_user_chats": False,
+        },
+    )
+    assert response.status_code == 403
 
 
 def test_users_routes_require_owner_or_admin_even_with_settings_permission(db, client):

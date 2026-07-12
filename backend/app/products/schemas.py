@@ -1,7 +1,7 @@
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.core.schemas import TimestampedRead
 
@@ -16,6 +16,16 @@ class ProductCreate(BaseModel):
     whatsapp_product_retailer_id: str | None = Field(default=None, max_length=200)
     metadata: dict = Field(default_factory=dict)
 
+    @field_validator("whatsapp_catalog_id", "whatsapp_product_retailer_id", mode="before")
+    @classmethod
+    def normalize_meta_mapping_fields(cls, value: str | None):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        return cleaned or None
+
 
 class ProductUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=200)
@@ -27,6 +37,16 @@ class ProductUpdate(BaseModel):
     whatsapp_product_retailer_id: str | None = Field(default=None, max_length=200)
     status: str | None = Field(default=None, max_length=30)
     metadata: dict | None = None
+
+    @field_validator("whatsapp_catalog_id", "whatsapp_product_retailer_id", mode="before")
+    @classmethod
+    def normalize_meta_mapping_fields(cls, value: str | None):
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        cleaned = value.strip()
+        return cleaned or None
 
 
 class ProductRead(TimestampedRead):

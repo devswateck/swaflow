@@ -19,12 +19,21 @@ from app.ai.operational import (
     get_effective_operational_section,
     summarize_operational_config,
 )
+from app.events.models import Event
 from app.companies.models import Company
 from app.conversations.models import Conversation
 from app.funnels.models import SalesFunnel
 from app.inventory.models import Inventory
+from app.inventory.service import available_units
 from app.messages.models import Message
+from app.orders.models import Order
+from app.payments.contract import (
+    expired_payment_followup_metadata,
+    expired_payment_followup_origin_order_id,
+    order_payment_metadata,
+)
 from app.products.models import Product
+from app.products.service import is_meta_synced_product
 from app.core.config import get_settings
 
 OPENAI_CHAT_COMPLETIONS_URL = "https://api.openai.com/v1/chat/completions"
@@ -79,6 +88,37 @@ def _normalize_text(value: str) -> str:
     return " ".join(value.strip().lower().split())
 
 
+def _load_latest_conversation_ai_enabled(db: Session, *, company_id: UUID, conversation_id: UUID) -> bool:
+    with Session(bind=db.get_bind()) as verification_db:
+        value = verification_db.scalar(
+            select(Conversation.ai_enabled).where(
+                Conversation.company_id == company_id,
+                Conversation.id == conversation_id,
+            )
+        )
+    if value is None:
+        return False
+    return bool(value)
+
+
+def _appointment_preference_pending(db: Session, *, company_id: UUID, conversation_id: UUID) -> bool:
+    latest_relevant_event = db.scalar(
+        select(Event)
+        .where(
+            Event.company_id == company_id,
+            Event.event_type.in_(
+                {
+                    "conversation.appointment_intent_prepared",
+                    "conversation.appointment_preference_selected",
+                }
+            ),
+            Event.payload["conversation_id"].as_string() == str(conversation_id),
+        )
+        .order_by(Event.created_at.desc(), Event.id.desc())
+    )
+    return latest_relevant_event is not None and latest_relevant_event.event_type == "conversation.appointment_intent_prepared"
+
+
 def _normalize_search_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKD", value)
     return " ".join(
@@ -124,7 +164,12 @@ def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) ->
                     Inventory.product_id == Product.id,
                 ),
             )
-            .where(Product.company_id == company_id, Product.status == "active")
+            .where(
+                Product.company_id == company_id,
+                Product.status == "active",
+                Product.whatsapp_catalog_id.is_not(None),
+                Product.whatsapp_product_retailer_id.is_not(None),
+            )
             .order_by(Product.created_at.desc())
             .limit(limit)
         )
@@ -134,15 +179,15 @@ def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) ->
 
     rows: list[str] = []
     for product, inventory in product_rows:
+        if not is_meta_synced_product(product):
+            continue
         price = _stringify_price(product.price)
         sku = product.sku or "-"
         description = " ".join((product.description or "sin descripcion").split())[:500]
         if inventory is None:
             stock = "SIN INVENTARIO CONFIGURADO: no ofrecer"
         else:
-            real_available = max(
-                0, inventory.quantity_available - inventory.quantity_reserved
-            )
+            real_available = max(0, available_units(inventory))
             stock = (
                 f"Stock real disponible: {real_available} "
                 f"(stock: {inventory.quantity_available}, reservado: {inventory.quantity_reserved})"
@@ -183,6 +228,80 @@ def _build_recent_conversation_context(
         role = "assistant" if message.sender_type == "agent" else "user"
         chat_messages.append({"role": role, "content": content})
     return chat_messages
+
+
+def _payment_context_orders(
+    db: Session, *, company_id: UUID, conversation_id: UUID
+) -> tuple[Order | None, Order | None]:
+    latest_order = db.scalar(
+        select(Order)
+        .where(
+            Order.company_id == company_id,
+            Order.conversation_id == conversation_id,
+        )
+        .order_by(Order.created_at.desc())
+    )
+    if latest_order is None:
+        return None, None
+
+    origin_order = None
+    origin_order_id = expired_payment_followup_origin_order_id(latest_order)
+    if origin_order_id:
+        try:
+            origin_uuid = UUID(origin_order_id)
+        except ValueError:
+            origin_uuid = None
+        if origin_uuid is not None:
+            candidate = db.get(Order, origin_uuid)
+            if (
+                candidate is not None
+                and candidate.company_id == company_id
+                and candidate.conversation_id == conversation_id
+            ):
+                origin_order = candidate
+
+    return latest_order, origin_order
+
+
+def _build_payment_context(
+    db: Session, *, company_id: UUID, conversation_id: UUID
+) -> str:
+    order, origin_order = _payment_context_orders(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+    )
+    if order is None:
+        return ""
+
+    follow_up_source_order = origin_order or order
+    follow_up_metadata = expired_payment_followup_metadata(follow_up_source_order)
+    if order.status != "expired" and not follow_up_metadata.get("sent_at") and origin_order is None:
+        return ""
+    reference_order = origin_order or order
+    payment_metadata = order_payment_metadata(reference_order)
+    payment_link_expires_at = str(payment_metadata.get("expires_at") or "").strip() or "-"
+    follow_up_sent_at = str(follow_up_metadata.get("sent_at") or "").strip() or "-"
+    follow_up_source = str(follow_up_metadata.get("source") or "").strip() or "-"
+    follow_up_sent = "si" if follow_up_metadata.get("sent_at") else "no"
+    return (
+        "Contexto de pago del hilo:\n"
+        f"- Orden mas reciente: {order.id}\n"
+        f"- Estado de orden mas reciente: {order.status}\n"
+        f"- Orden origen del vencimiento: {origin_order.id if origin_order else '-'}\n"
+        f"- Estado de orden origen: {reference_order.status}\n"
+        f"- Estado de pago origen: {reference_order.payment_status}\n"
+        f"- Referencia de pago activa: {order.payment_reference or reference_order.payment_reference or '-'}\n"
+        f"- Link de pago: {'presente' if order.payment_link else 'ausente'}\n"
+        f"- Expiracion persistida: {payment_link_expires_at}\n"
+        f"- Seguimiento automatico enviado: {follow_up_sent}\n"
+        f"- Seguimiento enviado en: {follow_up_sent_at}\n"
+        f"- Origen del seguimiento: {follow_up_source}\n"
+        "Regla: si el seguimiento automatico ya fue enviado, no repitas el aviso de expiracion; "
+        "continua la conversacion comercial y usa backend para una nueva orden o un nuevo link "
+        "solo si el cliente lo pide o el flujo lo requiere. Si ya existe una orden de recuperacion, "
+        "reutilizala en vez de crear otra."
+    )
 
 
 def _build_faq_context(db: Session, *, company_id: UUID, limit: int = 10) -> str:
@@ -324,7 +443,22 @@ def generate_auto_reply(
     conversation: Conversation,
     incoming_text: str,
     incoming_interactive_reply: dict | None = None,
+    payment_context: str | None = None,
 ) -> AutoReplyResult | None:
+    if getattr(conversation, "ai_enabled", True) is False:
+        logger.info("AI auto-reply skipped: conversation paused company_id=%s conversation_id=%s", company_id, conversation.id)
+        return None
+    if _load_latest_conversation_ai_enabled(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+    ) is False:
+        logger.info(
+            "AI auto-reply skipped after freshness check: conversation paused company_id=%s conversation_id=%s",
+            company_id,
+            conversation.id,
+        )
+        return None
     settings = get_settings()
     agent = _get_active_agent(db, company_id=company_id)
     if agent is None:
@@ -434,22 +568,6 @@ def generate_auto_reply(
         field.lower()
         for field in _as_list(autonomy.get("required_capture_fields"))
     }
-    if not settings.openai_api_key:
-        logger.warning("AI auto-reply skipped: OPENAI_API_KEY is empty")
-        if not hours["within_hours"] and hours["outside_hours_behavior"] == "handoff":
-            return AutoReplyResult(
-                reply_text=hours["outside_hours_message"] or escalation.get("handoff_message") or "Te paso con una persona del equipo.",
-                action=None,
-                is_first_contact=first_contact,
-            )
-        if intent.intent in {"request_human", "complaint"}:
-            return AutoReplyResult(
-                reply_text=escalation.get("handoff_message") or "Te paso con una persona del equipo.",
-                action=None,
-                is_first_contact=first_contact,
-            )
-        return None
-
     if not hours["within_hours"] and hours["outside_hours_behavior"] == "handoff":
         return AutoReplyResult(
             reply_text=hours["outside_hours_message"] or escalation.get("handoff_message") or "Te paso con una persona del equipo.",
@@ -462,6 +580,15 @@ def generate_auto_reply(
             action=None,
             is_first_contact=first_contact,
         )
+    if _appointment_preference_pending(db, company_id=company_id, conversation_id=conversation.id):
+        return AutoReplyResult(
+            reply_text="¿Prefieres mañana o tarde?",
+            action=None,
+            is_first_contact=first_contact,
+        )
+    if not settings.openai_api_key:
+        logger.warning("AI auto-reply skipped: OPENAI_API_KEY is empty")
+        return None
 
     system_prompt = (
         "Configuracion obligatoria del agente desde ai_agents. Esta seccion tiene prioridad sobre "
@@ -483,6 +610,11 @@ def generate_auto_reply(
         f"Criterio de asignacion del funnel: {funnel_assignment_criteria or 'no definido'}\n"
         f"Fuentes de conocimiento: {knowledge_sources or 'catalogo y mensajes del tenant'}\n"
         f"{_build_faq_context(db, company_id=company_id)}\n"
+        f"{payment_context or _build_payment_context(db, company_id=company_id, conversation_id=conversation.id)}\n"
+        "Reglas de pago vencido:\n"
+        "- Si el contexto indica que un link de pago ya vencio y el seguimiento automatico ya fue enviado, no repitas el recordatorio.\n"
+        "- Si el cliente quiere continuar, ofrece seguir el flujo comercial sin confirmar pagos, sin extender vencimientos y sin retener inventario.\n"
+        "- Si hace falta un nuevo cobro, usa backend autorizado para generar una nueva orden o un nuevo link.\n"
         f"Campos a capturar: {', '.join(capture_fields or funnel_capture_fields) if (capture_fields or funnel_capture_fields) else 'sin campos obligatorios'}\n"
         f"Pasos del funnel: {', '.join(funnel_steps or funnel_step_names) if (funnel_steps or funnel_step_names) else 'sin pasos definidos'}\n"
         f"Criterio de handoff: {handoff_rule or 'cuando el cliente pida humano'}\n"
@@ -500,6 +632,7 @@ def generate_auto_reply(
         "- Antes de ofrecer o recomendar cualquier producto, consulta el catalogo e inventario interno incluido arriba.\n"
         "- Ofrece un producto solamente si su Stock real disponible es mayor que cero. Si no tiene inventario configurado o esta agotado, no lo ofrezcas y explica brevemente que una asesora confirmara disponibilidad.\n"
         "- Si no tienes dato suficiente, pide una aclaracion breve.\n"
+        "- Cuando la intencion sea agendar una cita, primero pregunta si prefiere manana o tarde y no propongas horarios concretos hasta capturar esa preferencia.\n"
         "- Si aplica handoff por regla, indica transferencia a humano.\n"
         "- Mensajes cortos (maximo 4 lineas) orientados a conversion.\n"
         "- Usa el catalogo solo como fuente interna. No listes productos, precios ni catalogo completo en el saludo.\n"

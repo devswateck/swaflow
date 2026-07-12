@@ -1,6 +1,7 @@
 import {
   type FormEvent,
   type ReactNode,
+  type SetStateAction,
   useCallback,
   useEffect,
   useMemo,
@@ -46,7 +47,7 @@ import {
   X,
 } from "lucide-react";
 
-import { api, realtimeUrl } from "./lib/api";
+import { ApiError, api, realtimeUrl } from "./lib/api";
 import { useAuthStore } from "./lib/auth";
 
 type CurrentUser = {
@@ -72,6 +73,7 @@ type CompanyProfile = {
   currency: string | null;
   timezone: string | null;
   business_mode: string | null;
+  auto_assign_single_additional_user_chats: boolean;
   logo_url: string | null;
   banner_url: string | null;
   profile_url: string | null;
@@ -343,7 +345,27 @@ type ApiMessage = {
   sender_type: string;
   content: string | null;
   message_type: string;
+  metadata_json: Record<string, unknown>;
   created_at: string;
+};
+
+type ApiWhatsAppSendTextResponse = {
+  ok: boolean;
+  meta_message_id: string | null;
+  contact_id: string;
+  conversation_id: string;
+  message_id: string;
+  raw: Record<string, unknown>;
+};
+
+type ApiEvent = {
+  id: string;
+  company_id: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+  status: string;
+  created_at: string;
+  processed_at: string | null;
 };
 
 type ApiConversation = {
@@ -352,6 +374,7 @@ type ApiConversation = {
   contact_name: string | null;
   contact_phone: string;
   status: string;
+  ai_enabled: boolean;
   assigned_user_id: string | null;
   last_message: string | null;
   last_sender_type: string | null;
@@ -361,6 +384,8 @@ type ApiConversation = {
   funnel_step_id: string | null;
   funnel_name: string | null;
   funnel_step_name: string | null;
+  current_step: string | null;
+  available_product_count: number;
 };
 
 type ApiFunnelStep = {
@@ -397,6 +422,86 @@ type ApiFunnel = {
 
 type ApiConversationDetail = ApiConversation & {
   messages: ApiMessage[];
+  events: ApiEvent[];
+  available_products_preview?: {
+    id: string;
+    name: string;
+    available_units: number;
+  }[];
+};
+
+type ApiAppointmentIntentContext = {
+  conversation_id: string;
+  contact_id: string;
+  contact_name: string | null;
+  contact_phone: string;
+  assigned_user_id: string | null;
+  funnel_id: string | null;
+  funnel_name: string | null;
+  funnel_step_id: string | null;
+  funnel_step_name: string | null;
+  current_step: string | null;
+  preferred_period: "morning" | "afternoon" | null;
+  source: string;
+  prepared_at: string;
+};
+
+type ApiContact = {
+  id: string;
+  company_id: string;
+  name: string | null;
+  phone: string;
+  email: string | null;
+  source: string;
+  status: string;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+type ApiAppointment = {
+  id: string;
+  company_id: string;
+  contact_id: string;
+  conversation_id: string | null;
+  assigned_user_id: string | null;
+  scheduled_at: string;
+  duration_minutes: number;
+  status: string;
+  notes: string | null;
+  external_calendar_event_id: string | null;
+  calendar_sync_status: string | null;
+  calendar_sync_error: string | null;
+  calendar_synced_at: string | null;
+  calendar_sync_obsolete_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type ApiAppointmentAvailabilityRequest = {
+  preferred_period: "morning" | "afternoon";
+  duration_minutes: number;
+  horizon_days?: number;
+  max_options?: number;
+  conversation_id?: string | null;
+};
+
+type ApiAppointmentAvailabilityOption = {
+  scheduled_at: string;
+  ends_at: string;
+};
+
+type ApiAppointmentAvailability = {
+  company_id: string;
+  timezone: string;
+  preferred_period: "morning" | "afternoon";
+  duration_minutes: number;
+  horizon_days: number;
+  max_options: number;
+  calendar_integration_active: boolean;
+  validation_source: "external" | "internal" | "internal_fallback";
+  validation_error: string | null;
+  options: ApiAppointmentAvailabilityOption[];
 };
 
 type ApiProduct = {
@@ -405,6 +510,8 @@ type ApiProduct = {
   sku: string | null;
   price: number | string;
   currency: string;
+  whatsapp_catalog_id: string | null;
+  whatsapp_product_retailer_id: string | null;
   status: string;
 };
 
@@ -413,12 +520,14 @@ type ApiInventory = {
   product_id: string;
   quantity_available: number;
   quantity_reserved: number;
+  available_units: number;
   updated_at: string;
 };
 
 type ApiOrder = {
   id: string;
   contact_id: string;
+  conversation_id: string | null;
   status: string;
   total: number | string;
   currency: string;
@@ -428,6 +537,28 @@ type ApiOrder = {
   payment_status: string;
   metadata_json: Record<string, unknown>;
   created_at: string;
+};
+
+type OrderFilters = {
+  createdFrom: string;
+  createdTo: string;
+  status: string;
+  contactId: string;
+  conversationId: string;
+  productId: string;
+  assignedUserId: string;
+};
+
+type OrdersLoadContext = {
+  filters: OrderFilters;
+  requestId: number;
+};
+
+type ApiOrderCreateRequest = {
+  contact_id: string;
+  conversation_id: string | null;
+  items: { product_id: string; quantity: number }[];
+  metadata: Record<string, unknown>;
 };
 
 type PaymentLinkResponse = {
@@ -456,12 +587,16 @@ type Conversation = {
   message: string;
   state: string;
   assigned: string;
+  assignedUserId: string | null;
+  aiEnabled: boolean;
   lastMessageAt: string | null;
   unreadCount: number;
   funnelId: string | null;
   funnelStepId: string | null;
   funnelName: string | null;
   funnelStepName: string | null;
+  currentStep: string | null;
+  availableProductCount: number;
 };
 
 type InboxMessage = {
@@ -469,6 +604,30 @@ type InboxMessage = {
   side: "left" | "right";
   text: string;
   createdAt: string;
+  metadataJson: Record<string, unknown>;
+};
+
+type ConversationEvent = {
+  id: string;
+  label: string;
+  description: string;
+  createdAt: string;
+  status: string;
+};
+
+type AppointmentDraft = {
+  contactId: string;
+  conversationId: string;
+  contactName: string;
+  contactPhone: string;
+  funnelName: string | null;
+  funnelStepName: string | null;
+  currentStep: string | null;
+  preferredPeriod: "morning" | "afternoon" | null;
+  assignedUserId: string | null;
+  assignedLabel: string;
+  preparedAt: string;
+  source: "inbox" | "manual";
 };
 
 type Product = {
@@ -478,17 +637,24 @@ type Product = {
   price: number;
   currency: string;
   status: string;
+  source: "meta" | "local";
+  association: "synced" | "partial" | "local";
+  whatsappCatalogId: string | null;
+  whatsappProductRetailerId: string | null;
 };
 
 type InventoryItem = {
   productId: string;
   available: number;
   reserved: number;
+  availableUnits: number;
 };
 
 type Order = {
   id: string;
+  contactId: string;
   contact: string;
+  conversationId: string | null;
   total: number;
   currency: string;
   status: string;
@@ -498,14 +664,6 @@ type Order = {
   paymentLink: string | null;
   paymentExpiresAt: string | null;
   createdAt: string;
-};
-
-type Appointment = {
-  id: string;
-  contact: string;
-  scheduledAt: string;
-  status: string;
-  owner: string;
 };
 
 type ModulePermissionOption = {
@@ -682,6 +840,7 @@ const modulePermissionOptions: ModulePermissionOption[] = [
 ];
 
 const pageModuleRequirements: Partial<Record<PageKey, string[]>> = {
+  appointments: ["appointments"],
   ai: ["ai"],
   whatsapp: ["whatsapp"],
   funnels: ["funnels"],
@@ -751,11 +910,6 @@ function buildUserFormFromUser(user: TenantUser) {
     module_permissions: normalizeUserModulePermissions(user.role, user.module_permissions),
   };
 }
-
-const initialAppointments: Appointment[] = [
-  { id: "apt-1", contact: "Diana Perez", scheduledAt: "2026-05-20 14:00", status: "scheduled", owner: "Carolina" },
-  { id: "apt-2", contact: "Felipe Torres", scheduledAt: "2026-05-21 10:30", status: "confirmed", owner: "Mateo" },
-];
 
 function buildDefaultAiAgentForm(systemPrompt: string): AiAgentForm {
   return {
@@ -839,6 +993,15 @@ function getStoredTheme(): ThemeMode {
     return value === "light" ? "light" : "dark";
   } catch {
     return "dark";
+  }
+}
+
+function getStoredSelectedConversationId(): string | null {
+  try {
+    const value = localStorage.getItem("swaflow_selected_conversation_id");
+    return value && value.trim() ? value : null;
+  } catch {
+    return null;
   }
 }
 
@@ -931,10 +1094,10 @@ const integrationDefinitions: IntegrationDefinition[] = [
   {
     type: "payments",
     title: "Pasarela de pago",
-    subtitle: "Links de pago y webhooks",
+    subtitle: "Links de pago, webhooks y sandbox",
     icon: CreditCard,
-    secretLabel: "Llave privada Wompi",
-    extraSecretLabel: "Clave de eventos Wompi",
+    secretLabel: "Llave privada",
+    extraSecretLabel: "Clave de eventos",
     defaultConfig: {
       provider: "wompi",
       environment: "sandbox",
@@ -948,10 +1111,9 @@ const integrationDefinitions: IntegrationDefinition[] = [
         key: "provider",
         label: "Proveedor",
         options: [
-          { value: "wompi", label: "Wompi" },
           { value: "mercado_pago", label: "Mercado Pago" },
-          { value: "stripe", label: "Stripe" },
-          { value: "mock", label: "Mock" },
+          { value: "wompi", label: "Wompi" },
+          { value: "aval_pay", label: "Aval Pay" },
         ],
       },
       {
@@ -1450,14 +1612,112 @@ function mapApiConversation(conversation: ApiConversation): Conversation {
     phone: formatPhone(conversation.contact_phone),
     message: conversation.last_message ?? "Sin mensajes",
     state: mapConversationStatus(conversation.status, conversation.last_sender_type),
-    assigned: conversation.assigned_user_id ? "Equipo comercial" : "IA",
+    assigned: conversation.assigned_user_id ? "Asignada a un asesor" : "Sin asignar",
+    assignedUserId: conversation.assigned_user_id,
+    aiEnabled: conversation.ai_enabled,
     lastMessageAt: conversation.last_message_at,
     unreadCount: conversation.unread_count,
     funnelId: conversation.funnel_id,
     funnelStepId: conversation.funnel_step_id,
     funnelName: conversation.funnel_name,
     funnelStepName: conversation.funnel_step_name,
+    currentStep: conversation.current_step,
+    availableProductCount: conversation.available_product_count ?? 0,
   };
+}
+
+function buildAppointmentDraftFromContext(
+  context: ApiAppointmentIntentContext,
+  currentUser: CurrentUser,
+  tenantUsers: TenantUser[],
+): AppointmentDraft {
+  const assignedConversation: Conversation = {
+    id: context.conversation_id,
+    contactId: context.contact_id,
+    name: context.contact_name || formatPhone(context.contact_phone),
+    phone: formatPhone(context.contact_phone),
+    message: "",
+    state: "",
+    assigned: "",
+    assignedUserId: context.assigned_user_id,
+    aiEnabled: true,
+    lastMessageAt: null,
+    unreadCount: 0,
+    funnelId: context.funnel_id,
+    funnelStepId: context.funnel_step_id,
+    funnelName: context.funnel_name,
+    funnelStepName: context.funnel_step_name,
+    currentStep: context.current_step,
+    availableProductCount: 0,
+  };
+  return {
+    contactId: context.contact_id,
+    conversationId: context.conversation_id,
+    contactName: assignedConversation.name,
+    contactPhone: assignedConversation.phone,
+    funnelName: context.funnel_name,
+    funnelStepName: context.funnel_step_name,
+    currentStep: context.current_step,
+    preferredPeriod: context.preferred_period,
+    assignedUserId: context.assigned_user_id,
+    assignedLabel: getConversationAssignmentLabel(assignedConversation, currentUser, tenantUsers),
+    preparedAt: context.prepared_at,
+    source: context.source === "inbox" ? "inbox" : "manual",
+  };
+}
+
+function buildManualAppointmentDraft(currentUser: CurrentUser, tenantUsers: TenantUser[]): AppointmentDraft {
+  const manualConversation: Conversation = {
+    id: crypto.randomUUID(),
+    contactId: crypto.randomUUID(),
+    name: "Nuevo borrador",
+    phone: "Sin contacto",
+    message: "",
+    state: "",
+    assigned: "",
+    assignedUserId: null,
+    aiEnabled: true,
+    lastMessageAt: null,
+    unreadCount: 0,
+    funnelId: null,
+    funnelStepId: null,
+    funnelName: null,
+    funnelStepName: null,
+    currentStep: null,
+    availableProductCount: 0,
+  };
+  return {
+    contactId: "",
+    conversationId: "",
+    contactName: manualConversation.name,
+    contactPhone: manualConversation.phone,
+    funnelName: null,
+    funnelStepName: null,
+    currentStep: null,
+    preferredPeriod: null,
+    assignedUserId: null,
+    assignedLabel: getConversationAssignmentLabel(manualConversation, currentUser, tenantUsers),
+    preparedAt: new Date().toISOString(),
+    source: "manual",
+  };
+}
+
+function getConversationAssignmentLabel(
+  conversation: Conversation,
+  currentUser: CurrentUser,
+  tenantUsers: TenantUser[],
+) {
+  if (!conversation.assignedUserId) {
+    return "Sin asignar";
+  }
+  if (conversation.assignedUserId === currentUser.id) {
+    return "Tomado por ti";
+  }
+  const assignee = tenantUsers.find((user) => user.id === conversation.assignedUserId);
+  if (assignee) {
+    return `Asignado a ${assignee.name}`;
+  }
+  return "Asignado a otro asesor";
 }
 
 function mapApiMessage(message: ApiMessage): InboxMessage {
@@ -1466,11 +1726,98 @@ function mapApiMessage(message: ApiMessage): InboxMessage {
     side: message.sender_type === "customer" ? "left" : "right",
     text: message.content ?? `[${message.message_type}]`,
     createdAt: message.created_at,
+    metadataJson: message.metadata_json ?? {},
+  };
+}
+
+function formatConversationEventLabel(eventType: string) {
+  const labels: Record<string, string> = {
+    "message.received": "Mensaje recibido",
+    "message.sent": "Mensaje enviado",
+    "message.status": "Estado de mensaje",
+    "conversation.read": "Conversacion leida",
+    "conversation.assigned": "Conversacion asignada",
+    "conversation.ai_paused": "IA pausada",
+    "conversation.ai_resumed": "IA reactivada",
+    "conversation.funnel_assigned": "Funnel asignado",
+    "conversation.appointment_intent_prepared": "Intencion de agenda preparada",
+    "conversation.appointment_preference_selected": "Preferencia de agenda seleccionada",
+    "conversation.closed": "Conversacion cerrada",
+    "appointment.created": "Cita creada",
+    "appointment.calendar_synced": "Cita sincronizada",
+    "appointment.calendar_sync_failed": "Error de sincronizacion de cita",
+    "appointment.cancelled": "Cita cancelada",
+    "order.created": "Orden creada",
+    "order.paid": "Orden pagada",
+    "order.waiting_payment": "Orden en pago",
+    "order.payment_status": "Estado de pago",
+    "order.cancelled": "Orden cancelada",
+  };
+  return labels[eventType] ?? "Evento registrado";
+}
+
+function formatConversationEventDescription(event: ApiEvent) {
+  const payload = event.payload ?? {};
+  const conversationIdValue = payload["conversation_id"];
+  const messageIdValue = payload["message_id"];
+  const statusValue = payload["status"];
+  const recipientIdValue = payload["recipient_id"];
+  const conversationId = typeof conversationIdValue === "string" ? conversationIdValue : null;
+  const messageId = typeof messageIdValue === "string" ? messageIdValue : null;
+  const status = typeof statusValue === "string" ? statusValue : null;
+  const recipientId = typeof recipientIdValue === "string" ? recipientIdValue : null;
+
+  if (event.event_type === "message.received") {
+    return messageId ? `Mensaje ${messageId.slice(0, 8)} recibido` : "Mensaje entrante registrado";
+  }
+  if (event.event_type === "message.sent") {
+    return messageId ? `Mensaje ${messageId.slice(0, 8)} enviado` : "Mensaje saliente registrado";
+  }
+  if (event.event_type === "message.status") {
+    const pieces = [status, recipientId ? `destino ${recipientId}` : null].filter(Boolean);
+    return pieces.length ? pieces.join(" · ") : "Estado actualizado";
+  }
+  if (event.event_type === "conversation.read") {
+    return conversationId ? `Conversacion ${conversationId.slice(0, 8)} marcada como leida` : "Conversacion leida";
+  }
+  if (event.event_type === "conversation.assigned") {
+    return "Responsable actualizado";
+  }
+  if (event.event_type === "conversation.ai_paused") {
+    return conversationId ? `IA pausada en ${conversationId.slice(0, 8)}` : "IA pausada";
+  }
+  if (event.event_type === "conversation.ai_resumed") {
+    return conversationId ? `IA reactivada en ${conversationId.slice(0, 8)}` : "IA reactivada";
+  }
+  if (event.event_type === "conversation.funnel_assigned") {
+    return "Clasificacion comercial actualizada";
+  }
+  if (event.event_type === "conversation.appointment_intent_prepared") {
+    return "Contexto de agenda preparado";
+  }
+  return "Evento registrado";
+}
+
+function mapApiConversationEvent(event: ApiEvent): ConversationEvent {
+  return {
+    id: event.id,
+    label: formatConversationEventLabel(event.event_type),
+    description: formatConversationEventDescription(event),
+    createdAt: event.created_at,
+    status: event.status,
   };
 }
 
 function mapApiProduct(product: ApiProduct): Product {
   const parsedPrice = typeof product.price === "number" ? product.price : Number(product.price);
+  const hasCatalogMapping = Boolean(product.whatsapp_catalog_id?.trim());
+  const hasRetailerMapping = Boolean(product.whatsapp_product_retailer_id?.trim());
+  const source = hasCatalogMapping || hasRetailerMapping ? "meta" : "local";
+  const association = source === "meta" && hasCatalogMapping && hasRetailerMapping
+    ? "synced"
+    : source === "meta"
+      ? "partial"
+      : "local";
   return {
     id: product.id,
     name: product.name,
@@ -1478,7 +1825,126 @@ function mapApiProduct(product: ApiProduct): Product {
     price: Number.isFinite(parsedPrice) ? parsedPrice : 0,
     currency: product.currency || "COP",
     status: product.status,
+    source,
+    association,
+    whatsappCatalogId: product.whatsapp_catalog_id ?? null,
+    whatsappProductRetailerId: product.whatsapp_product_retailer_id ?? null,
   };
+}
+
+function formatCatalogStatus(status: string) {
+  if (status === "active") {
+    return "Activo";
+  }
+  if (status === "inactive") {
+    return "Inactivo";
+  }
+  return status;
+}
+
+function formatCatalogAssociation(product: Product) {
+  if (product.association === "synced") {
+    return "Sincronizado con Meta";
+  }
+  if (product.association === "partial") {
+    return "Asociacion Meta incompleta";
+  }
+  return "Sin mapeo Meta";
+}
+
+function formatOrderStatusLabel(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === "pending") {
+    return "Pendiente";
+  }
+  if (normalized === "waiting_payment") {
+    return "En pago";
+  }
+  if (normalized === "paid") {
+    return "Pagada";
+  }
+  if (normalized === "cancelled") {
+    return "Cancelada";
+  }
+  if (normalized === "expired") {
+    return "Vencida";
+  }
+  if (normalized === "processing") {
+    return "Procesando";
+  }
+  return status;
+}
+
+function formatPaymentStatusLabel(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === "pending") {
+    return "Pago pendiente";
+  }
+  if (normalized === "paid") {
+    return "Pago confirmado";
+  }
+  if (normalized === "cancelled") {
+    return "Pago cancelado";
+  }
+  if (normalized === "expired") {
+    return "Pago vencido";
+  }
+  if (normalized === "failed") {
+    return "Pago fallido";
+  }
+  return status;
+}
+
+function getOrderStatusTone(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === "paid") {
+    return "border-cyan-200 bg-cyan-50 text-cyan-700";
+  }
+  if (normalized === "waiting_payment") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  if (normalized === "cancelled" || normalized === "expired") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+  if (normalized === "processing") {
+    return "border-blue-200 bg-blue-50 text-blue-700";
+  }
+  return "border-line bg-panel text-slate-600";
+}
+
+function getPaymentStatusTone(status: string) {
+  const normalized = status.toLowerCase();
+  if (normalized === "paid") {
+    return "border-cyan-200 bg-cyan-50 text-cyan-700";
+  }
+  if (normalized === "pending") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  if (normalized === "cancelled" || normalized === "expired" || normalized === "failed") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
+  }
+  return "border-line bg-panel text-slate-600";
+}
+
+function formatMonthYearLabel(value: string, timeZone?: string) {
+  const label = new Intl.DateTimeFormat("es-CO", {
+    month: "long",
+    year: "numeric",
+    ...(timeZone ? { timeZone } : {}),
+  }).format(new Date(value));
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function normalizeTimeZone(timeZone: string | null) {
+  if (!timeZone) {
+    return null;
+  }
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
+    return timeZone;
+  } catch {
+    return null;
+  }
 }
 
 function mapApiInventory(item: ApiInventory): InventoryItem {
@@ -1486,6 +1952,7 @@ function mapApiInventory(item: ApiInventory): InventoryItem {
     productId: item.product_id,
     available: item.quantity_available,
     reserved: item.quantity_reserved,
+    availableUnits: item.available_units,
   };
 }
 
@@ -1501,7 +1968,9 @@ function mapApiOrder(order: ApiOrder): Order {
     `Contacto ${order.contact_id.slice(0, 8)}`;
   return {
     id: order.id,
+    contactId: order.contact_id,
     contact: String(contactName),
+    conversationId: order.conversation_id ?? null,
     total: Number.isFinite(parsedTotal) ? parsedTotal : 0,
     currency: order.currency || "COP",
     status: order.status,
@@ -1515,6 +1984,110 @@ function mapApiOrder(order: ApiOrder): Order {
   };
 }
 
+function formatDateTimeLocal(value: Date) {
+  const pad = (segment: number) => String(segment).padStart(2, "0");
+  return [
+    value.getFullYear(),
+    pad(value.getMonth() + 1),
+    pad(value.getDate()),
+  ].join("-") + `T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+}
+
+function getTimeZoneParts(value: Date, timeZone: string) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(value);
+  const lookup = new Map(parts.map((part) => [part.type, part.value]));
+  return {
+    year: Number(lookup.get("year") ?? "0"),
+    month: Number(lookup.get("month") ?? "0"),
+    day: Number(lookup.get("day") ?? "0"),
+    hour: Number(lookup.get("hour") ?? "0"),
+    minute: Number(lookup.get("minute") ?? "0"),
+    second: Number(lookup.get("second") ?? "0"),
+  };
+}
+
+function formatDateTimeLocalInTimeZone(value: Date | string, timeZone: string) {
+  const date = typeof value === "string" ? new Date(value) : value;
+  const parts = getTimeZoneParts(date, timeZone);
+  const pad = (segment: number) => String(segment).padStart(2, "0");
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}T${pad(parts.hour)}:${pad(parts.minute)}`;
+}
+
+function localDateTimeValueToIsoInTimeZone(value: string, timeZone: string) {
+  const [datePart, timePart] = value.split("T");
+  if (!datePart || !timePart) {
+    return new Date(value).toISOString();
+  }
+  const [year, month, day] = datePart.split("-").map(Number);
+  const [hour, minute] = timePart.split(":").map(Number);
+  const targetUtc = Date.UTC(year, month - 1, day, hour, minute);
+  let guessUtc = targetUtc;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const observed = getTimeZoneParts(new Date(guessUtc), timeZone);
+    const observedUtc = Date.UTC(
+      observed.year,
+      observed.month - 1,
+      observed.day,
+      observed.hour,
+      observed.minute,
+      observed.second,
+    );
+    const delta = targetUtc - observedUtc;
+    if (delta === 0) {
+      break;
+    }
+    guessUtc += delta;
+  }
+  return new Date(guessUtc).toISOString();
+}
+
+function getInitialAppointmentScheduledAt(timeZone?: string | null) {
+  if (!timeZone) {
+    const nextHour = new Date();
+    nextHour.setHours(nextHour.getHours() + 1);
+    return formatDateTimeLocal(nextHour);
+  }
+  const nowParts = getTimeZoneParts(new Date(), timeZone);
+  const nextHour = new Date(
+    Date.UTC(
+      nowParts.year,
+      nowParts.month - 1,
+      nowParts.day,
+      nowParts.hour + 1,
+      nowParts.minute,
+      nowParts.second,
+    ),
+  );
+  return `${nextHour.getUTCFullYear()}-${String(nextHour.getUTCMonth() + 1).padStart(2, "0")}-${String(nextHour.getUTCDate()).padStart(2, "0")}T${String(nextHour.getUTCHours()).padStart(2, "0")}:${String(nextHour.getUTCMinutes()).padStart(2, "0")}`;
+}
+
+function formatDateTimeLabelInTimeZone(value: Date | string, timeZone: string) {
+  return new Intl.DateTimeFormat("es-CO", {
+    dateStyle: "full",
+    timeStyle: "short",
+    timeZone,
+  }).format(typeof value === "string" ? new Date(value) : value);
+}
+
+const DEFAULT_APPOINTMENT_DURATION_MINUTES = 60;
+
+function createIdempotencyKey() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `order-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
 function App() {
   const { token, setToken } = useAuthStore();
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
@@ -1526,23 +2099,54 @@ function App() {
   const [accessNotice, setAccessNotice] = useState("");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [conversationMessages, setConversationMessages] = useState<InboxMessage[]>([]);
+  const [conversationEvents, setConversationEvents] = useState<ConversationEvent[]>([]);
   const [inboxLoading, setInboxLoading] = useState(false);
   const [inboxError, setInboxError] = useState("");
   const [products, setProducts] = useState<Product[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [appointments, setAppointments] = useState(initialAppointments);
+  const [orderLoadError, setOrderLoadError] = useState("");
+  const [orderFilters, setOrderFilters] = useState<OrderFilters>({
+    createdFrom: "",
+    createdTo: "",
+    status: "",
+    contactId: "",
+    conversationId: "",
+    productId: "",
+    assignedUserId: "",
+  });
+  const [appointments, setAppointments] = useState<ApiAppointment[]>([]);
+  const [appointmentsLoading, setAppointmentsLoading] = useState(false);
+  const [appointmentsError, setAppointmentsError] = useState("");
+  const [appointmentMessage, setAppointmentMessage] = useState("");
+  const [appointmentSaving, setAppointmentSaving] = useState(false);
+  const [appointmentDraft, setAppointmentDraft] = useState<AppointmentDraft | null>(null);
+  const [contacts, setContacts] = useState<ApiContact[]>([]);
   const [funnels, setFunnels] = useState<ApiFunnel[]>([]);
-  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [tenantUsers, setTenantUsers] = useState<TenantUser[]>([]);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(
+    getStoredSelectedConversationId,
+  );
+  const [selectedConversationDetail, setSelectedConversationDetail] = useState<Conversation | null>(null);
   const [inboxFunnelFilterId, setInboxFunnelFilterId] = useState<string>("");
   const [inboxStepFilterId, setInboxStepFilterId] = useState<string>("");
   const selectedConversationIdRef = useRef<string | null>(null);
+  const conversationDetailRequestIdRef = useRef(0);
+  const conversationDetailAbortControllerRef = useRef<AbortController | null>(null);
+  const orderFiltersRef = useRef(orderFilters);
+  const hasLoadedOrdersOnceRef = useRef(false);
+  const ordersRequestIdRef = useRef(0);
+  const orderLoadErrorRequestIdRef = useRef(0);
 
   const visibleActivePage = currentUser && canAccessPage(currentUser, activePage) ? activePage : "dashboard";
   const page = pageCopy[visibleActivePage];
-  const selectedConversation = selectedConversationId
+  const selectedConversationFromList = selectedConversationId
     ? conversations.find((item) => item.id === selectedConversationId) ?? null
     : null;
+  const selectedConversation =
+    selectedConversationDetail?.id === selectedConversationId
+      ? selectedConversationDetail
+      : selectedConversationFromList;
   const totalUnread = useMemo(
     () => conversations.reduce((total, conversation) => total + conversation.unreadCount, 0),
     [conversations],
@@ -1596,6 +2200,22 @@ function App() {
     selectedConversationIdRef.current = selectedConversationId;
   }, [selectedConversationId]);
 
+  useEffect(() => {
+    try {
+      if (selectedConversationId) {
+        localStorage.setItem("swaflow_selected_conversation_id", selectedConversationId);
+      } else {
+        localStorage.removeItem("swaflow_selected_conversation_id");
+      }
+    } catch {
+      // Selected conversation cache is best-effort only.
+    }
+  }, [selectedConversationId]);
+
+  useEffect(() => {
+    orderFiltersRef.current = orderFilters;
+  }, [orderFilters]);
+
   const loadInbox = useCallback(
     async (
       {
@@ -1624,13 +2244,13 @@ function App() {
       const mapped = response.map(mapApiConversation);
       setConversations(mapped);
       const currentSelected = selectedConversationIdRef.current;
-      const nextSelected =
-        currentSelected && mapped.some((conversation) => conversation.id === currentSelected)
-          ? currentSelected
-          : null;
-      setSelectedConversationId(nextSelected);
-      if (!nextSelected) {
+      if (currentSelected && mapped.some((conversation) => conversation.id === currentSelected)) {
+        setSelectedConversationId(currentSelected);
+      } else if (currentSelected) {
+        setSelectedConversationId(null);
+        setSelectedConversationDetail(null);
         setConversationMessages([]);
+        setConversationEvents([]);
       }
     } catch (caught) {
       setInboxError(caught instanceof Error ? caught.message : "No fue posible actualizar el inbox");
@@ -1642,24 +2262,98 @@ function App() {
   }, [inboxFunnelFilterId, inboxStepFilterId]);
 
   const loadConversationDetail = useCallback(async (conversationId: string, markRead = true) => {
+    const requestId = ++conversationDetailRequestIdRef.current;
+    conversationDetailAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    conversationDetailAbortControllerRef.current = abortController;
+    const { signal } = abortController;
     setInboxError("");
     try {
-      const detail = await api<ApiConversationDetail>(`/conversations/${conversationId}`);
-      setConversationMessages(detail.messages.map(mapApiMessage));
-      if (markRead) {
-        await api<unknown>(`/conversations/${conversationId}/read`, { method: "POST" }).catch(() => null);
+      if (selectedConversationIdRef.current !== conversationId) {
+        return;
       }
+      if (markRead) {
+        try {
+          await api<unknown>(`/conversations/${conversationId}/read`, {
+            method: "POST",
+            signal,
+          });
+          if (signal.aborted || selectedConversationIdRef.current !== conversationId) {
+            return;
+          }
+          setConversations((current) =>
+            current.map((conversation) =>
+              conversation.id === conversationId
+                ? { ...conversation, unreadCount: 0 }
+                : conversation,
+            ),
+          );
+        } catch {
+          // Best effort: if marking as read fails, keep the existing unread count.
+        }
+      }
+      if (signal.aborted || conversationDetailRequestIdRef.current !== requestId) {
+        return;
+      }
+      const detail = await api<ApiConversationDetail>(`/conversations/${conversationId}`, {
+        signal,
+      });
+      if (
+        signal.aborted ||
+        conversationDetailRequestIdRef.current !== requestId ||
+        selectedConversationIdRef.current !== conversationId
+      ) {
+        return;
+      }
+      const mappedDetail = {
+        ...mapApiConversation(detail),
+        unreadCount: detail.unread_count,
+      };
+      setConversationMessages(detail.messages.map(mapApiMessage));
+      setConversationEvents((detail.events ?? []).map(mapApiConversationEvent));
+      setSelectedConversationDetail(mappedDetail);
       setConversations((current) =>
         current.map((conversation) =>
           conversation.id === detail.id
-            ? { ...mapApiConversation(detail), unreadCount: markRead ? 0 : detail.unread_count }
+            ? mappedDetail
             : conversation,
         ),
       );
     } catch (caught) {
+      if (signal.aborted || conversationDetailRequestIdRef.current !== requestId) {
+        return;
+      }
+      if (caught instanceof ApiError && caught.status === 404 && selectedConversationIdRef.current === conversationId) {
+        setSelectedConversationId(null);
+        setSelectedConversationDetail(null);
+        setConversationMessages([]);
+        setConversationEvents([]);
+        return;
+      }
+      setConversationMessages([]);
+      setConversationEvents([]);
+      setSelectedConversationDetail(null);
       setInboxError(caught instanceof Error ? caught.message : "No fue posible cargar la conversacion");
+    } finally {
+      if (conversationDetailAbortControllerRef.current === abortController) {
+        conversationDetailAbortControllerRef.current = null;
+      }
     }
   }, []);
+
+  const loadAppointmentIntentContext = useCallback(async (conversationId: string) => {
+    return await api<ApiAppointmentIntentContext>(`/conversations/${conversationId}/appointment-intent`);
+  }, []);
+
+  const loadAppointmentAvailability = useCallback(
+    async (payload: ApiAppointmentAvailabilityRequest) => {
+      return await api<ApiAppointmentAvailability>("/appointments/availability", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    },
+    [],
+  );
 
   const loadProducts = useCallback(async () => {
     try {
@@ -1683,10 +2377,98 @@ function App() {
     await Promise.all([loadProducts(), loadInventory()]);
   }, [loadInventory, loadProducts]);
 
-  const loadOrders = useCallback(async () => {
-    const response = await api<ApiOrder[]>("/orders?limit=200&offset=0");
+  const loadOrders = useCallback(async ({ filters, requestId }: OrdersLoadContext) => {
+    const params = new URLSearchParams();
+    params.set("limit", "200");
+    params.set("offset", "0");
+    if (filters.createdFrom) {
+      params.set("created_from", filters.createdFrom);
+    }
+    if (filters.createdTo) {
+      params.set("created_to", filters.createdTo);
+    }
+    if (filters.status) {
+      params.set("status", filters.status);
+    }
+    if (filters.contactId) {
+      params.set("contact_id", filters.contactId);
+    }
+    if (filters.conversationId) {
+      params.set("conversation_id", filters.conversationId);
+    }
+    if (filters.productId) {
+      params.set("product_id", filters.productId);
+    }
+    if (filters.assignedUserId) {
+      params.set("assigned_user_id", filters.assignedUserId);
+    }
+    const response = await api<ApiOrder[]>(`/orders?${params.toString()}`);
+    if (requestId !== ordersRequestIdRef.current) {
+      return false;
+    }
     setOrders(response.map(mapApiOrder));
+    setOrderLoadError("");
+    return true;
   }, []);
+
+  const loadAppointments = useCallback(
+    async ({
+      showLoading = false,
+      focusAppointmentId = null,
+    }: { showLoading?: boolean; focusAppointmentId?: string | null } = {}) => {
+      if (showLoading) {
+        setAppointmentsLoading(true);
+      }
+      setAppointmentsError("");
+      try {
+        const params = new URLSearchParams({ limit: "200", offset: "0" });
+        if (focusAppointmentId) {
+          params.set("focus_appointment_id", focusAppointmentId);
+        }
+        const response = await api<ApiAppointment[]>(`/appointments?${params.toString()}`);
+        setAppointments(response);
+        return response;
+      } catch (caught) {
+        const message = caught instanceof Error ? caught.message : "No fue posible cargar las citas";
+        setAppointmentsError(message);
+        throw caught;
+      } finally {
+        if (showLoading) {
+          setAppointmentsLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
+  const loadContacts = useCallback(async () => {
+    try {
+      const response = await api<ApiContact[]>("/contacts?limit=200&offset=0");
+      setContacts(response);
+    } catch {
+      setContacts([]);
+    }
+  }, []);
+
+  const refreshOrders = useCallback(async () => {
+    const requestId = ++ordersRequestIdRef.current;
+    orderLoadErrorRequestIdRef.current = requestId;
+    setOrderLoadError("");
+    try {
+      return await loadOrders({ filters: orderFiltersRef.current, requestId });
+    } catch (caught) {
+      if (requestId !== orderLoadErrorRequestIdRef.current) {
+        return false;
+      }
+      const message = caught instanceof Error ? caught.message : "No fue posible cargar las ordenes";
+      setOrderLoadError(message);
+      throw caught;
+    }
+  }, [loadOrders]);
+
+  const refreshAppointments = useCallback(async () => {
+    return loadAppointments();
+  }, [loadAppointments]);
 
   useEffect(() => {
     if (!token) {
@@ -1726,8 +2508,49 @@ function App() {
     }
 
     void loadCatalogData();
-    void loadOrders();
-  }, [currentUser, loadCatalogData, loadOrders]);
+    if (canAccessPage(currentUser, "appointments")) {
+      void loadContacts();
+      void refreshAppointments().catch(() => {
+        // Appointment load errors are already captured in the page state.
+      });
+    }
+    hasLoadedOrdersOnceRef.current = true;
+  }, [currentUser, loadCatalogData, loadContacts, refreshAppointments, refreshOrders]);
+
+  useEffect(() => {
+    if (!currentUser || !hasLoadedOrdersOnceRef.current) {
+      return;
+    }
+
+    void refreshOrders().catch(() => {
+      // The page-level error state is already updated by refreshOrders.
+    });
+  }, [currentUser, orderFilters, refreshOrders]);
+
+  useEffect(() => {
+    if (!currentUser) {
+      setTenantUsers([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    api<TenantUser[]>(`/users/tenant?limit=200&offset=0`)
+      .then((users) => {
+        if (!cancelled) {
+          setTenantUsers(users);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setTenantUsers([]);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser]);
 
   useEffect(() => {
     if (!currentUser) {
@@ -1747,12 +2570,65 @@ function App() {
 
   useEffect(() => {
     if (!selectedConversationId) {
+      conversationDetailAbortControllerRef.current?.abort();
       setConversationMessages([]);
+      setConversationEvents([]);
+      setSelectedConversationDetail(null);
       return;
     }
 
+    setConversationMessages([]);
+    setConversationEvents([]);
+    setSelectedConversationDetail(null);
     void loadConversationDetail(selectedConversationId);
+    return () => {
+      conversationDetailAbortControllerRef.current?.abort();
+    };
   }, [loadConversationDetail, selectedConversationId]);
+
+  useEffect(() => {
+    if (activePage !== "appointments" || !currentUser) {
+      if (activePage !== "appointments") {
+        setAppointmentDraft(null);
+      }
+      return;
+    }
+    if (!selectedConversation) {
+      if (appointmentDraft?.source !== "manual") {
+        setAppointmentDraft(null);
+      }
+      return;
+    }
+    if (appointmentDraft?.conversationId === selectedConversation.id) {
+      return;
+    }
+
+    let cancelled = false;
+    loadAppointmentIntentContext(selectedConversation.id)
+      .then((context) => {
+        if (cancelled) {
+          return;
+        }
+        setAppointmentDraft(buildAppointmentDraftFromContext(context, currentUser, tenantUsers));
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAppointmentDraft(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activePage,
+    appointmentDraft?.conversationId,
+    appointmentDraft?.source,
+    currentUser,
+    loadAppointmentIntentContext,
+    selectedConversation,
+    tenantUsers,
+  ]);
 
   useEffect(() => {
     if (!currentUser || !token) {
@@ -1782,9 +2658,30 @@ function App() {
         if (message.type === "ready" || message.type === "pong") {
           return;
         }
+        const eventType = message.type ?? "";
+        if (eventType.startsWith("order.")) {
+          void loadCatalogData();
+          void refreshOrders().catch(() => {
+            // The page-level error state is already updated by refreshOrders.
+          });
+        }
+        if (eventType.startsWith("appointment.")) {
+          if (currentUser && canAccessPage(currentUser, "appointments")) {
+            void refreshAppointments().catch(() => {
+              // The page-level error state is already updated by refreshAppointments.
+            });
+          }
+        }
         const conversationId = message.payload?.conversation_id;
         if (conversationId && selectedConversationIdRef.current === conversationId) {
-          void loadConversationDetail(conversationId);
+          void loadConversationDetail(conversationId, eventType === "message.received");
+          void loadInbox();
+          return;
+        }
+        if (eventType.startsWith("order.")) {
+          return;
+        }
+        if (eventType.startsWith("appointment.")) {
           return;
         }
         void loadInbox();
@@ -1793,7 +2690,7 @@ function App() {
         if (pingTimer) {
           window.clearInterval(pingTimer);
         }
-        if (event.code === 1008) {
+      if (event.code === 1008) {
           setToken(null);
           return;
         }
@@ -1818,7 +2715,16 @@ function App() {
       }
       socket?.close();
     };
-  }, [currentUser, loadConversationDetail, loadInbox, setToken, token]);
+  }, [
+    currentUser,
+    loadCatalogData,
+    loadConversationDetail,
+    loadInbox,
+    refreshAppointments,
+    refreshOrders,
+    setToken,
+    token,
+  ]);
 
   const filteredProducts = useMemo(() => {
     const value = query.trim().toLowerCase();
@@ -1858,21 +2764,91 @@ function App() {
 
   async function createPaymentLink(orderId: string) {
     await api<PaymentLinkResponse>(`/orders/${orderId}/payment-link`, { method: "POST" });
-    await loadOrders();
+    await refreshOrders().catch(() => {
+      // The payment link was created successfully; refreshing is best effort.
+    });
   }
 
-  function addAppointment() {
-    setAppointments((current) => [
-      {
-        id: `apt-${Date.now()}`,
-        contact: selectedConversation?.name ?? "Cliente nuevo",
-        scheduledAt: "2026-05-22 09:00",
-        status: "scheduled",
-        owner: "IA",
-      },
-      ...current,
-    ]);
+  async function createConversationOrder(payload: ApiOrderCreateRequest) {
+    await api<ApiOrder>("/orders", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    await refreshOrders().catch(() => {
+      // The order was created successfully; refreshing is best effort.
+    });
+    await loadCatalogData();
+  }
+
+  function openConversationFromOrders(conversationId: string) {
+    setSelectedConversationId(conversationId);
+    setActivePage("inbox");
+  }
+
+  function openAppointmentDraft() {
+    if (!currentUser) {
+      return;
+    }
+    setSelectedConversationId(null);
+    setAppointmentMessage("");
+    setAppointmentsError("");
+    setAppointmentDraft(buildManualAppointmentDraft(currentUser, tenantUsers));
     setActivePage("appointments");
+  }
+
+  async function prepareAppointmentFromInbox() {
+    if (!selectedConversation || !currentUser) {
+      return;
+    }
+    const requestedConversationId = selectedConversation.id;
+    if (selectedConversationIdRef.current !== requestedConversationId) {
+      return;
+    }
+    const context = await api<ApiAppointmentIntentContext>(`/conversations/${selectedConversation.id}/prepare-appointment`, {
+      method: "POST",
+    });
+    if (selectedConversationIdRef.current !== requestedConversationId) {
+      return;
+    }
+    setAppointmentDraft(buildAppointmentDraftFromContext(context, currentUser, tenantUsers));
+    setAppointmentMessage("");
+    setAppointmentsError("");
+    setActivePage("appointments");
+    if (selectedConversationIdRef.current === requestedConversationId) {
+      await loadConversationDetail(requestedConversationId, false).catch(() => null);
+    }
+  }
+
+  async function createAppointmentFromForm(payload: {
+    contact_id: string;
+    conversation_id: string | null;
+    assigned_user_id: string | null;
+    scheduled_at: string;
+    duration_minutes: number;
+    notes: string | null;
+  }) {
+    setAppointmentSaving(true);
+    setAppointmentMessage("");
+    setAppointmentsError("");
+    try {
+      const appointment = await api<ApiAppointment>("/appointments", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setAppointmentMessage("Cita guardada");
+      setAppointmentDraft(null);
+      await Promise.all([
+        loadAppointments({ focusAppointmentId: appointment.id }).catch(() => null),
+        payload.conversation_id ? loadConversationDetail(payload.conversation_id, false).catch(() => null) : Promise.resolve(),
+        payload.conversation_id ? loadInbox().catch(() => null) : Promise.resolve(),
+      ]);
+      return appointment;
+    } catch (caught) {
+      setAppointmentsError(caught instanceof Error ? caught.message : "No fue posible guardar la cita");
+      return null;
+    } finally {
+      setAppointmentSaving(false);
+    }
   }
 
   async function refreshInbox() {
@@ -1884,16 +2860,27 @@ function App() {
       return;
     }
     setInboxError("");
-    await api<{ meta_message_id: string | null }>("/whatsapp/messages", {
+    const response = await api<ApiWhatsAppSendTextResponse>("/whatsapp/messages", {
       method: "POST",
       body: JSON.stringify({
         to: selectedConversation.phone,
         body: content,
       }),
     });
-    await refreshInbox();
-    const detail = await api<ApiConversationDetail>(`/conversations/${selectedConversation.id}`);
-    setConversationMessages(detail.messages.map(mapApiMessage));
+    selectedConversationIdRef.current = response.conversation_id;
+    setSelectedConversationId(response.conversation_id);
+    setConversationMessages((current) => [
+      ...current,
+      {
+        id: response.message_id,
+        side: "right",
+        text: content,
+        createdAt: new Date().toISOString(),
+        metadataJson: {},
+      },
+    ]);
+    void refreshInbox();
+    void loadConversationDetail(response.conversation_id, false);
   }
 
   async function assignConversationFunnel(
@@ -1916,6 +2903,19 @@ function App() {
     }
   }
 
+  async function assignConversationResponsibility(conversationId: string, assignedUserId: string | null) {
+    await api<ApiConversation>(`/conversations/${conversationId}/assign`, {
+      method: "POST",
+      body: JSON.stringify({
+        assigned_user_id: assignedUserId,
+      }),
+    });
+    await loadInbox();
+    if (selectedConversationIdRef.current === conversationId) {
+      await loadConversationDetail(conversationId, false);
+    }
+  }
+
   function updateInboxFunnelFilter(nextFunnelId: string) {
     setInboxFunnelFilterId(nextFunnelId);
     setInboxStepFilterId("");
@@ -1925,17 +2925,30 @@ function App() {
     setInboxStepFilterId(nextStepId);
   }
 
-  function requestHuman() {
+  async function pauseConversationAi() {
     if (!selectedConversation) {
       return;
     }
-    setConversations((current) =>
-      current.map((conversation) =>
-        conversation.id === selectedConversation.id
-          ? { ...conversation, state: "Handoff", assigned: "Equipo comercial" }
-          : conversation,
-      ),
-    );
+    await api<ApiConversation>(`/conversations/${selectedConversation.id}/ai/pause`, {
+      method: "POST",
+    });
+    await loadInbox();
+    if (selectedConversationIdRef.current === selectedConversation.id) {
+      await loadConversationDetail(selectedConversation.id, false);
+    }
+  }
+
+  async function resumeConversationAi() {
+    if (!selectedConversation) {
+      return;
+    }
+    await api<ApiConversation>(`/conversations/${selectedConversation.id}/ai/resume`, {
+      method: "POST",
+    });
+    await loadInbox();
+    if (selectedConversationIdRef.current === selectedConversation.id) {
+      await loadConversationDetail(selectedConversation.id, false);
+    }
   }
 
   function logout() {
@@ -2059,19 +3072,27 @@ function App() {
                 conversations={conversations}
                 selectedConversation={selectedConversation}
                 messages={conversationMessages}
+                events={conversationEvents}
+                products={products}
+                inventory={inventory}
                 loading={inboxLoading}
                 error={inboxError}
                 onSelect={setSelectedConversationId}
                 onRefresh={refreshInbox}
                 onSendMessage={sendInboxMessage}
-                onRequestHuman={requestHuman}
-                onAddAppointment={addAppointment}
+                onPauseAi={pauseConversationAi}
+                onResumeAi={resumeConversationAi}
+                onPrepareAppointment={prepareAppointmentFromInbox}
                 funnels={funnels}
+                currentUser={currentUser}
+                tenantUsers={tenantUsers}
                 onAssignFunnel={assignConversationFunnel}
+                onAssignConversation={assignConversationResponsibility}
                 funnelFilterId={inboxFunnelFilterId}
                 funnelStepFilterId={inboxStepFilterId}
                 onChangeFunnelFilter={updateInboxFunnelFilter}
                 onChangeStepFilter={updateInboxStepFilter}
+                onCreateOrder={createConversationOrder}
               />
             ) : null}
             {visibleActivePage === "products" ? (
@@ -2083,12 +3104,33 @@ function App() {
             {visibleActivePage === "orders" ? (
               <OrdersPage
                 orders={orders}
+                loadError={orderLoadError}
+                timeZone={normalizeTimeZone(currentUser?.company_timezone ?? null)}
+                filters={orderFilters}
+                onChangeFilters={setOrderFilters}
                 onCreatePaymentLink={createPaymentLink}
-                onRefresh={loadOrders}
+                onRefresh={refreshOrders}
+                onOpenConversation={openConversationFromOrders}
+                products={products}
+                conversations={conversations}
+                tenantUsers={tenantUsers}
               />
             ) : null}
             {visibleActivePage === "appointments" ? (
-              <AppointmentsPage appointments={appointments} onAddAppointment={addAppointment} />
+            <AppointmentsPage
+                appointments={appointments}
+                appointmentDraft={appointmentDraft}
+                appointmentMessage={appointmentMessage}
+                appointmentSaving={appointmentSaving}
+                appointmentError={appointmentsError}
+                contacts={contacts}
+                onOpenAppointmentDraft={openAppointmentDraft}
+                onLoadAppointmentAvailability={loadAppointmentAvailability}
+                onCreateAppointment={createAppointmentFromForm}
+                currentUser={currentUser}
+                tenantUsers={tenantUsers}
+                loading={appointmentsLoading}
+              />
             ) : null}
             {visibleActivePage === "funnels" ? (
               <FunnelsPage
@@ -2339,7 +3381,7 @@ function DashboardPage({
 }: {
   conversations: Conversation[];
   orders: Order[];
-  appointments: Appointment[];
+  appointments: ApiAppointment[];
   onNavigate: (page: PageKey) => void;
 }) {
   const paidTotal = orders
@@ -2428,31 +3470,46 @@ function InboxPage({
   conversations,
   selectedConversation,
   messages,
+  events,
+  products,
+  inventory,
   loading,
   error,
   onSelect,
   onRefresh,
   onSendMessage,
-  onRequestHuman,
-  onAddAppointment,
+  onPauseAi,
+  onResumeAi,
+  onPrepareAppointment,
   funnels,
+  currentUser,
+  tenantUsers,
+  onAssignConversation,
   onAssignFunnel,
   funnelFilterId,
   funnelStepFilterId,
   onChangeFunnelFilter,
   onChangeStepFilter,
+  onCreateOrder,
 }: {
   conversations: Conversation[];
   selectedConversation: Conversation | null;
   messages: InboxMessage[];
+  events: ConversationEvent[];
+  products: Product[];
+  inventory: InventoryItem[];
   loading: boolean;
   error: string;
   onSelect: (id: string) => void;
   onRefresh: () => Promise<void>;
   onSendMessage: (content: string) => Promise<void>;
-  onRequestHuman: () => void;
-  onAddAppointment: () => void;
+  onPauseAi: () => Promise<void>;
+  onResumeAi: () => Promise<void>;
+  onPrepareAppointment: () => Promise<void>;
   funnels: ApiFunnel[];
+  currentUser: CurrentUser;
+  tenantUsers: TenantUser[];
+  onAssignConversation: (conversationId: string, assignedUserId: string | null) => Promise<void>;
   onAssignFunnel: (
     conversationId: string,
     funnelId: string | null,
@@ -2463,13 +3520,91 @@ function InboxPage({
   funnelStepFilterId: string;
   onChangeFunnelFilter: (funnelId: string) => void;
   onChangeStepFilter: (stepId: string) => void;
+  onCreateOrder: (payload: ApiOrderCreateRequest) => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState("");
+  const [aiActionError, setAiActionError] = useState("");
+  const [aiActionBusy, setAiActionBusy] = useState(false);
   const [assigningFunnel, setAssigningFunnel] = useState(false);
+  const [assignmentTargetUserId, setAssignmentTargetUserId] = useState("");
+  const [assignmentBusy, setAssignmentBusy] = useState(false);
+  const [assignmentError, setAssignmentError] = useState("");
+  const [appointmentIntentBusy, setAppointmentIntentBusy] = useState(false);
+  const [appointmentIntentError, setAppointmentIntentError] = useState("");
+  const [orderProductId, setOrderProductId] = useState("");
+  const [orderQuantity, setOrderQuantity] = useState(1);
+  const [orderBusy, setOrderBusy] = useState(false);
+  const [orderError, setOrderError] = useState("");
+  const [orderNotice, setOrderNotice] = useState("");
+  const [orderIdempotencyKey, setOrderIdempotencyKey] = useState(() => createIdempotencyKey());
   const selectedFilterFunnel = funnels.find((funnel) => funnel.id === funnelFilterId) ?? null;
   const selectedFilterSteps = selectedFilterFunnel?.steps ?? [];
+  const canManageAssignment = privilegedRoles.has(currentUser.role);
+  const assignableUsers = tenantUsers.filter(
+    (user) => user.status === "active" && user.module_permissions?.inbox,
+  );
+  const selectedConversationAssignmentLabel = selectedConversation
+    ? getConversationAssignmentLabel(selectedConversation, currentUser, tenantUsers)
+    : "";
+  const canAccessAppointments = canAccessPage(currentUser, "appointments");
+  const selectedConversationIdValue = selectedConversation?.id ?? null;
+  const selectedConversationAssignedUserId = selectedConversation?.assignedUserId ?? null;
+  const orderProducts = useMemo(() => {
+    const inventoryByProductId = new Map(inventory.map((item) => [item.productId, item]));
+    return products
+      .filter((product) => product.status === "active" && product.source === "meta" && product.association === "synced")
+      .map((product) => ({
+        ...product,
+        availableUnits: inventoryByProductId.get(product.id)?.availableUnits ?? 0,
+      }));
+  }, [inventory, products]);
+  const selectedOrderProduct = orderProducts.find((product) => product.id === orderProductId) ?? null;
+
+  useEffect(() => {
+    setAiActionError("");
+    setAiActionBusy(false);
+  }, [selectedConversation?.id]);
+
+  useEffect(() => {
+    setAssignmentError("");
+    setAssignmentBusy(false);
+    if (!selectedConversationIdValue) {
+      setAssignmentTargetUserId("");
+      return;
+    }
+    setAssignmentTargetUserId(selectedConversationAssignedUserId ?? currentUser.id);
+  }, [currentUser.id, selectedConversationAssignedUserId, selectedConversationIdValue]);
+
+  useEffect(() => {
+    setAppointmentIntentBusy(false);
+    setAppointmentIntentError("");
+  }, [selectedConversationIdValue]);
+
+  useEffect(() => {
+    setOrderError("");
+    setOrderNotice("");
+    setOrderBusy(false);
+    setOrderQuantity(1);
+    setOrderIdempotencyKey(createIdempotencyKey());
+    if (!selectedConversationIdValue) {
+      setOrderProductId("");
+    }
+  }, [selectedConversationIdValue]);
+
+  useEffect(() => {
+    if (!selectedConversationIdValue) {
+      setOrderProductId("");
+      return;
+    }
+    setOrderProductId((current) => {
+      if (current && orderProducts.some((product) => product.id === current)) {
+        return current;
+      }
+      return orderProducts[0]?.id ?? "";
+    });
+  }, [orderProducts, selectedConversationIdValue]);
 
   async function submitMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -2486,6 +3621,114 @@ function InboxPage({
       setSendError(caught instanceof Error ? caught.message : "No fue posible enviar el mensaje");
     } finally {
       setSending(false);
+    }
+  }
+
+  async function toggleConversationAi() {
+    if (!selectedConversation) {
+      return;
+    }
+    setAiActionError("");
+    setAiActionBusy(true);
+    try {
+      if (selectedConversation.aiEnabled) {
+        await onPauseAi();
+      } else {
+        await onResumeAi();
+      }
+    } catch (caught) {
+      setAiActionError(caught instanceof Error ? caught.message : "No fue posible actualizar la IA");
+    } finally {
+      setAiActionBusy(false);
+    }
+  }
+
+  async function submitAssignment() {
+    if (!selectedConversation || !assignmentTargetUserId) {
+      return;
+    }
+    setAssignmentError("");
+    setAssignmentBusy(true);
+    try {
+      await onAssignConversation(selectedConversation.id, assignmentTargetUserId);
+    } catch (caught) {
+      setAssignmentError(
+        caught instanceof Error ? caught.message : "No fue posible actualizar la asignacion",
+      );
+    } finally {
+      setAssignmentBusy(false);
+    }
+  }
+
+  async function takeConversation() {
+    if (!selectedConversation) {
+      return;
+    }
+    setAssignmentError("");
+    setAssignmentBusy(true);
+    try {
+      await onAssignConversation(selectedConversation.id, currentUser.id);
+    } catch (caught) {
+      setAssignmentError(
+        caught instanceof Error ? caught.message : "No fue posible tomar la conversacion",
+      );
+    } finally {
+      setAssignmentBusy(false);
+    }
+  }
+
+  async function prepareAppointmentIntent() {
+    if (!selectedConversation) {
+      return;
+    }
+    setAppointmentIntentError("");
+    setAppointmentIntentBusy(true);
+    try {
+      await onPrepareAppointment();
+    } catch (caught) {
+      setAppointmentIntentError(
+        caught instanceof Error ? caught.message : "No fue posible preparar la agenda",
+      );
+    } finally {
+      setAppointmentIntentBusy(false);
+    }
+  }
+
+  async function submitOrder(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selectedConversation) {
+      return;
+    }
+    const product = orderProducts.find((item) => item.id === orderProductId) ?? null;
+    const quantity = Number(orderQuantity);
+    if (!product) {
+      setOrderError("Selecciona un producto disponible para crear la orden.");
+      return;
+    }
+    if (!Number.isInteger(quantity) || quantity < 1) {
+      setOrderError("La cantidad debe ser un numero entero mayor que cero.");
+      return;
+    }
+
+    setOrderError("");
+    setOrderNotice("");
+    setOrderBusy(true);
+    try {
+      await onCreateOrder({
+        contact_id: selectedConversation.contactId,
+        conversation_id: selectedConversation.id,
+        items: [{ product_id: product.id, quantity }],
+        metadata: {
+          idempotency_key: orderIdempotencyKey,
+          source: "inbox",
+        },
+      });
+      setOrderNotice("Orden creada y reservada desde la conversacion.");
+      setOrderIdempotencyKey(createIdempotencyKey());
+    } catch (caught) {
+      setOrderError(caught instanceof Error ? caught.message : "No fue posible crear la orden");
+    } finally {
+      setOrderBusy(false);
     }
   }
 
@@ -2554,9 +3797,22 @@ function InboxPage({
                       </span>
                     ) : null}
                   </div>
-                  <StatusBadge value={conversation.state} />
+                  <div className="flex flex-col items-end gap-1">
+                    <StatusBadge value={conversation.state} />
+                    <StatusBadge value={conversation.aiEnabled ? "IA activa" : "IA pausada"} />
+                  </div>
                 </div>
                 <p className="mt-1 text-xs text-slate-500">{conversation.phone}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {getConversationAssignmentLabel(conversation, currentUser, tenantUsers)}
+                </p>
+                {conversation.availableProductCount > 0 ? (
+                  <p className="mt-1 text-xs text-slate-500">
+                    {conversation.availableProductCount} productos disponibles para ofrecer
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-slate-500">Sin productos disponibles confirmados</p>
+                )}
                 <p className="mt-2 line-clamp-2 text-sm text-slate-600">{conversation.message}</p>
               </button>
             ))
@@ -2573,27 +3829,148 @@ function InboxPage({
           <>
             <SectionHeader
               title={selectedConversation.name}
-              subtitle={`${selectedConversation.phone} - asignado a ${selectedConversation.assigned}`}
-              action={<StatusBadge value={selectedConversation.state} />}
+              subtitle={`${selectedConversation.phone} · ${selectedConversationAssignmentLabel} · ${selectedConversation.availableProductCount} productos disponibles`}
+              action={
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  <StatusBadge value={selectedConversation.state} />
+                  <StatusBadge value={selectedConversation.aiEnabled ? "IA activa" : "IA pausada"} />
+                </div>
+              }
             />
             <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
                 {messages.length ? (
                   messages.map((message) => (
-                    <MessageBubble key={message.id} side={message.side} text={message.text} />
+                    <MessageBubble
+                      key={message.id}
+                      side={message.side}
+                      text={message.text}
+                      metadataJson={message.metadataJson}
+                    />
                   ))
                 ) : (
                   <p className="text-sm text-slate-500">Sin mensajes en esta conversacion</p>
                 )}
               </div>
 
+              <div className="rounded border border-line bg-panel/30 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Eventos relevantes
+                  </h3>
+                  <span className="text-xs text-slate-500">{events.length} registrados</span>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {events.length ? (
+                    events.map((event) => (
+                      <div
+                        key={event.id}
+                        className="flex flex-col gap-1 rounded border border-line bg-white px-3 py-2 text-sm"
+                      >
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="font-medium text-slate-800">{event.label}</span>
+                          <span className="text-xs text-slate-500">
+                            {new Intl.DateTimeFormat("es-CO", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            }).format(new Date(event.createdAt))}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-600">{event.description}</p>
+                      </div>
+                    ))
+                  ) : (
+                    <p className="text-sm text-slate-500">Sin eventos relevantes para esta conversacion</p>
+                  )}
+                </div>
+              </div>
+
               <div className="grid shrink-0 gap-3 sm:grid-cols-2">
-                <button className="h-10 rounded border border-line px-3 text-sm" onClick={onRequestHuman}>
-                  Pasar a humano
+                <button
+                  className="h-10 rounded border border-line px-3 text-sm disabled:opacity-60"
+                  onClick={toggleConversationAi}
+                  disabled={aiActionBusy}
+                >
+                  {aiActionBusy
+                    ? "Actualizando IA..."
+                    : selectedConversation.aiEnabled
+                      ? "Pausar IA"
+                      : "Reactivar IA"}
                 </button>
-                <button className="h-10 rounded border border-line px-3 text-sm" onClick={onAddAppointment}>
-                  Agendar cita
+                <button
+                  className="h-10 rounded border border-line px-3 text-sm disabled:opacity-60"
+                  onClick={() => void prepareAppointmentIntent()}
+                  disabled={appointmentIntentBusy || !canAccessAppointments}
+                  title={!canAccessAppointments ? "No tienes permiso para crear citas" : undefined}
+                >
+                  {appointmentIntentBusy
+                    ? "Preparando agenda..."
+                    : canAccessAppointments
+                      ? "Preparar agenda"
+                      : "Agenda no disponible"}
                 </button>
+              </div>
+              {aiActionError ? <p className="text-sm text-red-600">{aiActionError}</p> : null}
+              {appointmentIntentError ? <p className="text-sm text-red-600">{appointmentIntentError}</p> : null}
+
+              <div className="rounded border border-line bg-panel/30 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Asignacion
+                    </h3>
+                    <p className="text-sm font-medium text-slate-800">
+                      {selectedConversationAssignmentLabel}
+                    </p>
+                  </div>
+                  <StatusBadge
+                    value={
+                      selectedConversation.assignedUserId === currentUser.id
+                        ? "Tomado por ti"
+                        : selectedConversation.assignedUserId
+                          ? "Asignado"
+                          : "Disponible"
+                    }
+                  />
+                </div>
+                <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
+                  {!selectedConversation.assignedUserId ? (
+                    <button
+                      className="h-10 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+                      disabled={assignmentBusy}
+                      onClick={() => void takeConversation()}
+                    >
+                      {assignmentBusy ? "Tomando..." : "Tomar chat"}
+                    </button>
+                  ) : null}
+                  {canManageAssignment ? (
+                    <>
+                      <select
+                        className="h-10 flex-1 rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+                        value={assignmentTargetUserId}
+                        onChange={(event) => setAssignmentTargetUserId(event.target.value)}
+                      >
+                        {assignableUsers.map((user) => (
+                          <option key={user.id} value={user.id}>
+                            {user.name} · {user.role}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        className="h-10 rounded border border-line px-3 text-sm disabled:opacity-60"
+                        disabled={assignmentBusy || !assignmentTargetUserId}
+                        onClick={() => void submitAssignment()}
+                      >
+                        {assignmentBusy
+                          ? "Actualizando..."
+                          : selectedConversation.assignedUserId
+                            ? "Reasignar"
+                            : "Asignar"}
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+                {assignmentError ? <p className="mt-2 text-sm text-red-600">{assignmentError}</p> : null}
               </div>
 
               <div className="grid shrink-0 gap-3 md:grid-cols-[1fr_1fr_auto]">
@@ -2665,6 +4042,69 @@ function InboxPage({
                 </div>
               </div>
 
+              <div className="rounded border border-line bg-panel/30 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Crear orden
+                    </h3>
+                    <p className="text-sm text-slate-600">
+                      Usa `POST /orders` con la conversacion actual y reserva atomica de inventario.
+                    </p>
+                  </div>
+                  <ShoppingCart className="h-4 w-4 text-brand" />
+                </div>
+                {orderProducts.length ? (
+                  <form className="mt-3 grid gap-3 lg:grid-cols-[1fr_110px_auto]" onSubmit={submitOrder}>
+                    <label className="block">
+                      <span className="text-xs font-medium text-slate-500">Producto</span>
+                      <select
+                        className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+                        value={orderProductId}
+                        onChange={(event) => setOrderProductId(event.target.value)}
+                      >
+                        {orderProducts.map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.name} · {formatMoney(product.price, product.currency)} · {product.availableUnits} disp.
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="block">
+                      <span className="text-xs font-medium text-slate-500">Cantidad</span>
+                      <input
+                        className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+                        min={1}
+                        step={1}
+                        type="number"
+                        value={orderQuantity}
+                        onChange={(event) => setOrderQuantity(Number(event.target.value))}
+                      />
+                    </label>
+                    <div className="flex items-end">
+                      <button
+                        className="h-10 rounded bg-brand px-4 text-sm font-medium text-white disabled:opacity-60"
+                        disabled={orderBusy || !selectedOrderProduct}
+                      >
+                        {orderBusy ? "Creando..." : "Crear orden"}
+                      </button>
+                    </div>
+                    {selectedOrderProduct ? (
+                      <p className="text-xs text-slate-500 lg:col-span-3">
+                        Referencia de inventario: {selectedOrderProduct.availableUnits} · Moneda: {selectedOrderProduct.currency} ·
+                        Idempotencia: {orderIdempotencyKey.slice(0, 8)}
+                      </p>
+                    ) : null}
+                  </form>
+                ) : (
+                  <div className="mt-3 rounded border border-dashed border-line bg-white px-3 py-4 text-sm text-slate-500">
+                    No hay productos activos con stock real disponible para crear una orden desde este hilo.
+                  </div>
+                )}
+                {orderNotice ? <p className="mt-3 text-sm text-success">{orderNotice}</p> : null}
+                {orderError ? <p className="mt-3 text-sm text-red-600">{orderError}</p> : null}
+              </div>
+
               <form className="grid shrink-0 gap-3 sm:grid-cols-[1fr_auto]" onSubmit={submitMessage}>
                 <input
                   className="h-11 rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
@@ -2704,7 +4144,13 @@ function ProductsPage({
   const [catalogId, setCatalogId] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [notice, setNotice] = useState("");
+  const [warning, setWarning] = useState("");
   const [error, setError] = useState("");
+  const metaProducts = products.filter((product) => product.source === "meta");
+  const localProducts = products.filter((product) => product.source === "local");
+  const activeMetaProducts = metaProducts.filter((product) => product.status === "active");
+  const inactiveMetaProducts = metaProducts.filter((product) => product.status === "inactive");
+  const partialMetaProducts = metaProducts.filter((product) => product.association === "partial");
 
   async function syncCatalogProducts() {
     if (!catalogId.trim()) {
@@ -2712,6 +4158,7 @@ function ProductsPage({
     }
     setSyncing(true);
     setNotice("");
+    setWarning("");
     setError("");
     try {
       const response = await api<{ fetched: number; created: number; updated: number; warning?: string | null }>(
@@ -2726,13 +4173,27 @@ function ProductsPage({
         `Actualizacion completada: ${response.fetched} leidos, ${response.created} creados, ${response.updated} actualizados`,
       );
       if (response.warning) {
-        setError(response.warning);
+        setWarning(response.warning);
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible actualizar el catalogo");
     } finally {
       setSyncing(false);
     }
+  }
+
+  function renderCatalogRows(items: Product[]) {
+    return items.map((product) => {
+      const stock = inventory.find((item) => item.productId === product.id);
+      return [
+        product.name,
+        product.sku,
+        formatMoney(product.price, product.currency),
+        formatCatalogAssociation(product),
+        String(stock?.availableUnits ?? 0),
+        formatCatalogStatus(product.status),
+      ];
+    });
   }
 
   return (
@@ -2754,24 +4215,56 @@ function ProductsPage({
           </button>
         </div>
         {notice ? <p className="mt-3 text-sm text-success">{notice}</p> : null}
+        {warning ? <Notice tone="warning" message={warning} /> : null}
         {error ? <p className="mt-3 text-sm text-red-600">{error}</p> : null}
       </section>
 
-      <section className="rounded border border-line bg-white shadow-soft">
-        <SectionHeader title="Catalogo" subtitle="Productos sincronizados desde Meta para la IA" />
-        <DataTable
-          headers={["Producto", "SKU", "Precio", "Disponible real", "Estado"]}
-          rows={products.map((product) => {
-            const stock = inventory.find((item) => item.productId === product.id);
-            return [
-              product.name,
-              product.sku,
-              formatMoney(product.price, product.currency),
-              String(Math.max(0, (stock?.available ?? 0) - (stock?.reserved ?? 0))),
-              product.status,
-            ];
-          })}
+      <section className="grid gap-3 md:grid-cols-4">
+        <MetricPill label="Sincronizados Meta" value={String(metaProducts.length)} />
+        <MetricPill label="Activos Meta" value={String(activeMetaProducts.length)} />
+        <MetricPill label="Inactivos Meta" value={String(inactiveMetaProducts.length)} />
+        <MetricPill label="Locales sin Meta" value={String(localProducts.length)} />
+      </section>
+
+      {partialMetaProducts.length ? (
+        <Notice
+          tone="warning"
+          message={`Hay ${partialMetaProducts.length} producto(s) con asociacion Meta incompleta. Revisa el catalogo para evitar datos operativos ambiguos.`}
         />
+      ) : null}
+
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader
+          title="Catalogo sincronizado"
+          subtitle="Productos traidos desde Meta y validados contra la fuente de verdad del backend"
+        />
+        {metaProducts.length ? (
+          <DataTable
+            headers={["Producto", "SKU", "Precio", "Asociacion", "Disponible real", "Estado"]}
+            rows={renderCatalogRows(metaProducts)}
+          />
+        ) : (
+          <div className="px-4 py-6 text-sm text-slate-500">
+            Aun no hay productos sincronizados desde Meta para este tenant.
+          </div>
+        )}
+      </section>
+
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader
+          title="Registros locales"
+          subtitle="Productos del tenant que no provienen de la sincronizacion con Meta"
+        />
+        {localProducts.length ? (
+          <DataTable
+            headers={["Producto", "SKU", "Precio", "Asociacion", "Disponible real", "Estado"]}
+            rows={renderCatalogRows(localProducts)}
+          />
+        ) : (
+          <div className="px-4 py-6 text-sm text-slate-500">
+            No hay productos locales sin asociacion Meta en este tenant.
+          </div>
+        )}
       </section>
     </div>
   );
@@ -2792,7 +4285,7 @@ function InventoryPage({
     const item = inventory.find((candidate) => candidate.productId === product.id);
     const available = item?.available ?? 0;
     const reserved = item?.reserved ?? 0;
-    const realAvailable = Math.max(0, available - reserved);
+    const realAvailable = item?.availableUnits ?? 0;
     return {
       id: product.id,
       product: product.name,
@@ -2818,50 +4311,153 @@ function InventoryPage({
     <section className="rounded border border-line bg-white shadow-soft">
       <SectionHeader title="Stock" subtitle="Inventario sincronizado con el catalogo de productos" />
       {error ? <p className="border-b border-line px-4 py-3 text-sm text-red-600">{error}</p> : null}
-      <div className="divide-y divide-line">
-        {rows.map((row) => (
-          <article key={row.id} className="grid gap-3 px-4 py-4 md:grid-cols-[1fr_120px_120px_150px]">
-            <div>
-              <p className="text-sm font-medium">{row.product}</p>
-              <p className="text-xs text-slate-500">Disponible real: {row.realAvailable}</p>
-            </div>
-            <MetricPill label="Stock" value={String(row.available)} />
-            <MetricPill label="Reservado" value={String(row.reserved)} />
-            <div className="flex items-center gap-2">
-              <button
-                className="h-9 w-9 rounded border border-line disabled:opacity-60"
-                disabled={busyProductId === row.id || row.available <= 0}
-                onClick={() => void adjust(row.id, -1)}
-              >
-                -
-              </button>
-              <button
-                className="h-9 w-9 rounded border border-line disabled:opacity-60"
-                disabled={busyProductId === row.id}
-                onClick={() => void adjust(row.id, 1)}
-              >
-                +
-              </button>
-            </div>
-          </article>
-        ))}
-      </div>
+      {rows.length ? (
+        <div className="divide-y divide-line">
+          {rows.map((row) => (
+            <article key={row.id} className="grid gap-3 px-4 py-4 md:grid-cols-[1fr_120px_120px_150px]">
+              <div>
+                <p className="text-sm font-medium">{row.product}</p>
+                <p className="text-xs text-slate-500">Disponible real: {row.realAvailable}</p>
+              </div>
+              <MetricPill label="Stock" value={String(row.available)} />
+              <MetricPill label="Reservado" value={String(row.reserved)} />
+              <div className="flex items-center gap-2">
+                <button
+                  className="h-9 w-9 rounded border border-line disabled:opacity-60"
+                  disabled={busyProductId === row.id || row.available <= 0 || row.realAvailable <= 0}
+                  onClick={() => void adjust(row.id, -1)}
+                >
+                  -
+                </button>
+                <button
+                  className="h-9 w-9 rounded border border-line disabled:opacity-60"
+                  disabled={busyProductId === row.id}
+                  onClick={() => void adjust(row.id, 1)}
+                >
+                  +
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      ) : (
+        <div className="px-4 py-6 text-sm text-slate-500">
+          El inventario se crea desde la sincronizacion del catalogo Meta.
+        </div>
+      )}
     </section>
   );
 }
 
 function OrdersPage({
   orders,
+  loadError,
+  timeZone,
+  filters,
+  onChangeFilters,
   onCreatePaymentLink,
   onRefresh,
+  onOpenConversation,
+  products,
+  conversations,
+  tenantUsers,
 }: {
   orders: Order[];
+  loadError: string;
+  timeZone: string | null;
+  filters: OrderFilters;
+  onChangeFilters: (value: SetStateAction<OrderFilters>) => void;
   onCreatePaymentLink: (orderId: string) => Promise<void>;
-  onRefresh: () => Promise<void>;
+  onRefresh: () => Promise<boolean>;
+  onOpenConversation: (conversationId: string) => void;
+  products: Product[];
+  conversations: Conversation[];
+  tenantUsers: TenantUser[];
 }) {
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const statusOptions = [
+    { value: "", label: "Todos los estados" },
+    { value: "pending", label: formatOrderStatusLabel("pending") },
+    { value: "waiting_payment", label: formatOrderStatusLabel("waiting_payment") },
+    { value: "paid", label: formatOrderStatusLabel("paid") },
+    { value: "cancelled", label: formatOrderStatusLabel("cancelled") },
+    { value: "expired", label: formatOrderStatusLabel("expired") },
+    { value: "processing", label: formatOrderStatusLabel("processing") },
+  ];
+  const productOptions = useMemo(() => {
+    const seen = new Map<string, { value: string; label: string }>();
+    products.forEach((product) => {
+      if (product.source !== "meta" || product.association !== "synced") {
+        return;
+      }
+      seen.set(product.id, {
+        value: product.id,
+        label: `${product.name} · ${formatMoney(product.price, product.currency)}`,
+      });
+    });
+    return [{ value: "", label: "Todos los productos" }, ...seen.values()];
+  }, [products]);
+  const contactOptions = useMemo(() => {
+    const seen = new Map<string, { value: string; label: string }>();
+    orders.forEach((order) => {
+      if (!seen.has(order.contactId)) {
+        seen.set(order.contactId, {
+          value: order.contactId,
+          label: `${order.contact} · ${order.contactId.slice(0, 8)}`,
+        });
+      }
+    });
+    return [{ value: "", label: "Todos los clientes" }, ...seen.values()];
+  }, [orders]);
+  const conversationOptions = useMemo(() => {
+    const seen = new Map<string, { value: string; label: string }>();
+    conversations.forEach((conversation) => {
+      seen.set(conversation.id, {
+        value: conversation.id,
+        label: `${conversation.name} · ${conversation.phone}`,
+      });
+    });
+    return [{ value: "", label: "Todas las conversaciones" }, ...seen.values()];
+  }, [conversations]);
+  const assignedUserOptions = useMemo(() => {
+    const seen = new Map<string, { value: string; label: string }>();
+    tenantUsers.forEach((user) => {
+      if (seen.has(user.id)) {
+        return;
+      }
+      seen.set(user.id, {
+        value: user.id,
+        label: `${user.name} · ${user.role}`,
+      });
+    });
+    return [{ value: "", label: "Todos los responsables" }, ...seen.values()];
+  }, [tenantUsers]);
+  const groupedOrders = useMemo(() => {
+    const groups: { key: string; label: string; orders: Order[] }[] = [];
+    const locale = timeZone || undefined;
+    orders.forEach((order) => {
+      const createdDate = new Date(order.createdAt);
+      const key = new Intl.DateTimeFormat("en-CA", {
+        timeZone: locale,
+        year: "numeric",
+        month: "2-digit",
+      }).format(createdDate);
+      const lastGroup = groups[groups.length - 1];
+      if (!lastGroup || lastGroup.key !== key) {
+        groups.push({
+          key,
+          label: formatMonthYearLabel(order.createdAt, locale),
+          orders: [order],
+        });
+        return;
+      }
+      lastGroup.orders.push(order);
+    });
+    return groups;
+  }, [orders, timeZone]);
+  const hasActiveFilters = Object.values(filters).some(Boolean);
 
   async function generateLink(orderId: string) {
     setBusyOrderId(orderId);
@@ -2880,11 +4476,32 @@ function OrdersPage({
   async function refresh() {
     setError("");
     try {
-      await onRefresh();
-      setNotice("Ordenes actualizadas.");
+      const updated = await onRefresh();
+      if (updated) {
+        setNotice("Ordenes actualizadas.");
+      }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "No fue posible actualizar las ordenes");
     }
+  }
+
+  function updateFilter<K extends keyof OrderFilters>(key: K, value: string) {
+    onChangeFilters((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }
+
+  function resetFilters() {
+    onChangeFilters({
+      createdFrom: "",
+      createdTo: "",
+      status: "",
+      contactId: "",
+      conversationId: "",
+      productId: "",
+      assignedUserId: "",
+    });
   }
 
   async function copyPaymentLink(paymentLink: string) {
@@ -2894,83 +4511,220 @@ function OrdersPage({
 
   return (
     <div className="space-y-4">
+      {loadError ? <Notice tone="error" message={loadError} /> : null}
       {error ? <Notice tone="error" message={error} /> : null}
       {notice ? <Notice tone="success" message={notice} /> : null}
       <section className="rounded border border-line bg-white shadow-soft">
         <SectionHeader
           title="Ordenes"
-          subtitle="Links Wompi persistidos, vencimiento y estados de pago"
+          subtitle="Filtros por fecha, estado, cliente, producto y conversacion"
           action={
-            <button
-              className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
-              onClick={() => void refresh()}
-            >
-              <RefreshCw className="h-4 w-4" />
-              Actualizar
-            </button>
+            <div className="flex items-center gap-2">
+              {hasActiveFilters ? (
+                <button
+                  className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
+                  onClick={resetFilters}
+                >
+                  Limpiar filtros
+                </button>
+              ) : null}
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
+                onClick={() => void refresh()}
+              >
+                <RefreshCw className="h-4 w-4" />
+                Actualizar
+              </button>
+            </div>
           }
         />
-        {orders.length ? (
-          <div className="divide-y divide-line">
-            {orders.map((order) => (
-              <article
-                key={order.id}
-                className="grid gap-3 px-4 py-4 lg:grid-cols-[150px_1fr_130px_130px_minmax(220px,1fr)]"
-              >
-                <div>
-                  <p className="text-sm font-medium">#{order.id.slice(0, 8)}</p>
-                  <p className="text-xs text-slate-500">{new Date(order.createdAt).toLocaleString()}</p>
+        <div className="grid gap-3 border-b border-line bg-panel/20 px-4 py-4 lg:grid-cols-2 xl:grid-cols-4">
+          <TextInput
+            label="Desde"
+            type="date"
+            value={filters.createdFrom}
+            onChange={(value) => updateFilter("createdFrom", value)}
+          />
+          <TextInput
+            label="Hasta"
+            type="date"
+            value={filters.createdTo}
+            onChange={(value) => updateFilter("createdTo", value)}
+          />
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Estado</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={filters.status}
+              onChange={(event) => updateFilter("status", event.target.value)}
+            >
+              {statusOptions.map((option) => (
+                <option key={option.value || "all-statuses"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Cliente</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={filters.contactId}
+              onChange={(event) => updateFilter("contactId", event.target.value)}
+            >
+              {contactOptions.map((option) => (
+                <option key={option.value || "all-contacts"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Producto</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={filters.productId}
+              onChange={(event) => updateFilter("productId", event.target.value)}
+            >
+              {productOptions.map((option) => (
+                <option key={option.value || "all-products"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Conversacion</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={filters.conversationId}
+              onChange={(event) => updateFilter("conversationId", event.target.value)}
+            >
+              {conversationOptions.map((option) => (
+                <option key={option.value || "all-conversations"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Responsable</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={filters.assignedUserId}
+              onChange={(event) => updateFilter("assignedUserId", event.target.value)}
+            >
+              {assignedUserOptions.map((option) => (
+                <option key={option.value || "all-assignees"} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {groupedOrders.length ? (
+          <div className="space-y-4 px-4 py-4">
+            {groupedOrders.map((group) => (
+              <section key={group.key} className="overflow-hidden rounded border border-line bg-panel/20">
+                <div className="flex items-center justify-between gap-3 border-b border-line bg-white px-4 py-3">
+                  <div>
+                    <h3 className="text-sm font-semibold">{group.label}</h3>
+                    <p className="text-xs text-slate-500">{group.orders.length} orden(es)</p>
+                  </div>
+                  <span className="rounded border border-line bg-panel px-2 py-1 text-xs text-slate-600">
+                    {group.orders.length}
+                  </span>
                 </div>
-                <div>
-                  <p className="text-sm text-slate-700">{order.contact}</p>
-                  <p className="text-xs text-slate-500">{order.paymentReference ?? "Sin referencia"}</p>
-                </div>
-                <p className="text-sm font-medium">{formatMoney(order.total)}</p>
-                <div className="space-y-1">
-                  <StatusBadge value={order.status} />
-                  <p className="text-xs text-slate-500">{order.paymentStatus}</p>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {order.paymentLink ? (
-                    <>
-                      <a
-                        className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
-                        href={order.paymentLink}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                        Abrir link
-                      </a>
-                      <button
-                        className="grid h-9 w-9 place-items-center rounded border border-line"
-                        title="Copiar link de pago"
-                        onClick={() => void copyPaymentLink(order.paymentLink!)}
-                      >
-                        <ClipboardCopy className="h-4 w-4" />
-                      </button>
-                      {order.paymentExpiresAt ? (
-                        <p className="w-full text-xs text-slate-500">
-                          Vence: {new Date(order.paymentExpiresAt).toLocaleString()}
-                        </p>
-                      ) : null}
-                    </>
-                  ) : (
-                    <button
-                      className="h-9 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-50"
-                      disabled={order.status === "paid" || busyOrderId === order.id}
-                      onClick={() => void generateLink(order.id)}
+                <div className="divide-y divide-line bg-white">
+                  {group.orders.map((order) => (
+                    <article
+                      key={order.id}
+                      className="grid gap-3 px-4 py-4 lg:grid-cols-[150px_1fr_140px_150px_minmax(260px,1fr)]"
                     >
-                      {busyOrderId === order.id ? "Generando..." : "Generar link"}
-                    </button>
-                  )}
+                      <div>
+                        <p className="text-sm font-medium">#{order.id.slice(0, 8)}</p>
+                        <p className="text-xs text-slate-500">
+                          {new Intl.DateTimeFormat("es-CO", {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          }).format(new Date(order.createdAt))}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-sm text-slate-700">{order.contact}</p>
+                        <p className="text-xs text-slate-500">{order.paymentReference ?? "Sin referencia"}</p>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {order.conversationId
+                            ? `Conversacion ${order.conversationId.slice(0, 8)}`
+                            : "Sin conversacion asociada"}
+                        </p>
+                      </div>
+                      <p className="text-sm font-medium">{formatMoney(order.total, order.currency)}</p>
+                      <div className="space-y-1">
+                        <span
+                          className={`inline-flex h-7 items-center justify-center rounded border px-2 text-xs font-medium ${getOrderStatusTone(order.status)}`}
+                        >
+                          {formatOrderStatusLabel(order.status)}
+                        </span>
+                        <span
+                          className={`inline-flex h-7 items-center justify-center rounded border px-2 text-xs font-medium ${getPaymentStatusTone(order.paymentStatus)}`}
+                        >
+                          {formatPaymentStatusLabel(order.paymentStatus)}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {order.conversationId ? (
+                          <button
+                            className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
+                            onClick={() => onOpenConversation(order.conversationId!)}
+                          >
+                            <Inbox className="h-4 w-4" />
+                            Ver chat
+                          </button>
+                        ) : null}
+                        {order.paymentLink ? (
+                          <>
+                            <a
+                              className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
+                              href={order.paymentLink}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              <ExternalLink className="h-4 w-4" />
+                              Abrir link
+                            </a>
+                            <button
+                              className="grid h-9 w-9 place-items-center rounded border border-line"
+                              title="Copiar link de pago"
+                              onClick={() => void copyPaymentLink(order.paymentLink!)}
+                            >
+                              <ClipboardCopy className="h-4 w-4" />
+                            </button>
+                            {order.paymentExpiresAt ? (
+                              <p className="w-full text-xs text-slate-500">
+                                Vence: {new Date(order.paymentExpiresAt).toLocaleString()}
+                              </p>
+                            ) : null}
+                          </>
+                        ) : (
+                          <button
+                            className="h-9 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-50"
+                            disabled={order.status === "paid" || busyOrderId === order.id}
+                            onClick={() => void generateLink(order.id)}
+                          >
+                            {busyOrderId === order.id ? "Generando..." : "Generar link"}
+                          </button>
+                        )}
+                      </div>
+                    </article>
+                  ))}
                 </div>
-              </article>
+              </section>
             ))}
           </div>
         ) : (
           <div className="px-4 py-10 text-center text-sm text-slate-500">
-            Aun no hay ordenes. Los links de pago generados apareceran aqui.
+            {hasActiveFilters ? "No hay ordenes para los filtros seleccionados." : "Aun no hay ordenes. Los links de pago generados apareceran aqui."}
           </div>
         )}
       </section>
@@ -2980,33 +4734,535 @@ function OrdersPage({
 
 function AppointmentsPage({
   appointments,
-  onAddAppointment,
+  appointmentDraft,
+  appointmentMessage,
+  appointmentSaving,
+  appointmentError,
+  contacts,
+  onOpenAppointmentDraft,
+  onLoadAppointmentAvailability,
+  onCreateAppointment,
+  currentUser,
+  tenantUsers,
+  loading,
 }: {
-  appointments: Appointment[];
-  onAddAppointment: () => void;
+  appointments: ApiAppointment[];
+  appointmentDraft: AppointmentDraft | null;
+  appointmentMessage: string;
+  appointmentSaving: boolean;
+  appointmentError: string;
+  contacts: ApiContact[];
+  onOpenAppointmentDraft: () => void;
+  onLoadAppointmentAvailability: (payload: ApiAppointmentAvailabilityRequest) => Promise<ApiAppointmentAvailability>;
+  onCreateAppointment: (payload: {
+    contact_id: string;
+    conversation_id: string | null;
+    assigned_user_id: string | null;
+    scheduled_at: string;
+    duration_minutes: number;
+    notes: string | null;
+  }) => Promise<unknown>;
+  currentUser: CurrentUser;
+  tenantUsers: TenantUser[];
+  loading: boolean;
 }) {
+  const contactLookup = useMemo(
+    () => new Map(contacts.map((contact) => [contact.id, contact])),
+    [contacts],
+  );
+  const userLookup = useMemo(
+    () => new Map(tenantUsers.map((user) => [user.id, user])),
+    [tenantUsers],
+  );
+  const contactOptions = useMemo(
+    () => {
+      const options = contacts.map((contact) => ({
+        value: contact.id,
+        label: `${contact.name?.trim() || formatPhone(contact.phone)} · ${formatPhone(contact.phone)}`,
+      }));
+      if (
+        appointmentDraft &&
+        appointmentDraft.contactId &&
+        !options.some((option) => option.value === appointmentDraft.contactId)
+      ) {
+        options.unshift({
+          value: appointmentDraft.contactId,
+          label: `${appointmentDraft.contactName} · ${appointmentDraft.contactPhone}`,
+        });
+      }
+      return [
+        { value: "", label: options.length ? "Selecciona un contacto" : "No hay contactos" },
+        ...options,
+      ];
+    },
+    [appointmentDraft, contacts],
+  );
+  const userOptions = useMemo(
+    () => [
+      { value: "", label: "Sin asignar" },
+      ...tenantUsers.map((user) => ({
+        value: user.id,
+        label: user.name,
+      })),
+    ],
+    [tenantUsers],
+  );
+  const [preferredPeriod, setPreferredPeriod] = useState<"morning" | "afternoon" | "">("");
+  const [availability, setAvailability] = useState<ApiAppointmentAvailability | null>(null);
+  const [availabilityLoading, setAvailabilityLoading] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState("");
+  const normalizedCompanyTimeZone = normalizeTimeZone(currentUser.company_timezone ?? null);
+  const defaultAppointmentTimeZone =
+    normalizedCompanyTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const appointmentTimeZone =
+    availability?.timezone ?? normalizedCompanyTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const [scheduledAtValue, setScheduledAtValue] = useState("");
+  const [selectedAvailabilityOption, setSelectedAvailabilityOption] = useState<string | null>(null);
+  const [durationMinutesValue, setDurationMinutesValue] = useState(DEFAULT_APPOINTMENT_DURATION_MINUTES);
+  const draftKey = appointmentDraft
+    ? `${appointmentDraft.source}-${appointmentDraft.contactId || "manual"}-${appointmentDraft.preparedAt}`
+    : "manual-empty";
+
+  useEffect(() => {
+    setPreferredPeriod("");
+    setAvailability(null);
+    setAvailabilityError("");
+    setScheduledAtValue("");
+    setSelectedAvailabilityOption(null);
+    setDurationMinutesValue(DEFAULT_APPOINTMENT_DURATION_MINUTES);
+  }, [defaultAppointmentTimeZone, draftKey]);
+
+  const appointmentAssignedLabel = appointmentDraft
+    ? getConversationAssignmentLabel(
+        {
+          id: appointmentDraft.conversationId,
+          contactId: appointmentDraft.conversationId,
+          name: appointmentDraft.contactName,
+          phone: appointmentDraft.contactPhone,
+          message: "",
+          state: "",
+          assigned: "",
+          assignedUserId: appointmentDraft.assignedUserId,
+          aiEnabled: true,
+          lastMessageAt: null,
+          unreadCount: 0,
+          funnelId: null,
+          funnelStepId: null,
+          funnelName: appointmentDraft.funnelName,
+          funnelStepName: appointmentDraft.funnelStepName,
+          currentStep: appointmentDraft.currentStep,
+        } as Conversation,
+        currentUser,
+        tenantUsers,
+      )
+    : "";
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const contactId = String(formData.get("contact_id") ?? "").trim();
+    const conversationId = String(formData.get("conversation_id") ?? "").trim();
+    const assignedUserId = String(formData.get("assigned_user_id") ?? "").trim();
+    const scheduledAt = scheduledAtValue.trim();
+    const durationMinutes = durationMinutesValue;
+    const notes = String(formData.get("notes") ?? "").trim();
+    if (availability?.options.length && !selectedAvailabilityOption) {
+      setAvailabilityError("Selecciona una de las opciones propuestas antes de guardar.");
+      return;
+    }
+    const savedAppointment = await onCreateAppointment({
+      contact_id: contactId,
+      conversation_id: conversationId || null,
+      assigned_user_id: assignedUserId || null,
+      scheduled_at: localDateTimeValueToIsoInTimeZone(scheduledAt, appointmentTimeZone),
+      duration_minutes: Number.isFinite(durationMinutes) ? durationMinutes : DEFAULT_APPOINTMENT_DURATION_MINUTES,
+      notes: notes || null,
+    });
+    if (savedAppointment) {
+      event.currentTarget.reset();
+      setPreferredPeriod("");
+      setAvailability(null);
+      setAvailabilityError("");
+      setScheduledAtValue("");
+      setSelectedAvailabilityOption(null);
+      setDurationMinutesValue(DEFAULT_APPOINTMENT_DURATION_MINUTES);
+    }
+  }
+
+  async function requestAvailability(preferredPeriodValue: "morning" | "afternoon") {
+    setPreferredPeriod(preferredPeriodValue);
+    setAvailability(null);
+    setAvailabilityError("");
+    setAvailabilityLoading(true);
+    try {
+      const response = await onLoadAppointmentAvailability({
+        preferred_period: preferredPeriodValue,
+        duration_minutes: durationMinutesValue,
+        horizon_days: 7,
+        max_options: 3,
+        conversation_id: appointmentDraft?.conversationId || null,
+      });
+      setAvailability(response);
+      if (response.options.length > 0) {
+        setSelectedAvailabilityOption(null);
+        setScheduledAtValue("");
+      } else if (response.validation_error) {
+        setScheduledAtValue("");
+        setSelectedAvailabilityOption(null);
+        setAvailabilityError(response.validation_error);
+      } else {
+        setScheduledAtValue("");
+        setSelectedAvailabilityOption(null);
+        setAvailabilityError("No encontramos opciones disponibles dentro de los proximos 7 dias.");
+      }
+    } catch (caught) {
+      setScheduledAtValue("");
+      setSelectedAvailabilityOption(null);
+      setAvailabilityError(caught instanceof Error ? caught.message : "No fue posible validar la disponibilidad");
+    } finally {
+      setAvailabilityLoading(false);
+    }
+  }
+
+  function selectAvailabilityOption(option: ApiAppointmentAvailabilityOption) {
+    setSelectedAvailabilityOption(option.scheduled_at);
+    setScheduledAtValue(formatDateTimeLocalInTimeZone(option.scheduled_at, appointmentTimeZone));
+    setAvailabilityError("");
+  }
+
+  function handleDurationChange(value: string) {
+    const nextDuration = Number(value) || DEFAULT_APPOINTMENT_DURATION_MINUTES;
+    setDurationMinutesValue(nextDuration);
+    if (availability || scheduledAtValue) {
+      setAvailability(null);
+      setAvailabilityError("La duracion cambio. Vuelve a validar la disponibilidad.");
+    } else {
+      setAvailability(null);
+      setAvailabilityError("");
+    }
+    setPreferredPeriod("");
+    setScheduledAtValue("");
+    setSelectedAvailabilityOption(null);
+  }
+
+  const appointmentRows = appointments.map((appointment) => {
+    const contact = contactLookup.get(appointment.contact_id);
+    const assignedUser = appointment.assigned_user_id ? userLookup.get(appointment.assigned_user_id) : null;
+    const scheduledAtLabel = formatDateTimeLabelInTimeZone(
+      appointment.scheduled_at,
+      normalizedCompanyTimeZone ?? appointmentTimeZone,
+    );
+    return [
+      contact ? `${contact.name?.trim() || formatPhone(contact.phone)} · ${formatPhone(contact.phone)}` : appointment.contact_id.slice(0, 8),
+      scheduledAtLabel,
+      appointment.status,
+      appointment.calendar_sync_status ?? "sin sincronizacion",
+      assignedUser?.name ?? "Sin asignar",
+    ];
+  });
+
   return (
-    <section className="rounded border border-line bg-white shadow-soft">
-      <SectionHeader
-        title="Agenda"
-        subtitle="Citas comerciales por cliente"
-        action={
-          <button className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white" onClick={onAddAppointment}>
-            <Plus className="h-4 w-4" />
-            Cita
-          </button>
-        }
-      />
-      <DataTable
-        headers={["Cliente", "Fecha", "Estado", "Asesor"]}
-        rows={appointments.map((appointment) => [
-          appointment.contact,
-          appointment.scheduledAt,
-          appointment.status,
-          appointment.owner,
-        ])}
-      />
-    </section>
+    <div className="space-y-4">
+      {appointmentError ? <Notice tone="error" message={appointmentError} /> : null}
+      {appointmentMessage ? <Notice tone="success" message={appointmentMessage} /> : null}
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader
+          title="Agenda"
+          subtitle="Citas comerciales persistidas por el backend"
+          action={
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white"
+              onClick={onOpenAppointmentDraft}
+            >
+              <Plus className="h-4 w-4" />
+              Nuevo borrador
+            </button>
+          }
+        />
+        <div className="border-b border-line px-4 py-3">
+          {appointmentDraft ? (
+            <div className="rounded border border-brand/20 bg-brandAccentSoft px-4 py-3 text-sm text-slate-800">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-semibold text-slate-900">Contexto de agenda preparado</p>
+                  <p className="text-xs text-slate-600">
+                    {appointmentDraft.contactName} · {appointmentDraft.contactPhone}
+                  </p>
+                </div>
+                <StatusBadge value="Listo para continuar" />
+              </div>
+              <div className="mt-3 grid gap-2 text-xs text-slate-700 md:grid-cols-2">
+                <p>
+                  Contacto: <span className="font-medium">{appointmentDraft.contactName}</span>
+                </p>
+                <p>
+                  Origen: <span className="font-medium">{appointmentDraft.source === "inbox" ? "Inbox" : "Manual"}</span>
+                </p>
+                <p>
+                  Contacto ID: <span className="font-medium">{appointmentDraft.contactId.slice(0, 8) || "Pendiente"}</span>
+                </p>
+                <p>
+                  Conversacion:{" "}
+                  <span className="font-medium">
+                    {appointmentDraft.conversationId ? appointmentDraft.conversationId.slice(0, 8) : "Sin conversacion"}
+                  </span>
+                </p>
+                <p>
+                  Funnel: <span className="font-medium">{appointmentDraft.funnelName ?? "Sin funnel"}</span>
+                </p>
+                <p>
+                  Paso actual: <span className="font-medium">{appointmentDraft.currentStep ?? "Sin paso"}</span>
+                </p>
+                <p>
+                  Etapa: <span className="font-medium">{appointmentDraft.funnelStepName ?? "Sin etapa"}</span>
+                </p>
+                <p>
+                  Estado: <span className="font-medium">{appointmentAssignedLabel}</span>
+                </p>
+                <p>
+                  Preparado:{" "}
+                  <span className="font-medium">
+                    {formatDateTimeLabelInTimeZone(
+                      appointmentDraft.preparedAt,
+                      normalizedCompanyTimeZone ?? appointmentTimeZone,
+                    )}
+                  </span>
+                </p>
+              </div>
+              <p className="mt-3 text-xs text-slate-600">
+                Este contexto solo prellena el formulario. La cita real se guarda con `POST /appointments`.
+              </p>
+            </div>
+          ) : (
+            <div className="rounded border border-line bg-panel/30 px-4 py-3 text-sm text-slate-600">
+              Selecciona una conversacion en Inbox o abre un borrador manual para crear una cita persistida.
+            </div>
+          )}
+        </div>
+        <div className="border-b border-line px-4 py-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900">Proponer horarios reales</p>
+              <p className="text-xs text-slate-600">
+                Primero elige si el cliente prefiere manana o tarde. El backend valida la disponibilidad y luego
+                puedes confirmar la cita.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className={`h-9 rounded px-3 text-sm font-medium ${
+                  preferredPeriod === "morning"
+                    ? "bg-brand text-white"
+                    : "border border-line bg-white text-slate-700"
+                }`}
+                type="button"
+                disabled={availabilityLoading || appointmentSaving || loading}
+                onClick={() => void requestAvailability("morning")}
+              >
+                Mañana
+              </button>
+              <button
+                className={`h-9 rounded px-3 text-sm font-medium ${
+                  preferredPeriod === "afternoon"
+                    ? "bg-brand text-white"
+                    : "border border-line bg-white text-slate-700"
+                }`}
+                type="button"
+                disabled={availabilityLoading || appointmentSaving || loading}
+                onClick={() => void requestAvailability("afternoon")}
+              >
+                Tarde
+              </button>
+            </div>
+          </div>
+          {availabilityLoading ? <Notice tone="warning" message="Buscando horarios disponibles..." /> : null}
+          {availabilityError ? <Notice tone="warning" message={availabilityError} /> : null}
+          {availability ? (
+            <div className="mt-4 rounded border border-line bg-panel/30 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Opciones sugeridas</p>
+                <p className="text-sm text-slate-700">
+                    {availability.validation_source === "external"
+                      ? "Validado con calendario integrado."
+                      : availability.validation_source === "internal_fallback"
+                        ? "Calendario no disponible. Se usó disponibilidad interna."
+                        : "Validado con citas internas y horario operativo."}
+                  </p>
+                </div>
+                <p className="text-xs text-slate-500">
+                  Duracion base: {availability.duration_minutes} min · Horizonte: {availability.horizon_days} dias
+                </p>
+              </div>
+              {availability.validation_error ? (
+                <p className="mt-2 text-xs text-amber-700">{availability.validation_error}</p>
+              ) : null}
+              {availability.options.length ? (
+                <div className="mt-3 grid gap-2 md:grid-cols-3">
+                  {availability.options.map((option, index) => (
+                    <button
+                      key={`${option.scheduled_at}-${index}`}
+                      type="button"
+                      className="rounded border border-line bg-white px-3 py-3 text-left text-sm transition hover:border-brand hover:bg-brandAccentSoft"
+                      aria-pressed={selectedAvailabilityOption === option.scheduled_at}
+                      onClick={() => selectAvailabilityOption(option)}
+                    >
+                      <p className="font-semibold text-slate-900">
+                        Opcion {index + 1}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-600">
+                        {formatDateTimeLabelInTimeZone(option.scheduled_at, availability.timezone)}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Termina {new Intl.DateTimeFormat("es-CO", {
+                          dateStyle: "short",
+                          timeStyle: "short",
+                          timeZone: availability.timezone,
+                        }).format(new Date(option.ends_at))}
+                      </p>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-3 text-sm text-slate-600">
+                  No encontramos opciones dentro del horizonte permitido.
+                </p>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </section>
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader
+          title="Guardar cita"
+          subtitle="Un solo formulario para contexto de Inbox y creación manual"
+        />
+        <form key={draftKey} className="space-y-4 p-4" onSubmit={handleSubmit}>
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">Contacto</span>
+              <select
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                name="contact_id"
+                defaultValue={appointmentDraft?.contactId ?? ""}
+                required
+                disabled={appointmentSaving || loading || (contacts.length === 0 && !appointmentDraft?.contactId)}
+              >
+                {contactOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">Conversacion vinculada</span>
+              <input
+                className="mt-1 h-10 w-full rounded border border-line bg-panel px-3 text-sm text-slate-600 outline-none"
+                name="conversation_id"
+                defaultValue={appointmentDraft?.conversationId ?? ""}
+                placeholder="Opcional"
+                readOnly={appointmentDraft?.source === "inbox"}
+                disabled={appointmentSaving || loading}
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">Asignado a</span>
+              <select
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                name="assigned_user_id"
+                defaultValue={appointmentDraft?.assignedUserId ?? ""}
+                disabled={appointmentSaving || loading}
+              >
+                {userOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">Fecha y hora</span>
+                <input
+                  className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                name="scheduled_at"
+                type="datetime-local"
+                value={scheduledAtValue}
+                onChange={(event) => {
+                  setScheduledAtValue(event.target.value);
+                  setSelectedAvailabilityOption(null);
+                  if (availability?.options.length) {
+                    setAvailabilityError("Selecciona una de las opciones propuestas antes de guardar.");
+                  }
+                }}
+                required
+                disabled={appointmentSaving || loading}
+              />
+              </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">Duracion (min)</span>
+              <input
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                name="duration_minutes"
+                type="number"
+                min={15}
+                max={480}
+                step={15}
+                value={durationMinutesValue}
+                onChange={(event) => handleDurationChange(event.target.value)}
+                required
+                disabled={appointmentSaving || loading}
+              />
+            </label>
+            <label className="block md:col-span-2">
+              <span className="text-xs font-medium text-slate-500">Notas</span>
+              <textarea
+                className="mt-1 min-h-24 w-full rounded border border-line bg-panel p-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                name="notes"
+                placeholder="Seguimiento, acuerdos o contexto adicional"
+                defaultValue=""
+                disabled={appointmentSaving || loading}
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+              disabled={
+                appointmentSaving ||
+                loading ||
+                contacts.length === 0 ||
+                availabilityLoading ||
+                !scheduledAtValue ||
+                (availability?.options.length ? !selectedAvailabilityOption : false)
+              }
+            >
+              <Save className="h-4 w-4" />
+              {appointmentSaving ? "Guardando..." : "Guardar cita"}
+            </button>
+            <p className="text-xs text-slate-500">
+              El backend valida contacto, conversacion opcional, usuario opcional, disponibilidad propuesta y sincronizacion de calendario.
+            </p>
+          </div>
+        </form>
+      </section>
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader
+          title="Citas guardadas"
+          subtitle={loading ? "Actualizando desde la API" : "Fuente de verdad: backend"}
+        />
+        {appointments.length ? (
+          <DataTable
+            headers={["Cliente", "Fecha", "Estado", "Sync", "Asesor"]}
+            rows={appointmentRows}
+          />
+        ) : (
+          <div className="px-4 py-10 text-center text-sm text-slate-500">
+            No hay citas persistidas todavía. Crea la primera desde este formulario.
+          </div>
+        )}
+      </section>
+    </div>
   );
 }
 
@@ -5311,11 +7567,11 @@ function IntegrationsPage() {
   const configuredCount = integrationDefinitions.filter((definition) =>
     integrationByType.has(definition.type),
   ).length;
-  const wompiWebhookUrl = new URL("/webhooks/payments/wompi", window.location.origin).toString();
-  const mercadoPagoWebhookUrl = new URL(
-    "/webhooks/payments/mercado-pago",
-    window.location.origin,
-  ).toString();
+  const wompiWebhookUrl = `${window.location.origin.replace(/\/$/, "")}/api/v1/webhooks/payments/wompi`;
+  const mercadoPagoWebhookUrl = `${window.location.origin.replace(/\/$/, "")}/api/v1/webhooks/payments/mercado-pago`;
+  const avalPayWebhookUrl = `${window.location.origin.replace(/\/$/, "")}/api/v1/webhooks/payments/aval-pay`;
+  const mockWebhookUrl = `${window.location.origin.replace(/\/$/, "")}/api/v1/webhooks/payments/mock`;
+  const showMockWebhook = !import.meta.env.PROD;
 
   const refreshIntegrations = useCallback(
     async ({ showLoading = true }: { showLoading?: boolean } = {}) => {
@@ -5716,6 +7972,8 @@ function IntegrationsPage() {
         <InfoPanel title="Pagos" icon={CreditCard}>
           <KeyValue label="Wompi" value={wompiWebhookUrl} strong />
           <KeyValue label="Mercado Pago" value={mercadoPagoWebhookUrl} />
+          <KeyValue label="Aval Pay" value={avalPayWebhookUrl} />
+          {showMockWebhook ? <KeyValue label="Mock" value={mockWebhookUrl} /> : null}
         </InfoPanel>
         <InfoPanel title="Seguridad" icon={Link2}>
           <KeyValue label="Credenciales" value="Cifradas" strong />
@@ -5750,6 +8008,8 @@ function SettingsPage({
   const [companyTimezone, setCompanyTimezone] = useState("");
   const [companyBusinessMode, setCompanyBusinessMode] = useState("");
   const [companyBusinessModeLegacy, setCompanyBusinessModeLegacy] = useState("");
+  const [companyAutoAssignSingleAdditionalUserChats, setCompanyAutoAssignSingleAdditionalUserChats] =
+    useState(true);
   const [companyLogoUrl, setCompanyLogoUrl] = useState("");
   const [companyBannerUrl, setCompanyBannerUrl] = useState("");
   const [companyProfileUrl, setCompanyProfileUrl] = useState("");
@@ -5824,6 +8084,7 @@ function SettingsPage({
       setCompanyTimezone("");
       setCompanyBusinessMode("");
       setCompanyBusinessModeLegacy("");
+      setCompanyAutoAssignSingleAdditionalUserChats(true);
       setCompanyLogoUrl("");
       setCompanyBannerUrl("");
       setCompanyProfileUrl("");
@@ -5847,6 +8108,9 @@ function SettingsPage({
           setCompanyContactPhone(profile.contact_phone ?? "");
           setCompanyCurrency(profile.currency ?? "");
           setCompanyTimezone(profile.timezone ?? "");
+          setCompanyAutoAssignSingleAdditionalUserChats(
+            profile.auto_assign_single_additional_user_chats,
+          );
           setCompanyLogoUrl(profile.logo_url ?? "");
           setCompanyBannerUrl(profile.banner_url ?? "");
           setCompanyProfileUrl(profile.profile_url ?? "");
@@ -5900,6 +8164,12 @@ function SettingsPage({
           currency: companyCurrency.trim() ? companyCurrency.trim().toUpperCase() : null,
           timezone: companyTimezone.trim() ? companyTimezone.trim() : null,
           business_mode: companyBusinessMode || null,
+          ...(canManageUsers
+            ? {
+                auto_assign_single_additional_user_chats:
+                  companyAutoAssignSingleAdditionalUserChats,
+              }
+            : {}),
           logo_url: companyLogoUrl.trim() ? companyLogoUrl.trim() : null,
           banner_url: companyBannerUrl.trim() ? companyBannerUrl.trim() : null,
           profile_url: companyProfileUrl.trim() ? companyProfileUrl.trim() : null,
@@ -5926,6 +8196,9 @@ function SettingsPage({
         setCompanyBusinessMode(updated.business_mode ?? "");
         setCompanyBusinessModeLegacy(updated.business_mode ?? "");
       }
+      setCompanyAutoAssignSingleAdditionalUserChats(
+        updated.auto_assign_single_additional_user_chats,
+      );
       setCompanyMessage("Perfil del tenant actualizado");
     } catch (caught) {
       setCompanySaveError(caught instanceof Error ? caught.message : "No fue posible actualizar la empresa");
@@ -6033,6 +8306,28 @@ function SettingsPage({
                   onChange={setCompanyBusinessMode}
                 />
               </div>
+              {canManageUsers ? (
+                <label className="flex items-start gap-3 rounded border border-line bg-panel px-4 py-3">
+                  <input
+                    className="mt-1 h-4 w-4 rounded border-line text-brand focus:ring-brand"
+                    type="checkbox"
+                    checked={companyAutoAssignSingleAdditionalUserChats}
+                    disabled={companyFormLocked}
+                    onChange={(event) =>
+                      setCompanyAutoAssignSingleAdditionalUserChats(event.target.checked)
+                    }
+                  />
+                  <span className="block">
+                    <span className="block text-sm font-medium text-slate-800">
+                      Autoasignar chats cuando solo exista un usuario adicional activo
+                    </span>
+                    <span className="mt-1 block text-xs text-slate-500">
+                      Si se desactiva, los chats nuevos permaneceran disponibles hasta que un
+                      asesor los tome o un administrador los reasigne.
+                    </span>
+                  </span>
+                </label>
+              ) : null}
               <div className="space-y-3 rounded border border-line bg-panel p-4">
                 <div>
                   <h3 className="text-sm font-semibold">Branding visual</h3>
@@ -6817,10 +9112,14 @@ function IconButton({
 
 function StatusBadge({ value }: { value: string }) {
   const normalized = value.toLowerCase();
+  const isInactive = normalized.includes("inactive");
   const tone =
-    normalized.includes("paid") || normalized.includes("active") || normalized.includes("compra")
+    normalized.includes("paid") ||
+    (!isInactive && /\bactive\b/.test(normalized)) ||
+    normalized.includes("activa") ||
+    normalized.includes("compra")
       ? "border-cyan-200 bg-cyan-50 text-cyan-700"
-      : normalized.includes("handoff") || normalized.includes("waiting")
+      : normalized.includes("handoff") || normalized.includes("waiting") || normalized.includes("paus")
         ? "border-amber-200 bg-amber-50 text-amber-700"
         : "border-line bg-panel text-slate-600";
   return (
@@ -6868,11 +9167,31 @@ function MetricPill({ label, value }: { label: string; value: string }) {
   );
 }
 
-function MessageBubble({ side, text }: { side: "left" | "right"; text: string }) {
+function MessageBubble({
+  side,
+  text,
+  metadataJson,
+}: {
+  side: "left" | "right";
+  text: string;
+  metadataJson: Record<string, unknown>;
+}) {
+  const interactiveReply = metadataJson.interactive_reply;
+  const interactiveTitle =
+    interactiveReply && typeof interactiveReply === "object"
+      ? typeof (interactiveReply as Record<string, unknown>).title === "string"
+        ? ((interactiveReply as Record<string, unknown>).title as string).trim()
+        : ""
+      : "";
   return (
     <div className={`flex ${side === "right" ? "justify-end" : "justify-start"}`}>
       <div className={`max-w-[680px] rounded p-3 text-sm ${side === "right" ? "bg-brand text-white" : "bg-panel text-slate-700"}`}>
-        {text}
+        <div>{text}</div>
+        {interactiveTitle ? (
+          <div className="mt-2 text-[11px] uppercase tracking-wide opacity-80">
+            Respuesta interactiva: {interactiveTitle}
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -6919,16 +9238,19 @@ function Input({ label, defaultValue }: { label: string; defaultValue: string })
   );
 }
 
-function Notice({ tone, message }: { tone: "error" | "success"; message: string }) {
+function Notice({ tone, message }: { tone: "error" | "success" | "warning"; message: string }) {
   const isError = tone === "error";
-  const Icon = isError ? AlertCircle : CheckCircle2;
+  const isWarning = tone === "warning";
+  const Icon = isError ? AlertCircle : isWarning ? AlertCircle : CheckCircle2;
 
   return (
     <div
       className={`flex items-start gap-2 rounded border p-3 text-sm ${
         isError
           ? "border-red-200 bg-red-50 text-red-700"
-          : "border-cyan-200 bg-cyan-50 text-cyan-700"
+          : isWarning
+            ? "border-amber-200 bg-amber-50 text-amber-800"
+            : "border-cyan-200 bg-cyan-50 text-cyan-700"
       }`}
       role={isError ? "alert" : "status"}
     >
@@ -7009,6 +9331,7 @@ function TextInput({
   value,
   onChange,
   placeholder,
+  type = "text",
   readOnly = false,
   disabled = false,
 }: {
@@ -7016,6 +9339,7 @@ function TextInput({
   value: string;
   onChange?: (value: string) => void;
   placeholder?: string;
+  type?: string;
   readOnly?: boolean;
   disabled?: boolean;
 }) {
@@ -7026,6 +9350,7 @@ function TextInput({
         className={`mt-1 h-10 w-full rounded border border-line px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel disabled:text-slate-600 ${
           readOnly ? "bg-panel text-slate-600" : "bg-white"
         }`}
+        type={type}
         readOnly={readOnly}
         disabled={disabled}
         value={value}

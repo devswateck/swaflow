@@ -22,5 +22,5 @@ class InventoryRead(ORMModel):
     product_id: UUID
     quantity_available: int
     quantity_reserved: int
+    available_units: int
     updated_at: datetime
-

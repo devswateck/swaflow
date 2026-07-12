@@ -21,7 +21,7 @@ class Appointment(Base, IdMixin, TenantMixin, TimestampMixin):
         Uuid(as_uuid=True), ForeignKey("users.id")
     )
     scheduled_at: Mapped[datetime] = mapped_column(nullable=False)
-    duration_minutes: Mapped[int] = mapped_column(nullable=False, default=30)
+    duration_minutes: Mapped[int] = mapped_column(nullable=False, default=60)
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="scheduled")
     notes: Mapped[str | None] = mapped_column(Text)
     external_calendar_event_id: Mapped[str | None] = mapped_column(String(255))

@@ -1,5 +1,5 @@
 # generated: 2026-06-10
-# last_updated: 2026-06-29
+# last_updated: 2026-07-11
 # project: Swaflow
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-10
-last_updated: 2026-06-29
+last_updated: 2026-07-11
 project: Swaflow
 project_key: NOKEY
 tracking_system: file-system
@@ -54,34 +54,34 @@ development_status:
   1-9-configurar-calendario-del-tenant: done
   1-10-configurar-notificaciones-por-correo-y-webhooks-salientes: done
   1-11-operar-acceso-superadmin-y-auditoria-transversal: done
-  epic-1-retrospective: optional
+  epic-1-retrospective: done
 
-  epic-2: backlog
-  2-1-ver-y-actualizar-conversaciones-en-tiempo-real: backlog
-  2-2-responder-manualmente-desde-el-inbox: backlog
-  2-3-desactivar-reactivar-y-continuar-la-ia-en-una-conversacion: backlog
-  2-4-asignar-tomar-y-reasignar-chats-por-usuario: backlog
-  2-5-clasificar-conversaciones-y-preparar-agenda-desde-el-hilo: backlog
-  epic-2-retrospective: optional
+  epic-2: done
+  2-1-ver-y-actualizar-conversaciones-en-tiempo-real: done
+  2-2-responder-manualmente-desde-el-inbox: done
+  2-3-desactivar-reactivar-y-continuar-la-ia-en-una-conversacion: done
+  2-4-asignar-tomar-y-reasignar-chats-por-usuario: done
+  2-5-clasificar-conversaciones-y-preparar-agenda-desde-el-hilo: done
+  epic-2-retrospective: done
 
-  epic-3: backlog
-  3-1-sincronizar-el-catalogo-meta-del-tenant: backlog
-  3-2-visualizar-y-validar-el-catalogo-sincronizado: backlog
-  3-3-registrar-y-calcular-disponibilidad-operativa-de-inventario: backlog
-  3-4-consumir-reservas-y-exponer-disponibilidad-a-ia-e-inbox: backlog
-  epic-3-retrospective: optional
+  epic-3: done
+  3-1-sincronizar-el-catalogo-meta-del-tenant: done
+  3-2-visualizar-y-validar-el-catalogo-sincronizado: done
+  3-3-registrar-y-calcular-disponibilidad-operativa-de-inventario: done
+  3-4-consumir-reservas-y-exponer-disponibilidad-a-ia-e-inbox: done
+  epic-3-retrospective: done
 
-  epic-4: backlog
-  4-1-crear-ordenes-desde-una-conversacion-con-reserva-de-inventario: backlog
-  4-2-generar-y-mostrar-links-de-pago-por-tenant: backlog
-  4-3-confirmar-pagos-por-webhook-con-idempotencia: backlog
-  4-4-listar-filtrar-y-leer-estados-de-orden-en-espanol: backlog
-  4-5-hacer-seguimiento-de-links-vencidos-sin-romper-la-verdad-del-backend: backlog
-  epic-4-retrospective: optional
+  epic-4: done
+  4-1-crear-ordenes-desde-una-conversacion-con-reserva-de-inventario: done
+  4-2-generar-y-mostrar-links-de-pago-por-tenant: done
+  4-3-confirmar-pagos-por-webhook-con-idempotencia: done
+  4-4-listar-filtrar-y-leer-estados-de-orden-en-espanol: done
+  4-5-hacer-seguimiento-de-links-vencidos-sin-romper-la-verdad-del-backend: done
+  epic-4-retrospective: done
 
-  epic-5: backlog
-  5-1-crear-citas-desde-conversaciones-o-manualmente: backlog
-  5-2-validar-disponibilidad-y-proponer-horarios-de-agenda: backlog
+  epic-5: in-progress
+  5-1-crear-citas-desde-conversaciones-o-manualmente: done
+  5-2-validar-disponibilidad-y-proponer-horarios-de-agenda: done
   5-3-configurar-reglas-de-horario-y-duracion-de-citas: backlog
   5-4-sincronizar-citas-con-calendario-externo-sin-bloquear-swaflow: backlog
   5-5-filtrar-y-reflejar-citas-en-el-dashboard-y-el-hilo-de-conversacion: backlog
@@ -98,3 +98,13 @@ development_status:
   7-2-registrar-auditoria-de-cambios-y-eventos-relevantes: backlog
   7-3-exportar-la-informacion-completa-al-retiro-del-tenant: backlog
   epic-7-retrospective: optional
+
+  epic-8: backlog
+  8-1-blindaje-de-inbox-contra-estado-obsoleto: backlog
+  8-2-locking-y-auditoria-en-asignacion: backlog
+  8-3-redaccion-de-secretos-y-validacion-de-contratos-criticos: backlog
+  8-4-separacion-de-estados-humano-ia-y-clasificacion: backlog
+  8-5-rehidratacion-de-agenda-desde-snapshot-persistido: backlog
+  8-6-permisos-backend-para-acciones-criticas: backlog
+  8-7-regresion-automatizada-continua: backlog
+  epic-8-retrospective: optional

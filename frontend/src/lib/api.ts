@@ -8,6 +8,16 @@ type ApiOptions = RequestInit & {
   auth?: boolean;
 };
 
+export class ApiError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -125,7 +135,7 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
       useAuthStore.getState().setToken(null);
       throw new Error("Sesion expirada. Ingresa de nuevo.");
     }
-    throw new Error(formatApiError(detail, "Error de API"));
+    throw new ApiError(response.status, formatApiError(detail, "Error de API"));
   }
   return readJsonResponse<T>(response, path);
 }

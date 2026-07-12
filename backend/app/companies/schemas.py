@@ -19,6 +19,7 @@ class CompanyUpdate(BaseModel):
     currency: str | None = Field(default=None, min_length=1, max_length=10)
     timezone: str | None = Field(default=None, min_length=1, max_length=64)
     business_mode: str | None = None
+    auto_assign_single_additional_user_chats: bool | None = None
     logo_url: str | None = Field(default=None, min_length=1, max_length=2048)
     banner_url: str | None = Field(default=None, min_length=1, max_length=2048)
     profile_url: str | None = Field(default=None, min_length=1, max_length=2048)
@@ -32,6 +33,7 @@ class CompanyRead(TimestampedRead):
     currency: str | None = None
     timezone: str | None = None
     business_mode: str | None = None
+    auto_assign_single_additional_user_chats: bool = True
     logo_url: str | None = None
     banner_url: str | None = None
     profile_url: str | None = None

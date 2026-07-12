@@ -15,6 +15,7 @@ from app.users.permissions import can_access_module, normalize_module_permission
 from app.users.models import User
 
 COMPANY_BUSINESS_MODES = {"products", "appointments", "mixed"}
+TENANT_ADDITIONAL_USER_ROLES = {"agent", "viewer"}
 logger = logging.getLogger(__name__)
 
 
@@ -71,6 +72,34 @@ def can_access_company_profile(user: User) -> bool:
 def require_company_profile_access(user: User) -> None:
     if not can_access_company_profile(user):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+
+
+def count_active_additional_users(db: Session, *, company_id: UUID) -> int:
+    users = db.scalars(
+        select(User).where(
+            User.company_id == company_id,
+            User.status == "active",
+            User.role.in_(TENANT_ADDITIONAL_USER_ROLES),
+        )
+    )
+    return sum(1 for user in users if can_access_module(user, "inbox"))
+
+
+def get_single_active_additional_user(db: Session, *, company_id: UUID) -> User | None:
+    candidates = [
+        user
+        for user in db.scalars(
+            select(User).where(
+                User.company_id == company_id,
+                User.status == "active",
+                User.role.in_(TENANT_ADDITIONAL_USER_ROLES),
+            )
+        )
+        if can_access_module(user, "inbox")
+    ]
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
 
 
 def create_company_with_owner(
@@ -176,6 +205,12 @@ def update_company(
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                     detail="Invalid business mode",
+                )
+        if field == "auto_assign_single_additional_user_chats" and value is not None:
+            if actor_user is not None and actor_user.role not in {"owner", "admin", "superadmin"}:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Insufficient permissions",
                 )
         setattr(company, field, value)
     db.commit()

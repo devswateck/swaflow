@@ -8,18 +8,32 @@ from uuid import UUID
 import httpx
 from fastapi import HTTPException, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.ai.models import AiInteractiveTemplate
 from app.ai.runtime import AutoReplyResult, generate_auto_reply
-from app.contacts.service import get_or_create_contact
-from app.conversations.service import append_message, get_or_create_open_conversation
+from app.audit.service import record_audit_best_effort
+from app.contacts.service import get_contact, get_or_create_contact
+from app.conversations.models import Conversation
+from app.conversations.service import append_message, auto_assign_single_additional_user_chat, get_or_create_open_conversation
 from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret
+from app.ai.intent_classifier import classify_intent
+from app.events.models import Event
 from app.events.service import create_event
 from app.inventory.models import Inventory
-from app.inventory.service import ensure_inventory_for_products
+from app.inventory.service import available_units, ensure_inventory_for_products
 from app.messages.models import Message
+from app.orders.models import Order
+from app.orders.schemas import OrderCreate, OrderItemCreate
+from app.payments.contract import (
+    clear_expired_payment_followup_reservation,
+    expired_payment_followup_metadata,
+    expired_payment_followup_origin_order_id,
+    expired_payment_followup_sent,
+    reserve_expired_payment_followup,
+    record_expired_payment_followup,
+)
 from app.products.models import Product
 from app.realtime import realtime_manager
 from app.whatsapp.models import WhatsAppAccount
@@ -177,6 +191,11 @@ def _send_text_with_account(
         contact_id=contact.id,
         channel="whatsapp",
     )
+    auto_assignment = auto_assign_single_additional_user_chat(
+        db,
+        company_id=account.company_id,
+        conversation=conversation,
+    )
     message = append_message(
         db,
         company_id=account.company_id,
@@ -204,6 +223,18 @@ def _send_text_with_account(
         },
     )
     db.commit()
+    if auto_assignment is not None:
+        realtime_manager.publish(account.company_id, "conversation.assigned", auto_assignment)
+        record_audit_best_effort(
+            db,
+            company_id=account.company_id,
+            actor_user=None,
+            action="conversation.assigned",
+            entity_type="conversation",
+            entity_id=conversation.id,
+            summary="Conversation auto-assigned",
+            metadata=auto_assignment,
+        )
     realtime_manager.publish(
         account.company_id,
         "message.sent",
@@ -268,6 +299,11 @@ def _send_image_with_account(
         contact_id=contact.id,
         channel="whatsapp",
     )
+    auto_assignment = auto_assign_single_additional_user_chat(
+        db,
+        company_id=account.company_id,
+        conversation=conversation,
+    )
     message_metadata = {
         "raw": data,
         "image_url": image_url,
@@ -299,6 +335,18 @@ def _send_image_with_account(
         },
     )
     db.commit()
+    if auto_assignment is not None:
+        realtime_manager.publish(account.company_id, "conversation.assigned", auto_assignment)
+        record_audit_best_effort(
+            db,
+            company_id=account.company_id,
+            actor_user=None,
+            action="conversation.assigned",
+            entity_type="conversation",
+            entity_id=conversation.id,
+            summary="Conversation auto-assigned",
+            metadata=auto_assignment,
+        )
     realtime_manager.publish(
         account.company_id,
         "message.sent",
@@ -359,6 +407,11 @@ def _send_interactive_with_account(
         contact_id=contact.id,
         channel="whatsapp",
     )
+    auto_assignment = auto_assign_single_additional_user_chat(
+        db,
+        company_id=account.company_id,
+        conversation=conversation,
+    )
     message = append_message(
         db,
         company_id=account.company_id,
@@ -387,6 +440,18 @@ def _send_interactive_with_account(
         },
     )
     db.commit()
+    if auto_assignment is not None:
+        realtime_manager.publish(account.company_id, "conversation.assigned", auto_assignment)
+        record_audit_best_effort(
+            db,
+            company_id=account.company_id,
+            actor_user=None,
+            action="conversation.assigned",
+            entity_type="conversation",
+            entity_id=conversation.id,
+            summary="Conversation auto-assigned",
+            metadata=auto_assignment,
+        )
     realtime_manager.publish(
         account.company_id,
         "message.sent",
@@ -406,6 +471,151 @@ def _send_interactive_with_account(
         message_id=message.id,
         raw=data,
     )
+
+
+def _build_expired_payment_followup_text(
+    db: Session,
+    *,
+    company_id: UUID,
+    order: Order,
+    conversation: Conversation,
+) -> AutoReplyResult | None:
+    payment_context = (
+        f"Orden expirada detectada: {order.id} | "
+        f"referencia: {order.payment_reference or '-'} | "
+        f"estado: {order.status} | "
+        f"payment_status: {order.payment_status} | "
+        f"conversation_id: {conversation.id}"
+    )
+    ai_reply = generate_auto_reply(
+        db,
+        company_id=company_id,
+        conversation=conversation,
+        incoming_text=(
+            "Seguimiento comercial de link de pago expirado. "
+            "Pregunta si el cliente desea continuar con el pago o ajustar su pedido. "
+            "No confirmes pagos, no extiendas vencimientos y no prometas stock."
+        ),
+        payment_context=payment_context,
+    )
+    if isinstance(ai_reply, AutoReplyResult) and ai_reply.reply_text.strip():
+        return ai_reply
+    return None
+
+
+def send_expired_payment_followup(
+    db: Session,
+    *,
+    order: Order,
+    actor_user=None,
+) -> WhatsAppSendTextResponse | None:
+    if expired_payment_followup_sent(order):
+        return None
+    if order.conversation_id is None:
+        return None
+
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.company_id == order.company_id,
+            Conversation.id == order.conversation_id,
+        )
+    )
+    if conversation is None or conversation.status == "closed" or not conversation.ai_enabled:
+        if reserve_expired_payment_followup(
+            order,
+            claimed_at=datetime.now(UTC),
+            source="ai_payment_expired_followup_skipped",
+        ):
+            db.commit()
+        return None
+
+    try:
+        account = get_account(db, company_id=order.company_id)
+    except HTTPException:
+        return None
+
+    locked_order = db.scalar(
+        select(Order)
+        .where(
+            Order.company_id == order.company_id,
+            Order.id == order.id,
+        )
+        .with_for_update()
+    )
+    if locked_order is None:
+        return None
+    order = locked_order
+    if not reserve_expired_payment_followup(
+        order,
+        claimed_at=datetime.now(UTC),
+        source="ai_payment_expired_followup",
+    ):
+        return None
+    db.commit()
+    db.refresh(order)
+
+    try:
+        contact = get_contact(db, company_id=order.company_id, contact_id=conversation.contact_id)
+        follow_up = _build_expired_payment_followup_text(
+            db,
+            company_id=order.company_id,
+            order=order,
+            conversation=conversation,
+        )
+        body = (
+            follow_up.reply_text
+            if isinstance(follow_up, AutoReplyResult) and follow_up.reply_text.strip()
+            else "Tu link de pago vencio. Si quieres, te ayudo a continuar el pago o a revisar otro producto."
+        )
+        response = _send_text_with_account(
+            db,
+            account=account,
+            to=contact.phone,
+            body=body,
+            source="ai_payment_expired_followup",
+        )
+    except Exception:
+        clear_expired_payment_followup_reservation(order)
+        db.commit()
+        logger.exception(
+            "Failed to send expired payment follow-up company_id=%s order_id=%s",
+            order.company_id,
+            order.id,
+        )
+        return None
+
+    sent_message = db.get(Message, response.message_id)
+    if sent_message is not None:
+        metadata = sent_message.metadata_json if isinstance(sent_message.metadata_json, dict) else {}
+        metadata["ai_action"] = {
+            "action_key": "payment_expired_followup",
+            "sent_as_interactive": False,
+        }
+        sent_message.metadata_json = metadata
+
+    record_expired_payment_followup(
+        order,
+        sent_at=datetime.now(UTC),
+        message_id=str(response.message_id),
+        source="ai_payment_expired_followup",
+    )
+    db.commit()
+    record_audit_best_effort(
+        db,
+        company_id=order.company_id,
+        actor_user=actor_user,
+        action="order.payment_followup_sent",
+        entity_type="order",
+        entity_id=order.id,
+        summary="Expired payment follow-up sent",
+        metadata={
+            "order_id": str(order.id),
+            "conversation_id": str(conversation.id),
+            "message_id": str(response.message_id),
+            "payment_reference": order.payment_reference,
+        },
+    )
+    return response
 
 
 def _is_duplicate_external_message(
@@ -464,8 +674,320 @@ def _should_generate_auto_reply(
     return (
         message_type in {"text", "interactive", "button"}
         and bool(content)
-        and conversation_status in {"open", "waiting_customer"}
+        and conversation_status in {"open", "waiting_customer", "waiting_human"}
     )
+
+
+def _build_expired_payment_context(
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+) -> str:
+    order = db.scalar(
+        select(Order)
+        .where(
+            Order.company_id == company_id,
+            Order.conversation_id == conversation_id,
+        )
+        .order_by(Order.created_at.desc())
+    )
+    if order is None:
+        return ""
+    origin_order = None
+    origin_order_id = expired_payment_followup_origin_order_id(order)
+    if origin_order_id:
+        try:
+            origin_uuid = UUID(origin_order_id)
+        except ValueError:
+            origin_uuid = None
+        if origin_uuid is not None:
+            candidate = db.get(Order, origin_uuid)
+            if (
+                candidate is not None
+                and candidate.company_id == company_id
+                and candidate.conversation_id == conversation_id
+            ):
+                origin_order = candidate
+
+    follow_up_source_order = origin_order or order
+    follow_up_details = expired_payment_followup_metadata(follow_up_source_order)
+    follow_up = bool(follow_up_details.get("sent_at") or follow_up_details.get("claimed_at"))
+    if order.status != "expired" and not follow_up and origin_order is None:
+        return ""
+
+    reference_order = origin_order or order
+    payment_metadata = (
+        reference_order.metadata_json if isinstance(reference_order.metadata_json, dict) else {}
+    )
+    payment_details = payment_metadata.get("payment", {}) if isinstance(payment_metadata, dict) else {}
+    follow_up_at = follow_up_details.get("sent_at") or follow_up_details.get("claimed_at")
+    return (
+        "Contexto de pago vencido del hilo:\n"
+        f"- Orden mas reciente: {order.id}\n"
+        f"- Estado de orden mas reciente: {order.status}\n"
+        f"- Orden origen del vencimiento: {origin_order.id if origin_order else '-'}\n"
+        f"- Estado de orden origen: {reference_order.status}\n"
+        f"- Estado de pago origen: {reference_order.payment_status}\n"
+        f"- Referencia de pago activa: {order.payment_reference or reference_order.payment_reference or '-'}\n"
+        f"- Expiracion persistida: {payment_details.get('expires_at') or '-'}\n"
+        f"- Seguimiento automatico enviado: {'si' if follow_up_at else 'no'}\n"
+        f"- Seguimiento enviado en: {follow_up_at or '-'}\n"
+        "Regla: no repitas el recordatorio de expiracion si ya fue enviado; si el cliente desea continuar, "
+        "usa el flujo comercial del tenant y backend para generar una nueva orden o un nuevo link. "
+        "Si ya existe una orden de recuperacion, reutilizala en vez de crear otra."
+    )
+
+
+def _load_conversation_ai_enabled(
+    db: Session, *, company_id: UUID, conversation_id: UUID
+) -> bool:
+    with Session(bind=db.get_bind()) as verification_db:
+        value = verification_db.scalar(
+            select(Conversation.ai_enabled).where(
+                Conversation.company_id == company_id,
+                Conversation.id == conversation_id,
+            )
+        )
+    if value is None:
+        return True
+    return bool(value)
+
+
+def _normalize_search_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", value)
+    return " ".join(
+        "".join(
+            char
+            for char in normalized
+            if not unicodedata.combining(char) and (char.isalnum() or char.isspace())
+        )
+        .strip()
+        .lower()
+        .split()
+    )
+
+
+def _latest_order_for_conversation(
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+) -> Order | None:
+    return db.scalar(
+        select(Order)
+        .options(selectinload(Order.items))
+        .where(
+            Order.company_id == company_id,
+            Order.conversation_id == conversation_id,
+        )
+        .order_by(Order.created_at.desc())
+    )
+
+
+def _recovery_order_from_expired_order(
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+    expired_order_id: UUID,
+) -> Order | None:
+    orders = list(
+        db.scalars(
+            select(Order)
+            .options(selectinload(Order.items))
+            .where(
+                Order.company_id == company_id,
+                Order.conversation_id == conversation_id,
+            )
+            .order_by(Order.created_at.desc())
+        )
+    )
+    for candidate in orders:
+        payment_metadata = candidate.metadata_json if isinstance(candidate.metadata_json, dict) else {}
+        payment_details = payment_metadata.get("payment", {}) if isinstance(payment_metadata, dict) else {}
+        follow_up = payment_details.get("followup", {}) if isinstance(payment_details, dict) else {}
+        if not isinstance(follow_up, dict):
+            continue
+        if str(follow_up.get("origin_order_id") or "").strip() != str(expired_order_id):
+            continue
+        return candidate
+    return None
+
+
+def _payment_context_orders(
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+) -> tuple[Order | None, Order | None]:
+    latest_order = db.scalar(
+        select(Order)
+        .where(
+            Order.company_id == company_id,
+            Order.conversation_id == conversation_id,
+        )
+        .order_by(Order.created_at.desc())
+    )
+    if latest_order is None:
+        return None, None
+
+    origin_order = None
+    origin_order_id = expired_payment_followup_origin_order_id(latest_order)
+    if origin_order_id:
+        try:
+            origin_uuid = UUID(origin_order_id)
+        except ValueError:
+            origin_uuid = None
+        if origin_uuid is not None:
+            candidate = db.get(Order, origin_uuid)
+            if (
+                candidate is not None
+                and candidate.company_id == company_id
+                and candidate.conversation_id == conversation_id
+            ):
+                origin_order = candidate
+
+    return latest_order, origin_order
+
+
+def _customer_requests_payment_continuation(message_content: str | None) -> bool:
+    normalized = _normalize_search_text(message_content or "")
+    if not normalized:
+        return False
+    human_handoff_keywords = (
+        "asesor",
+        "humano",
+        "persona",
+        "agente",
+        "soporte",
+        "problema",
+        "garantia",
+        "queja",
+        "reclamo",
+    )
+    if any(keyword in normalized for keyword in human_handoff_keywords):
+        return False
+    if classify_intent(message_content or "").intent == "buy_product":
+        return True
+    affirmative_keywords = (
+        "si",
+        "dale",
+        "ok",
+        "okay",
+        "listo",
+        "va",
+        "adelante",
+        "confirmo",
+        "claro",
+    )
+    if normalized in affirmative_keywords or any(
+        normalized.startswith(f"{keyword} ") for keyword in affirmative_keywords
+    ):
+        return True
+    continuation_keywords = (
+        "continuar",
+        "seguir",
+        "pagar",
+        "pago",
+        "nuevo link",
+        "nuevo pago",
+        "otro link",
+        "otro pedido",
+        "repetir",
+        "otra vez",
+        "checkout",
+    )
+    return any(keyword in normalized for keyword in continuation_keywords)
+
+
+def _clone_expired_order_for_new_payment(
+    db: Session,
+    *,
+    expired_order: Order,
+    actor_user=None,
+) -> Order | None:
+    from app.orders.service import create_order, generate_payment_link
+
+    if expired_order.conversation_id is None:
+        return None
+    if expired_order.items is None:
+        return None
+
+    existing_recovery_order = _recovery_order_from_expired_order(
+        db,
+        company_id=expired_order.company_id,
+        conversation_id=expired_order.conversation_id,
+        expired_order_id=expired_order.id,
+    )
+    if existing_recovery_order is not None:
+        if existing_recovery_order.payment_link:
+            return existing_recovery_order
+        try:
+            return generate_payment_link(
+                db,
+                company_id=expired_order.company_id,
+                order_id=existing_recovery_order.id,
+                actor_user=actor_user,
+            )
+        except Exception:
+            logger.exception(
+                "Failed to regenerate payment link for recovery order company_id=%s order_id=%s",
+                expired_order.company_id,
+                existing_recovery_order.id,
+            )
+            return None
+
+    payload = OrderCreate(
+        contact_id=expired_order.contact_id,
+        conversation_id=expired_order.conversation_id,
+        items=[
+            OrderItemCreate(product_id=item.product_id, quantity=item.quantity)
+            for item in expired_order.items
+        ],
+        metadata={
+            "idempotency_key": f"expired-followup:{expired_order.id}",
+            "payment": {
+                "followup": {
+                    "origin_order_id": str(expired_order.id),
+                    "source": "expired_payment_followup",
+                }
+            },
+        },
+    )
+    new_order = create_order(
+        db,
+        company_id=expired_order.company_id,
+        payload=payload,
+        actor_user=actor_user,
+    )
+    try:
+        return generate_payment_link(
+            db,
+            company_id=expired_order.company_id,
+            order_id=new_order.id,
+            actor_user=actor_user,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to generate payment link for recovery order company_id=%s order_id=%s",
+            expired_order.company_id,
+            new_order.id,
+        )
+        return None
+
+
+def _build_expired_payment_recovery_text(
+    ai_reply: AutoReplyResult | None,
+    *,
+    payment_link: str,
+) -> str:
+    intro = "Tu link de pago vencio. Te comparto uno nuevo para continuar."
+    if isinstance(ai_reply, AutoReplyResult) and ai_reply.reply_text.strip():
+        intro = ai_reply.reply_text.strip()
+    if payment_link.strip():
+        return f"{intro}\n{payment_link.strip()}"
+    return intro
 
 
 def _send_action_template(
@@ -808,13 +1330,25 @@ def send_product_cards_message(
 ) -> WhatsAppSendTextResponse:
     account = get_account(db, company_id=company_id, account_id=payload.account_id)
     _require_catalog_connected_to_waba(account=account, catalog_id=payload.catalog_id)
+    requested_retailer_ids = [item.product_retailer_id for item in payload.items]
+    available_products = _list_available_products_for_retailer_ids(
+        db,
+        company_id=company_id,
+        retailer_ids=requested_retailer_ids,
+        catalog_id=payload.catalog_id,
+    )
+    if len(available_products) != len(requested_retailer_ids):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Some selected products have no confirmed stock",
+        )
     if len(payload.items) == 1:
         interactive_payload = {
             "type": "product",
             "body": {"text": payload.body},
             "action": {
                 "catalog_id": payload.catalog_id,
-                "product_retailer_id": payload.items[0].product_retailer_id,
+                "product_retailer_id": available_products[0][0].whatsapp_product_retailer_id,
             },
         }
     else:
@@ -828,8 +1362,8 @@ def send_product_cards_message(
                     {
                         "title": payload.section_title,
                         "product_items": [
-                            {"product_retailer_id": item.product_retailer_id}
-                            for item in payload.items
+                            {"product_retailer_id": product.whatsapp_product_retailer_id}
+                            for product, _inventory in available_products
                         ],
                     }
                 ],
@@ -852,7 +1386,7 @@ def send_product_cards_from_db(
     payload: WhatsAppSendProductCardsFromDbRequest,
 ) -> WhatsAppSendTextResponse:
     account = get_account(db, company_id=company_id, account_id=payload.account_id)
-    products = list(
+    active_products = list(
         db.scalars(
             select(Product).where(
                 Product.company_id == company_id,
@@ -861,12 +1395,12 @@ def send_product_cards_from_db(
             )
         )
     )
-    if not products:
+    if not active_products:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No active products found for selected ids",
         )
-    products_by_id = {product.id: product for product in products}
+    products_by_id = {product.id: product for product in active_products}
     products = [
         products_by_id[product_id]
         for product_id in payload.product_ids
@@ -890,9 +1424,20 @@ def send_product_cards_from_db(
         )
     catalog_id = next(iter(catalog_ids))
     _require_catalog_connected_to_waba(account=account, catalog_id=catalog_id)
+    available_products = _list_available_products_for_product_ids(
+        db,
+        company_id=company_id,
+        product_ids=[product.id for product in products],
+        catalog_id=catalog_id,
+    )
+    if len(available_products) != len(products):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Some selected products have no confirmed stock",
+        )
     items = [
         {"product_retailer_id": product.whatsapp_product_retailer_id}
-        for product in products
+        for product, _inventory in available_products
         if product.whatsapp_product_retailer_id
     ]
     if len(items) == 1:
@@ -929,8 +1474,96 @@ def send_product_cards_from_db(
     )
 
 
+def _available_product_rows_stmt(
+    *,
+    company_id: UUID,
+    catalog_id: str | None = None,
+    product_ids: list[UUID] | None = None,
+    retailer_ids: list[str] | None = None,
+):
+    stmt = (
+        select(Product, Inventory)
+        .join(
+            Inventory,
+            (Inventory.company_id == Product.company_id)
+            & (Inventory.product_id == Product.id),
+        )
+        .where(
+            Product.company_id == company_id,
+            Product.status == "active",
+            Product.whatsapp_catalog_id.is_not(None),
+            Product.whatsapp_product_retailer_id.is_not(None),
+            Inventory.available_units > 0,
+        )
+    )
+    if catalog_id is not None:
+        stmt = stmt.where(Product.whatsapp_catalog_id == catalog_id)
+    if product_ids is not None:
+        stmt = stmt.where(Product.id.in_(product_ids))
+    if retailer_ids is not None:
+        stmt = stmt.where(Product.whatsapp_product_retailer_id.in_(retailer_ids))
+    return stmt
+
+
+def _list_available_products_for_retailer_ids(
+    db: Session,
+    *,
+    company_id: UUID,
+    retailer_ids: list[str],
+    catalog_id: str,
+) -> list[tuple[Product, Inventory]]:
+    normalized_ids = [str(retailer_id).strip() for retailer_id in retailer_ids if str(retailer_id).strip()]
+    if not normalized_ids:
+        return []
+    rows = list(
+        db.execute(
+            _available_product_rows_stmt(
+                company_id=company_id,
+                catalog_id=catalog_id,
+                retailer_ids=normalized_ids,
+            )
+        )
+    )
+    rows_by_retailer_id = {
+        product.whatsapp_product_retailer_id: (product, inventory)
+        for product, inventory in rows
+        if product.whatsapp_product_retailer_id
+    }
+    return [
+        rows_by_retailer_id[retailer_id]
+        for retailer_id in normalized_ids
+        if retailer_id in rows_by_retailer_id
+    ]
+
+
+def _list_available_products_for_product_ids(
+    db: Session,
+    *,
+    company_id: UUID,
+    product_ids: list[UUID],
+    catalog_id: str,
+) -> list[tuple[Product, Inventory]]:
+    if not product_ids:
+        return []
+    rows = list(
+        db.execute(
+            _available_product_rows_stmt(
+                company_id=company_id,
+                catalog_id=catalog_id,
+                product_ids=product_ids,
+            )
+        )
+    )
+    rows_by_product_id = {product.id: (product, inventory) for product, inventory in rows}
+    return [
+        rows_by_product_id[product_id]
+        for product_id in product_ids
+        if product_id in rows_by_product_id
+    ]
+
+
 def _product_card_caption(product: Product, inventory: Inventory) -> str:
-    available = max(0, inventory.quantity_available - inventory.quantity_reserved)
+    available = available_units(inventory)
     description = re.sub(r"\s+", " ", product.description or "").strip()
     parts = [
         product.name,
@@ -963,7 +1596,7 @@ def _send_product_image_cards_from_db(
                 Product.company_id == account.company_id,
                 Product.id.in_(product_ids),
                 Product.status == "active",
-                Inventory.quantity_available > Inventory.quantity_reserved,
+                Inventory.available_units > 0,
             )
         )
     )
@@ -1045,7 +1678,7 @@ def _resolve_available_product_ids(
         product.whatsapp_product_retailer_id: product.id
         for product, inventory in rows
         if product.whatsapp_product_retailer_id
-        and inventory.quantity_available - inventory.quantity_reserved > 0
+        and available_units(inventory) > 0
     }
     return [
         product_ids_by_retailer_id[retailer_id]
@@ -1073,7 +1706,7 @@ def _list_available_product_ids(
                 Product.status == "active",
                 Product.whatsapp_catalog_id.is_not(None),
                 Product.whatsapp_product_retailer_id.is_not(None),
-                Inventory.quantity_available > Inventory.quantity_reserved,
+                Inventory.available_units > 0,
             )
             .order_by(Product.name.asc())
             .limit(limit)
@@ -1139,7 +1772,7 @@ def _build_available_products_fallback(
                 Product.company_id == company_id,
                 Product.id.in_(product_ids),
                 Product.status == "active",
-                Inventory.quantity_available > Inventory.quantity_reserved,
+                Inventory.available_units > 0,
             )
         )
     )
@@ -1152,7 +1785,7 @@ def _build_available_products_fallback(
         product, inventory = row
         description = re.sub(r"\s+", " ", product.description or "").strip()
         details = f" {description[:140]}" if description else ""
-        available = inventory.quantity_available - inventory.quantity_reserved
+        available = available_units(inventory)
         lines.append(
             f"- {product.name}: {_format_product_price(product)}. "
             f"Disponible ({available} unidades).{details}"
@@ -1258,6 +1891,7 @@ def _sync_catalog_products_with_account(
     rows = _fetch_catalog_product_rows(account=account, catalog_id=catalog_id)
     created = 0
     updated = 0
+    skipped_invalid_price = 0
     inventory_quantities: dict[str, int | None] = {}
     for row in rows:
         retailer_id = str(row.get("retailer_id") or "").strip()
@@ -1276,7 +1910,8 @@ def _sync_catalog_products_with_account(
         status = "inactive" if availability in {"out of stock", "discontinued"} else "active"
         price = _to_decimal_price(row.get("price"))
         if price <= 0:
-            price = Decimal("1")
+            skipped_invalid_price += 1
+            continue
         metadata = {
             "source": "meta_catalog_sync",
             "availability": availability,
@@ -1348,11 +1983,19 @@ def _sync_catalog_products_with_account(
         if quantity is not None:
             inventory.quantity_available = quantity
     db.commit()
+    warning_messages = []
+    if skipped_invalid_price:
+        warning_messages.append(
+            f"Se omitieron {skipped_invalid_price} productos de Meta con precio invalido."
+        )
+    link_warning = _catalog_link_warning(account=account, catalog_id=catalog_id)
+    if link_warning:
+        warning_messages.append(link_warning)
     return WhatsAppCatalogSyncResponse(
         fetched=len(rows),
         created=created,
         updated=updated,
-        warning=_catalog_link_warning(account=account, catalog_id=catalog_id),
+        warning=" ".join(warning_messages) if warning_messages else None,
     )
 
 
@@ -1435,6 +2078,7 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
             }
 
             for incoming in value.get("messages", []):
+                message_processed = False
                 customer_phone = incoming.get("from")
                 if not customer_phone:
                     skipped += 1
@@ -1462,6 +2106,11 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                     contact_id=contact.id,
                     channel="whatsapp",
                 )
+                auto_assignment = auto_assign_single_additional_user_chat(
+                    db,
+                    company_id=account.company_id,
+                    conversation=conversation,
+                )
                 message = append_message(
                     db,
                     company_id=account.company_id,
@@ -1487,6 +2136,22 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                     },
                 )
                 db.commit()
+                if auto_assignment is not None:
+                    realtime_manager.publish(
+                        account.company_id,
+                        "conversation.assigned",
+                        auto_assignment,
+                    )
+                    record_audit_best_effort(
+                        db,
+                        company_id=account.company_id,
+                        actor_user=None,
+                        action="conversation.assigned",
+                        entity_type="conversation",
+                        entity_id=conversation.id,
+                        summary="Conversation auto-assigned",
+                        metadata=auto_assignment,
+                    )
                 realtime_manager.publish(
                     account.company_id,
                     "message.received",
@@ -1498,7 +2163,8 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                         "unread_count": conversation.unread_count,
                     },
                 )
-                if _should_generate_auto_reply(
+                db.refresh(conversation, attribute_names=["ai_enabled", "status"])
+                if conversation.ai_enabled and _should_generate_auto_reply(
                     message_type=message_type,
                     content=message_content,
                     conversation_status=conversation.status,
@@ -1516,6 +2182,12 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                         conversation=conversation,
                         incoming_text=message_content,
                         incoming_interactive_reply=interactive_reply,
+                        payment_context=_build_expired_payment_context(
+                            db,
+                            company_id=account.company_id,
+                            conversation_id=conversation.id,
+                        )
+                        or None,
                     )
                     if ai_reply is None and catalog_requested:
                         ai_reply = AutoReplyResult(
@@ -1525,9 +2197,25 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                             )
                         )
                     if ai_reply:
+                        if not _load_conversation_ai_enabled(
+                            db,
+                            company_id=account.company_id,
+                            conversation_id=conversation.id,
+                        ):
+                            logger.info(
+                                "AI auto-reply aborted after generation: conversation paused company_id=%s conversation_id=%s",
+                                account.company_id,
+                                conversation.id,
+                            )
+                            processed += 1
+                            message_processed = True
+                            continue
                         product_cards_sent = False
                         action_sent = False
                         product_ids: list[UUID] = []
+                        recovery_attempted = False
+                        recovery_link_ready = False
+                        suppress_generic_reply = False
                         reply_text = (
                             ai_reply.reply_text
                             if isinstance(ai_reply, AutoReplyResult)
@@ -1541,6 +2229,92 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                 contact=contact,
                                 ai_reply=ai_reply,
                             )
+                            expired_order = _latest_order_for_conversation(
+                                db,
+                                company_id=account.company_id,
+                                conversation_id=conversation.id,
+                            )
+                            recovery_order = None
+                            recovery_origin_order = None
+                            if expired_order is not None and expired_order.status in {"pending", "waiting_payment"}:
+                                recovery_origin_order_id = expired_payment_followup_origin_order_id(expired_order)
+                                if recovery_origin_order_id:
+                                    try:
+                                        recovery_origin_uuid = UUID(recovery_origin_order_id)
+                                    except ValueError:
+                                        recovery_origin_uuid = None
+                                    if recovery_origin_uuid is not None:
+                                        candidate_origin = db.get(Order, recovery_origin_uuid)
+                                        if candidate_origin is not None and candidate_origin.status == "expired":
+                                            recovery_origin_order = candidate_origin
+                            if (
+                                expired_order is not None
+                                and expired_order.status == "expired"
+                                and _customer_requests_payment_continuation(message_content)
+                            ):
+                                recovery_attempted = True
+                                recovery_order = _clone_expired_order_for_new_payment(
+                                    db,
+                                    expired_order=expired_order,
+                                    actor_user=None,
+                                )
+                            elif (
+                                recovery_origin_order is not None
+                                and _customer_requests_payment_continuation(message_content)
+                            ):
+                                recovery_attempted = True
+                                recovery_order = _clone_expired_order_for_new_payment(
+                                    db,
+                                    expired_order=recovery_origin_order,
+                                    actor_user=None,
+                                )
+                            recovery_link_ready = recovery_order is not None and bool(recovery_order.payment_link)
+                            if recovery_link_ready:
+                                recovery_body = _build_expired_payment_recovery_text(
+                                    ai_reply,
+                                    payment_link=recovery_order.payment_link,
+                                )
+                                response = _send_text_with_account(
+                                    db,
+                                    account=account,
+                                    to=customer_phone,
+                                    body=recovery_body,
+                                    source="ai_payment_followup_recovery",
+                                )
+                                sent_message = db.get(Message, response.message_id)
+                                if sent_message is not None:
+                                    metadata = (
+                                        sent_message.metadata_json
+                                        if isinstance(sent_message.metadata_json, dict)
+                                        else {}
+                                    )
+                                    metadata["ai_action"] = {
+                                        "action_key": "payment_recovery_link",
+                                        "sent_as_interactive": False,
+                                    }
+                                    metadata["payment_followup"] = {
+                                        "origin_order_id": str(
+                                            recovery_origin_order.id if recovery_origin_order is not None else expired_order.id
+                                        ),
+                                        "recovery_order_id": str(recovery_order.id),
+                                    }
+                                    sent_message.metadata_json = metadata
+                                    db.commit()
+                                processed += 1
+                                message_processed = True
+                                if not (catalog_requested or ai_reply.product_retailer_ids):
+                                    continue
+                            elif recovery_attempted:
+                                suppress_generic_reply = True
+                                logger.info(
+                                    "AI payment recovery requested but link generation failed company_id=%s conversation_id=%s",
+                                    account.company_id,
+                                    conversation.id,
+                                )
+                            if recovery_attempted and not recovery_link_ready:
+                                reply_text = (
+                                    "Puedo ayudarte a revisar otra opción para continuar tu compra."
+                                )
                             if ai_reply.product_retailer_ids and not catalog_refreshed:
                                 _sync_linked_catalogs_for_product_query(db, account=account)
                                 catalog_refreshed = True
@@ -1620,11 +2394,15 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                     account=account,
                                     to=customer_phone,
                                     action_key=ai_reply.action,
-                                    fallback_text=ai_reply.reply_text,
+                                    fallback_text=reply_text,
                                 )
                                 is not None
                             )
                         if not product_cards_sent and not action_sent:
+                            if suppress_generic_reply:
+                                processed += 1
+                                message_processed = True
+                                continue
                             body = ai_reply.reply_text if isinstance(ai_reply, AutoReplyResult) else str(ai_reply)
                             response = _send_text_with_account(
                                 db,
@@ -1647,31 +2425,59 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                                     }
                                     sent_message.metadata_json = metadata
                                     db.commit()
-                processed += 1
+                if not message_processed:
+                    processed += 1
 
             for status_update in value.get("statuses", []):
+                status_message = db.scalar(
+                    select(Message).where(
+                        Message.company_id == account.company_id,
+                        Message.external_message_id == status_update.get("id"),
+                    )
+                )
+                conversation_id = (
+                    str(status_message.conversation_id) if status_message is not None else None
+                )
+                if conversation_id is None:
+                    fallback_event = db.scalar(
+                        select(Event).where(
+                            Event.company_id == account.company_id,
+                            Event.event_type == "message.sent",
+                            Event.payload["meta_message_id"].as_string()
+                            == status_update.get("id"),
+                        ).order_by(Event.created_at.desc(), Event.id.desc())
+                    )
+                    if fallback_event is not None:
+                        payload = fallback_event.payload if isinstance(fallback_event.payload, dict) else {}
+                        if isinstance(payload.get("conversation_id"), str):
+                            conversation_id = payload["conversation_id"]
+                event_payload = {
+                    "message_id": status_update.get("id"),
+                    "status": status_update.get("status"),
+                    "recipient_id": status_update.get("recipient_id"),
+                    "timestamp": status_update.get("timestamp"),
+                    "raw": status_update,
+                }
+                if conversation_id is not None:
+                    event_payload["conversation_id"] = conversation_id
                 create_event(
                     db,
                     company_id=account.company_id,
                     event_type="message.status",
-                    payload={
-                        "message_id": status_update.get("id"),
-                        "status": status_update.get("status"),
-                        "recipient_id": status_update.get("recipient_id"),
-                        "timestamp": status_update.get("timestamp"),
-                        "raw": status_update,
-                    },
+                    payload=event_payload,
                 )
                 db.commit()
-                realtime_manager.publish(
-                    account.company_id,
-                    "message.status",
-                    {
-                        "message_id": status_update.get("id"),
-                        "status": status_update.get("status"),
-                        "recipient_id": status_update.get("recipient_id"),
-                    },
-                )
+                if conversation_id is not None:
+                    realtime_manager.publish(
+                        account.company_id,
+                        "message.status",
+                        {
+                            "conversation_id": conversation_id,
+                            "message_id": status_update.get("id"),
+                            "status": status_update.get("status"),
+                            "recipient_id": status_update.get("recipient_id"),
+                        },
+                    )
                 processed += 1
 
     return processed, skipped

@@ -8,13 +8,18 @@ from sqlalchemy.orm import Session
 from app.inventory.models import Inventory
 from app.inventory.schemas import InventoryAdjustment, InventoryUpdate
 from app.products.models import Product
-from app.products.service import get_product
+from app.products.service import get_product, is_meta_synced_product, list_meta_synced_product_ids
+
+
+def _require_meta_synced_product(db: Session, *, company_id: UUID, product_id: UUID) -> Product:
+    product = get_product(db, company_id=company_id, product_id=product_id)
+    if not is_meta_synced_product(product):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventory not found")
+    return product
 
 
 def ensure_inventory_for_products(db: Session, *, company_id: UUID) -> int:
-    product_ids = set(
-        db.scalars(select(Product.id).where(Product.company_id == company_id))
-    )
+    product_ids = set(list_meta_synced_product_ids(db, company_id=company_id))
     if not product_ids:
         return 0
 
@@ -40,7 +45,16 @@ def list_inventory(db: Session, *, company_id: UUID, limit: int, offset: int) ->
     return list(
         db.scalars(
             select(Inventory)
-            .where(Inventory.company_id == company_id)
+            .join(
+                Product,
+                (Product.company_id == Inventory.company_id)
+                & (Product.id == Inventory.product_id),
+            )
+            .where(
+                Inventory.company_id == company_id,
+                Product.whatsapp_catalog_id.is_not(None),
+                Product.whatsapp_product_retailer_id.is_not(None),
+            )
             .order_by(Inventory.updated_at.desc())
             .limit(limit)
             .offset(offset)
@@ -48,13 +62,20 @@ def list_inventory(db: Session, *, company_id: UUID, limit: int, offset: int) ->
     )
 
 
-def get_inventory_by_product(db: Session, *, company_id: UUID, product_id: UUID) -> Inventory:
-    inventory = db.scalar(
-        select(Inventory).where(
-            Inventory.company_id == company_id,
-            Inventory.product_id == product_id,
-        )
+def get_inventory_by_product(
+    db: Session,
+    *,
+    company_id: UUID,
+    product_id: UUID,
+    for_update: bool = False,
+) -> Inventory:
+    stmt = select(Inventory).where(
+        Inventory.company_id == company_id,
+        Inventory.product_id == product_id,
     )
+    if for_update:
+        stmt = stmt.with_for_update()
+    inventory = db.scalar(stmt)
     if inventory is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Inventory not found")
     return inventory
@@ -63,12 +84,14 @@ def get_inventory_by_product(db: Session, *, company_id: UUID, product_id: UUID)
 def upsert_inventory(
     db: Session, *, company_id: UUID, product_id: UUID, payload: InventoryUpdate
 ) -> Inventory:
-    get_product(db, company_id=company_id, product_id=product_id)
+    _require_meta_synced_product(db, company_id=company_id, product_id=product_id)
     inventory = db.scalar(
-        select(Inventory).where(
+        select(Inventory)
+        .where(
             Inventory.company_id == company_id,
             Inventory.product_id == product_id,
         )
+        .with_for_update()
     )
     if inventory is None:
         inventory = Inventory(company_id=company_id, product_id=product_id)
@@ -87,7 +110,10 @@ def upsert_inventory(
 def adjust_inventory(
     db: Session, *, company_id: UUID, product_id: UUID, payload: InventoryAdjustment
 ) -> Inventory:
-    inventory = get_inventory_by_product(db, company_id=company_id, product_id=product_id)
+    _require_meta_synced_product(db, company_id=company_id, product_id=product_id)
+    inventory = get_inventory_by_product(
+        db, company_id=company_id, product_id=product_id, for_update=True
+    )
     next_available = inventory.quantity_available + payload.delta_available
     next_reserved = inventory.quantity_reserved + payload.delta_reserved
     if next_available < 0 or next_reserved < 0:
@@ -103,4 +129,4 @@ def adjust_inventory(
 
 
 def available_units(inventory: Inventory) -> int:
-    return inventory.quantity_available - inventory.quantity_reserved
+    return inventory.available_units
