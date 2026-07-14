@@ -16,26 +16,34 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "orders",
-        sa.Column("idempotency_key", sa.String(length=255), nullable=True),
-    )
-
     bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    column_names = {column["name"] for column in inspector.get_columns("orders")}
+    unique_names = {constraint["name"] for constraint in inspector.get_unique_constraints("orders")}
+    has_idempotency_key = "idempotency_key" in column_names
+
+    if not has_idempotency_key:
+        op.add_column(
+            "orders",
+            sa.Column("idempotency_key", sa.String(length=255), nullable=True),
+        )
+        has_idempotency_key = True
+
     orders = sa.table(
         "orders",
         sa.column("id", sa.Uuid()),
         sa.column("idempotency_key", sa.String(length=255)),
     )
-    rows = bind.execute(
-        sa.select(orders.c.id).where(orders.c.idempotency_key.is_(None))
-    ).all()
-    for (order_id,) in rows:
-        bind.execute(
-            orders.update()
-            .where(orders.c.id == order_id)
-            .values(idempotency_key=f"legacy:{order_id}")
-        )
+    if has_idempotency_key:
+        rows = bind.execute(
+            sa.select(orders.c.id).where(orders.c.idempotency_key.is_(None))
+        ).all()
+        for (order_id,) in rows:
+            bind.execute(
+                orders.update()
+                .where(orders.c.id == order_id)
+                .values(idempotency_key=f"legacy:{order_id}")
+            )
 
     op.alter_column(
         "orders",
@@ -43,11 +51,12 @@ def upgrade() -> None:
         existing_type=sa.String(length=255),
         nullable=False,
     )
-    op.create_unique_constraint(
-        "uq_orders_company_idempotency_key",
-        "orders",
-        ["company_id", "idempotency_key"],
-    )
+    if "uq_orders_company_idempotency_key" not in unique_names:
+        op.create_unique_constraint(
+            "uq_orders_company_idempotency_key",
+            "orders",
+            ["company_id", "idempotency_key"],
+        )
 
 
 def downgrade() -> None:
