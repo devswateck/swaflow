@@ -26,6 +26,7 @@ class CurrentUserRead(ORMModel):
     role: str
     status: Literal["active", "inactive"]
     module_permissions: dict[str, bool]
+    company_currency: str | None = None
     company_timezone: str | None = None
     company_logo_url: str | None = None
     company_banner_url: str | None = None

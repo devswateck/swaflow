@@ -16,6 +16,7 @@ MANDATORY_GUARDRAILS = {
 
 DEFAULT_WEEKDAY_WINDOW = {"start": "08:00", "end": "18:00"}
 DEFAULT_WEEKEND_WINDOW = {"start": "08:00", "end": "14:00"}
+DEFAULT_APPOINTMENT_DURATION_MINUTES = 60
 DEFAULT_OUTSIDE_HOURS_MESSAGE = "Estamos fuera de horario. Te respondemos apenas retomemos atencion."
 DEFAULT_HANDOFF_MESSAGE = "Te paso con una persona del equipo para continuar."
 ALLOWED_OUTSIDE_HOURS_BEHAVIORS = {"handoff", "hold", "auto_reply"}
@@ -94,6 +95,14 @@ def _normalize_window(value: Any, *, default: dict[str, str]) -> dict[str, str]:
     return dict(default)
 
 
+def _normalize_duration_minutes(value: Any, *, default: int) -> int:
+    try:
+        duration = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(15, min(duration, 480))
+
+
 def _normalize_timezone(value: Any, *, fallback: str | None) -> str:
     timezone = _normalize_text(value, default=fallback or "UTC")
     try:
@@ -139,6 +148,7 @@ def _normalize_schedule(value: Any, *, fallback_timezone: str | None) -> dict[st
             "timezone": _normalize_timezone(None, fallback=fallback_timezone),
             "weekday": dict(DEFAULT_WEEKDAY_WINDOW),
             "weekend": dict(DEFAULT_WEEKEND_WINDOW),
+            "default_appointment_duration_minutes": DEFAULT_APPOINTMENT_DURATION_MINUTES,
             "outside_hours_behavior": "handoff",
             "inside_hours_behavior": "normal",
             "outside_hours_message": DEFAULT_OUTSIDE_HOURS_MESSAGE,
@@ -149,6 +159,10 @@ def _normalize_schedule(value: Any, *, fallback_timezone: str | None) -> dict[st
     section["timezone"] = _normalize_timezone(section.get("timezone"), fallback=fallback_timezone)
     section["weekday"] = _normalize_window(section.get("weekday"), default=DEFAULT_WEEKDAY_WINDOW)
     section["weekend"] = _normalize_window(section.get("weekend"), default=DEFAULT_WEEKEND_WINDOW)
+    section["default_appointment_duration_minutes"] = _normalize_duration_minutes(
+        section.get("default_appointment_duration_minutes"),
+        default=DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    )
     outside_behavior = _normalize_text(section.get("outside_hours_behavior"), default="handoff").lower()
     section["outside_hours_behavior"] = (
         outside_behavior if outside_behavior in ALLOWED_OUTSIDE_HOURS_BEHAVIORS else "handoff"
@@ -270,6 +284,7 @@ def _is_legacy_operational_rule(key: str) -> bool:
         "guardrails",
         "schedule",
         "timezone",
+        "default_appointment_duration_minutes",
         "handoff_rule",
         "min_confidence",
         "required_capture_fields",
@@ -413,6 +428,17 @@ def get_effective_operational_section(operational_config: dict[str, Any]) -> dic
 def _parse_time(value: str) -> time:
     hour, minute = value.split(":", 1)
     return time(hour=int(hour), minute=int(minute))
+
+
+def get_default_appointment_duration_minutes(operational_config: dict[str, Any]) -> int:
+    section = get_effective_operational_section(operational_config)
+    schedule = section.get("schedule") if isinstance(section, dict) else {}
+    if not isinstance(schedule, dict):
+        return DEFAULT_APPOINTMENT_DURATION_MINUTES
+    return _normalize_duration_minutes(
+        schedule.get("default_appointment_duration_minutes"),
+        default=DEFAULT_APPOINTMENT_DURATION_MINUTES,
+    )
 
 
 def _timezone_for_value(timezone_name: str | None) -> ZoneInfo:

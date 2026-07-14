@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import json
 import io
 import zipfile
 from datetime import UTC, datetime
@@ -106,7 +108,20 @@ def _create_superadmin(db: Session, company_id):
     return superadmin
 
 
-def _prepare_export_dataset(db: Session, company_id):
+def _prepare_export_dataset(
+    db: Session, company_id, redaction_markers: dict[str, str] | None = None
+):
+    if redaction_markers is None:
+        redaction_markers = {
+            "integration_password": f"redaction-{company_id}-1",
+            "integration_verify_token": f"redaction-{company_id}-2",
+            "webhook_secret_token": f"redaction-{company_id}-3",
+            "whatsapp_access_token": f"redaction-{company_id}-4",
+            "whatsapp_verify_token": f"redaction-{company_id}-5",
+            "audit_password_marker": f"redaction-{company_id}-6",
+            "audit_secret_token_marker": f"redaction-{company_id}-7",
+            "audit_verify_token_marker": f"redaction-{company_id}-8",
+        }
     contact = Contact(
         company_id=company_id,
         name="Cliente Export",
@@ -186,8 +201,8 @@ def _prepare_export_dataset(db: Session, company_id):
         company_id=company_id,
         phone_number_id="phone-1",
         business_account_id="business-1",
-        access_token_encrypted="encrypted-access-token",
-        verify_token="verify-secret-token",
+        access_token_encrypted=redaction_markers["whatsapp_access_token"],
+        verify_token=redaction_markers["whatsapp_verify_token"],
         status="active",
     )
     db.add_all([funnel_step, whatsapp_account])
@@ -259,14 +274,16 @@ def _prepare_export_dataset(db: Session, company_id):
         company_id=company_id,
         payload=IntegrationCreate(
             type="email",
-            credentials='{"smtp_password":"smtp-secret"}',
+            credentials=json.dumps(
+                {"smtp_password": redaction_markers["integration_password"]}
+            ),
             config={
                 "provider": "smtp",
                 "from_email": "notificaciones@acme.com",
                 "smtp_host": "smtp.acme.com",
                 "smtp_port": "587",
                 "smtp_user": "mailer",
-                "verify_token": "verify-secret",
+                "verify_token": redaction_markers["integration_verify_token"],
             },
         ),
     )
@@ -276,7 +293,7 @@ def _prepare_export_dataset(db: Session, company_id):
         payload=OutboundWebhookCreate(
             event_type="order.paid",
             target_url="https://example.com/hooks/orders",
-            secret_token="webhook-secret",
+            secret_token=redaction_markers["webhook_secret_token"],
             active=True,
         ),
     )
@@ -299,9 +316,11 @@ def _prepare_export_dataset(db: Session, company_id):
         entity_id=integration.id,
         summary="Integration updated",
         metadata={
-            "credentials": {"password": "smtp-secret"},
-            "secret_token": "webhook-secret",
-            "nested": {"verify_token": "verify-secret"},
+            "credentials": {
+                "password": redaction_markers["audit_password_marker"]
+            },
+            "secret_token": redaction_markers["audit_secret_token_marker"],
+            "nested": {"verify_token": redaction_markers["audit_verify_token_marker"]},
         },
     )
     record_audit(
@@ -312,7 +331,7 @@ def _prepare_export_dataset(db: Session, company_id):
         entity_type="outbound_webhook",
         entity_id=webhook.id,
         summary="Webhook updated",
-        metadata={"secret_token": "webhook-secret"},
+        metadata={"secret_token": redaction_markers["audit_secret_token_marker"]},
     )
     db.commit()
     return {
@@ -364,6 +383,270 @@ def test_superadmin_cross_tenant_access_is_audited(db, client):
     )
     assert user_access_log.actor_user_id == superadmin.id
     assert user_access_log.metadata_json["access_scope"] == "cross_tenant"
+
+
+def test_superadmin_offboarding_export_survives_audit_failure(db, client, monkeypatch):
+    target_company, owner = bootstrap_company(db, "Acme")
+    swateck_company, _ = bootstrap_company(db, "Swateck")
+    superadmin = _create_superadmin(db, swateck_company.id)
+    redaction_markers = {
+        "integration_password": f"redaction-{target_company.id}-1",
+        "integration_verify_token": f"redaction-{target_company.id}-2",
+        "webhook_secret_token": f"redaction-{target_company.id}-3",
+        "whatsapp_access_token": f"redaction-{target_company.id}-4",
+        "whatsapp_verify_token": f"redaction-{target_company.id}-5",
+        "audit_password_marker": f"redaction-{target_company.id}-6",
+        "audit_secret_token_marker": f"redaction-{target_company.id}-7",
+        "audit_verify_token_marker": f"redaction-{target_company.id}-8",
+    }
+    _prepare_export_dataset(db, target_company.id, redaction_markers)
+
+    audit_calls = {"count": 0}
+
+    def boom(*args, **kwargs):
+        audit_calls["count"] += 1
+        raise RuntimeError("audit failed")
+
+    monkeypatch.setattr("app.offboarding.service.record_audit", boom)
+
+    response = client.get(
+        f"/api/v1/offboarding/export/{target_company.id}",
+        headers=auth_headers(superadmin),
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/zip")
+    assert str(target_company.id) in response.headers["content-disposition"]
+    assert audit_calls["count"] >= 1
+
+    archive = zipfile.ZipFile(io.BytesIO(response.content))
+    names = archive.namelist()
+    expected_headers = {
+        "company.txt": [
+            "id",
+            "name",
+            "status",
+            "contact_email",
+            "contact_phone",
+            "currency",
+            "timezone",
+            "business_mode",
+            "logo_url",
+            "banner_url",
+            "profile_url",
+            "created_at",
+            "updated_at",
+        ],
+        "users.txt": ["id", "name", "email", "role", "status", "module_permissions_json", "created_at", "updated_at"],
+        "contacts.txt": ["id", "name", "phone", "email", "source", "status", "metadata_json", "created_at", "updated_at"],
+        "conversations.txt": [
+            "id",
+            "contact_id",
+            "channel",
+            "status",
+            "assigned_user_id",
+            "funnel_id",
+            "funnel_step_id",
+            "current_step",
+            "last_message_at",
+            "unread_count",
+            "created_at",
+            "updated_at",
+        ],
+        "messages.txt": [
+            "id",
+            "conversation_id",
+            "external_message_id",
+            "sender_type",
+            "message_type",
+            "content",
+            "metadata_json",
+            "created_at",
+        ],
+        "products.txt": [
+            "id",
+            "name",
+            "description",
+            "sku",
+            "price",
+            "currency",
+            "status",
+            "whatsapp_catalog_id",
+            "whatsapp_product_retailer_id",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        ],
+        "ai_agents.txt": [
+            "id",
+            "name",
+            "system_prompt",
+            "conversation_objective",
+            "conversation_guide",
+            "security_rules",
+            "tone",
+            "rules_json",
+            "active",
+            "created_at",
+            "updated_at",
+        ],
+        "ai_faq_entries.txt": ["id", "question", "answer", "active", "created_at", "updated_at"],
+        "ai_interactive_templates.txt": [
+            "id",
+            "name",
+            "action_key",
+            "template_type",
+            "body_text",
+            "footer_text",
+            "button_text",
+            "section_title",
+            "options_json",
+            "usage_instruction",
+            "trigger_mode",
+            "trigger_fields_json",
+            "active",
+            "created_at",
+            "updated_at",
+        ],
+        "sales_funnels.txt": [
+            "id",
+            "name",
+            "system_key",
+            "description",
+            "status",
+            "is_default",
+            "welcome_message",
+            "capture_fields_json",
+            "assignment_criteria",
+            "created_at",
+            "updated_at",
+        ],
+        "sales_funnel_steps.txt": [
+            "id",
+            "funnel_id",
+            "position",
+            "name",
+            "code",
+            "prompt",
+            "objectives_json",
+            "transition_criteria",
+            "status",
+            "config_json",
+            "created_at",
+            "updated_at",
+        ],
+        "whatsapp_accounts.txt": [
+            "id",
+            "phone_number_id",
+            "business_account_id",
+            "status",
+            "access_token_configured",
+            "verify_token_configured",
+            "created_at",
+            "updated_at",
+        ],
+        "inventory.txt": ["id", "product_id", "quantity_available", "quantity_reserved", "updated_at"],
+        "orders.txt": [
+            "id",
+            "contact_id",
+            "conversation_id",
+            "status",
+            "total",
+            "currency",
+            "payment_provider",
+            "payment_reference",
+            "payment_status",
+            "metadata_json",
+            "created_at",
+            "updated_at",
+        ],
+        "order_items.txt": ["id", "order_id", "product_id", "quantity", "unit_price", "total", "created_at"],
+        "appointments.txt": [
+            "id",
+            "contact_id",
+            "conversation_id",
+            "assigned_user_id",
+            "scheduled_at",
+            "duration_minutes",
+            "status",
+            "notes",
+            "external_calendar_event_id",
+            "calendar_sync_status",
+            "calendar_synced_at",
+            "calendar_sync_obsolete_at",
+            "created_at",
+            "updated_at",
+        ],
+        "events.txt": ["id", "event_type", "status", "processed_at", "payload_json", "created_at"],
+        "audit_logs.txt": [
+            "id",
+            "actor_user_id",
+            "actor_role",
+            "action",
+            "entity_type",
+            "entity_id",
+            "summary",
+            "metadata_json",
+            "created_at",
+        ],
+        "integrations.txt": ["id", "type", "status", "credentials_configured", "config_json", "created_at", "updated_at"],
+        "outbound_webhooks.txt": ["id", "event_type", "target_url", "active", "secret_configured", "created_at", "updated_at"],
+    }
+    expected = {
+        "company.txt",
+        "users.txt",
+        "contacts.txt",
+        "conversations.txt",
+        "messages.txt",
+        "products.txt",
+        "ai_agents.txt",
+        "ai_faq_entries.txt",
+        "ai_interactive_templates.txt",
+        "sales_funnels.txt",
+        "sales_funnel_steps.txt",
+        "whatsapp_accounts.txt",
+        "inventory.txt",
+        "orders.txt",
+        "order_items.txt",
+        "appointments.txt",
+        "events.txt",
+        "audit_logs.txt",
+        "integrations.txt",
+        "outbound_webhooks.txt",
+    }
+    assert expected.issubset(set(names))
+
+    for name in expected:
+        content = archive.read(name).decode("utf-8")
+        rows = list(csv.reader(io.StringIO(content), delimiter="|"))
+        assert rows, name
+        assert len(rows) >= 2, name
+        assert rows[0] == expected_headers[name], name
+        for row in rows[1:]:
+            assert len(row) == len(rows[0]), name
+        assert str(swateck_company.id) not in content, name
+
+    assert "Cliente Export" in archive.read("contacts.txt").decode("utf-8")
+    assert "Producto Export" in archive.read("products.txt").decode("utf-8")
+    assert "Asistente Export" in archive.read("ai_agents.txt").decode("utf-8")
+    assert "Swateck" not in archive.read("contacts.txt").decode("utf-8")
+    assert "Swateck" not in archive.read("products.txt").decode("utf-8")
+    assert "Swateck" not in archive.read("ai_agents.txt").decode("utf-8")
+
+    company_text = archive.read("company.txt").decode("utf-8")
+    assert "Acme" in company_text
+    assert str(target_company.id) in company_text
+    assert "Swateck" not in company_text
+
+    for name in expected:
+        content = archive.read(name).decode("utf-8")
+        for marker in redaction_markers.values():
+            assert marker not in content, name
+
+    users_text = archive.read("users.txt").decode("utf-8")
+    assert owner.name in users_text
+    assert owner.email in users_text
+    assert "superadmin@swateck.com" not in users_text
 
 
 def test_sensitive_writes_are_audited(db):

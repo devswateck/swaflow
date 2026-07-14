@@ -1,7 +1,7 @@
 from decimal import Decimal
 from uuid import uuid4
 
-from sqlalchemy import JSON, ForeignKey, Numeric, String, Text, UniqueConstraint
+from sqlalchemy import JSON, ForeignKey, Index, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
@@ -13,6 +13,9 @@ class Order(Base, IdMixin, TenantMixin, TimestampMixin):
     __tablename__ = "orders"
     __table_args__ = (
         UniqueConstraint("company_id", "idempotency_key", name="uq_orders_company_idempotency_key"),
+        Index("ix_orders_company_created_at", "company_id", "created_at"),
+        Index("ix_orders_company_status_created_at", "company_id", "status", "created_at"),
+        Index("ix_orders_company_conversation_id", "company_id", "conversation_id"),
     )
 
     contact_id: Mapped[object] = mapped_column(
@@ -42,6 +45,9 @@ class Order(Base, IdMixin, TenantMixin, TimestampMixin):
 
 class OrderItem(Base, IdMixin, TenantMixin, CreatedAtMixin):
     __tablename__ = "order_items"
+    __table_args__ = (
+        Index("ix_order_items_company_product_order_id", "company_id", "product_id", "order_id"),
+    )
 
     order_id: Mapped[object] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("orders.id"), nullable=False, index=True

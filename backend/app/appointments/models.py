@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import Uuid
 
@@ -10,6 +10,16 @@ from app.core.models import IdMixin, TenantMixin, TimestampMixin
 
 class Appointment(Base, IdMixin, TenantMixin, TimestampMixin):
     __tablename__ = "appointments"
+    __table_args__ = (
+        Index("ix_appointments_company_scheduled_at", "company_id", "scheduled_at"),
+        Index(
+            "ix_appointments_company_assigned_user_scheduled_at",
+            "company_id",
+            "assigned_user_id",
+            "scheduled_at",
+        ),
+        Index("ix_appointments_company_conversation_id", "company_id", "conversation_id"),
+    )
 
     contact_id: Mapped[object] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("contacts.id"), nullable=False, index=True

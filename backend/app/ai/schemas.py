@@ -68,6 +68,7 @@ class AiOperationalScheduleRead(BaseModel):
     weekend: AiOperationalWindowRead = Field(
         default_factory=lambda: AiOperationalWindowRead(start="08:00", end="14:00")
     )
+    default_appointment_duration_minutes: int = 60
     outside_hours_behavior: str = "handoff"
     inside_hours_behavior: str = "normal"
     outside_hours_message: str = ""

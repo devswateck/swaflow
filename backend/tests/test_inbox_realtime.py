@@ -15,7 +15,11 @@ from app import models  # noqa: F401
 from app.auth.service import build_token
 from app.appointments.models import Appointment
 from app.appointments.schemas import AppointmentCreate
+from app.appointments.schemas import AppointmentUpdate
 from app.appointments.service import create_appointment
+from app.appointments.service import update_appointment
+from app.ai.schemas import AiAgentCreate
+from app.ai.service import create_agent
 from app.companies.schemas import CompanyCreate
 from app.companies.service import create_company_with_owner
 from app.core.database import Base, get_db
@@ -1463,11 +1467,196 @@ def test_create_appointment_persists_manual_cita_and_keeps_sync_honest_without_c
     assert len(list_response.json()) == 1
 
 
+def test_list_appointments_filters_by_date_status_contact_assignee_and_source(db, client):
+    company, owner = bootstrap_company(db, "Acme")
+    assistant = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Asesor",
+            email="advisor@acme.example.com",
+            password="super-secret-123",
+            role="agent",
+            module_permissions={"appointments": True},
+        ),
+    )
+    first_contact = Contact(company_id=company.id, name="Cliente 1", phone="+573001112201")
+    second_contact = Contact(company_id=company.id, name="Cliente 2", phone="+573001112202")
+    third_contact = Contact(company_id=company.id, name="Cliente 3", phone="+573001112203")
+    db.add_all([first_contact, second_contact, third_contact])
+    db.commit()
+
+    inbox_conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=second_contact.id, channel="whatsapp"),
+    )
+
+    manual_early = create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=first_contact.id,
+            conversation_id=None,
+            assigned_user_id=owner.id,
+            scheduled_at=datetime(2026, 7, 10, 10, 0, tzinfo=UTC),
+            duration_minutes=30,
+            notes="manual-early",
+        ),
+    )
+    target = create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=second_contact.id,
+            conversation_id=inbox_conversation.id,
+            assigned_user_id=assistant.id,
+            scheduled_at=datetime(2026, 7, 11, 10, 0, tzinfo=UTC),
+            duration_minutes=45,
+            notes="inbox-target",
+        ),
+    )
+    manual_late = create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=third_contact.id,
+            conversation_id=None,
+            assigned_user_id=assistant.id,
+            scheduled_at=datetime(2026, 7, 12, 10, 0, tzinfo=UTC),
+            duration_minutes=30,
+            notes="manual-late",
+        ),
+    )
+
+    update_appointment(
+        db,
+        company_id=company.id,
+        appointment_id=target.id,
+        payload=AppointmentUpdate(status="cancelled"),
+    )
+
+    response = client.get(
+        "/api/v1/appointments",
+        headers=auth_headers(owner),
+        params={
+            "scheduled_from": "2026-07-11",
+            "scheduled_to": "2026-07-11",
+            "status": "cancelled",
+            "contact_id": str(second_contact.id),
+            "assigned_user_id": str(assistant.id),
+            "source": "inbox",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["id"] == str(target.id)
+    assert payload[0]["conversation_id"] == str(inbox_conversation.id)
+    assert payload[0]["status"] == "cancelled"
+
+
+def test_list_appointments_keeps_focused_row_when_filtered(db, client):
+    company, owner = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112211")
+    db.add(contact)
+    db.commit()
+
+    earliest = create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=contact.id,
+            conversation_id=None,
+            assigned_user_id=None,
+            scheduled_at=datetime(2026, 7, 13, 9, 0, tzinfo=UTC),
+            duration_minutes=30,
+            notes="primer turno",
+        ),
+    )
+    focused = create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=contact.id,
+            conversation_id=None,
+            assigned_user_id=None,
+            scheduled_at=datetime(2026, 7, 14, 9, 0, tzinfo=UTC),
+            duration_minutes=30,
+            notes="turno enfocado",
+        ),
+    )
+
+    response = client.get(
+        f"/api/v1/appointments?limit=1&offset=0&scheduled_from=2026-07-13&scheduled_to=2026-07-14&source=manual&focus_appointment_id={focused.id}",
+        headers=auth_headers(owner),
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["id"] == str(focused.id)
+    assert payload[0]["notes"] == "turno enfocado"
+    assert payload[0]["conversation_id"] is None
+    assert payload[0]["id"] != str(earliest.id)
+
+
+def test_create_appointment_uses_configured_default_duration_when_missing(db, client):
+    company, owner = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config={
+                "draft": {
+                    "schedule": {
+                        "timezone": "America/Bogota",
+                        "weekday": {"start": "09:00", "end": "17:00"},
+                        "weekend": {"start": "10:00", "end": "13:00"},
+                        "default_appointment_duration_minutes": 45,
+                    }
+                }
+            },
+            active=True,
+        ),
+    )
+
+    response = client.post(
+        "/api/v1/appointments",
+        headers=auth_headers(owner),
+        json={
+            "contact_id": str(contact.id),
+            "conversation_id": None,
+            "assigned_user_id": None,
+            "scheduled_at": datetime(2026, 6, 30, 16, 0, tzinfo=UTC).isoformat(),
+            "notes": "Cita con duración por defecto",
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["duration_minutes"] == 45
+
+
 def test_list_appointments_orders_by_scheduled_at_ascending(db, client):
     company, owner = bootstrap_company(db, "Acme")
     contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
     db.add(contact)
     db.commit()
+
+    later_slot = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
+    earlier_slot = datetime(2026, 7, 14, 10, 0, tzinfo=UTC)
 
     later_response = client.post(
         "/api/v1/appointments",
@@ -1476,7 +1665,7 @@ def test_list_appointments_orders_by_scheduled_at_ascending(db, client):
             "contact_id": str(contact.id),
             "conversation_id": None,
             "assigned_user_id": None,
-            "scheduled_at": (datetime.now(UTC).replace(microsecond=0) + timedelta(days=2)).isoformat(),
+            "scheduled_at": later_slot.isoformat(),
             "duration_minutes": 30,
             "notes": "Cita posterior",
         },
@@ -1489,7 +1678,7 @@ def test_list_appointments_orders_by_scheduled_at_ascending(db, client):
             "contact_id": str(contact.id),
             "conversation_id": None,
             "assigned_user_id": None,
-            "scheduled_at": (datetime.now(UTC).replace(microsecond=0) + timedelta(days=1)).isoformat(),
+            "scheduled_at": earlier_slot.isoformat(),
             "duration_minutes": 30,
             "notes": "Cita anterior",
         },
@@ -1508,6 +1697,9 @@ def test_list_appointments_can_focus_out_of_page_appointment(db, client):
     db.add(contact)
     db.commit()
 
+    earlier_slot = datetime(2026, 7, 14, 10, 0, tzinfo=UTC)
+    later_slot = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
+
     earlier_response = client.post(
         "/api/v1/appointments",
         headers=auth_headers(owner),
@@ -1515,7 +1707,7 @@ def test_list_appointments_can_focus_out_of_page_appointment(db, client):
             "contact_id": str(contact.id),
             "conversation_id": None,
             "assigned_user_id": None,
-            "scheduled_at": (datetime.now(UTC).replace(microsecond=0) + timedelta(days=1)).isoformat(),
+            "scheduled_at": earlier_slot.isoformat(),
             "duration_minutes": 30,
             "notes": "Cita anterior",
         },
@@ -1528,7 +1720,7 @@ def test_list_appointments_can_focus_out_of_page_appointment(db, client):
             "contact_id": str(contact.id),
             "conversation_id": None,
             "assigned_user_id": None,
-            "scheduled_at": (datetime.now(UTC).replace(microsecond=0) + timedelta(days=2)).isoformat(),
+            "scheduled_at": later_slot.isoformat(),
             "duration_minutes": 30,
             "notes": "Cita posterior",
         },
@@ -1545,7 +1737,9 @@ def test_list_appointments_can_focus_out_of_page_appointment(db, client):
     assert [item["notes"] for item in payload] == ["Cita posterior"]
 
 
-def test_create_appointment_links_inbox_context_and_reflects_in_conversation_events(db, client):
+def test_create_appointment_links_inbox_context_and_reflects_in_conversation_events(
+    db, client, monkeypatch
+):
     company, owner = bootstrap_company(db, "Acme")
     contact = Contact(company_id=company.id, name="Cliente Inbox", phone="+573001112233")
     db.add(contact)
@@ -1555,6 +1749,10 @@ def test_create_appointment_links_inbox_context_and_reflects_in_conversation_eve
         db,
         company_id=company.id,
         payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    monkeypatch.setattr(
+        "app.appointments.service.sync_appointment_with_calendar",
+        lambda *args, **kwargs: SimpleNamespace(external_event_id="calendar-1", raw={"provider": "mock"}),
     )
 
     response = client.post(
@@ -1581,6 +1779,25 @@ def test_create_appointment_links_inbox_context_and_reflects_in_conversation_eve
     assert detail_response.status_code == 200
     event_types = [event["event_type"] for event in detail_response.json()["events"]]
     assert "appointment.created" in event_types
+
+    appointment_id = payload["id"]
+    update_response = client.put(
+        f"/api/v1/appointments/{appointment_id}",
+        headers=auth_headers(owner),
+        json={
+            "notes": "Cita actualizada desde inbox",
+        },
+    )
+
+    assert update_response.status_code == 200
+
+    updated_detail_response = client.get(
+        f"/api/v1/conversations/{conversation.id}",
+        headers=auth_headers(owner),
+    )
+    assert updated_detail_response.status_code == 200
+    updated_event_types = [event["event_type"] for event in updated_detail_response.json()["events"]]
+    assert "appointment.updated" in updated_event_types
 
 
 def test_create_appointment_rejects_overlapping_busy_slot(db):

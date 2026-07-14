@@ -69,6 +69,25 @@ def test_additional_user_defaults_to_safe_modules(db):
     assert payload["module_permissions"] == default_module_permissions(role="agent")
 
 
+def test_current_user_payload_includes_company_currency(db, client):
+    company, owner = bootstrap_company(db, "Acme")
+
+    update_company(
+        db,
+        company_id=company.id,
+        current_company_id=company.id,
+        payload=CompanyUpdate(currency="USD"),
+    )
+
+    response = client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {build_token(owner)}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["company_currency"] == "USD"
+
+
 def test_module_permissions_can_enable_restricted_access_without_changing_role(db):
     company, _ = bootstrap_company(db, "Acme")
 

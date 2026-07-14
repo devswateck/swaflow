@@ -1,5 +1,5 @@
 # generated: 2026-06-10
-# last_updated: 2026-07-11
+# last_updated: 2026-07-14
 # project: Swaflow
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-06-10
-last_updated: 2026-07-11
+last_updated: 2026-07-14
 project: Swaflow
 project_key: NOKEY
 tracking_system: file-system
@@ -79,24 +79,24 @@ development_status:
   4-5-hacer-seguimiento-de-links-vencidos-sin-romper-la-verdad-del-backend: done
   epic-4-retrospective: done
 
-  epic-5: in-progress
+  epic-5: done
   5-1-crear-citas-desde-conversaciones-o-manualmente: done
   5-2-validar-disponibilidad-y-proponer-horarios-de-agenda: done
-  5-3-configurar-reglas-de-horario-y-duracion-de-citas: backlog
-  5-4-sincronizar-citas-con-calendario-externo-sin-bloquear-swaflow: backlog
-  5-5-filtrar-y-reflejar-citas-en-el-dashboard-y-el-hilo-de-conversacion: backlog
+  5-3-configurar-reglas-de-horario-y-duracion-de-citas: done
+  5-4-sincronizar-citas-con-calendario-externo-sin-bloquear-swaflow: done
+  5-5-filtrar-y-reflejar-citas-en-el-dashboard-y-el-hilo-de-conversacion: done
   epic-5-retrospective: optional
 
-  epic-6: backlog
-  6-1-ver-resumen-operativo-del-tenant-en-el-dashboard: backlog
-  6-2-visualizar-graficas-y-filtrar-metricas-del-dashboard: backlog
-  6-3-mantener-aislamiento-y-rendimiento-visible-en-el-dashboard: backlog
+  epic-6: done
+  6-1-ver-resumen-operativo-del-tenant-en-el-dashboard: done
+  6-2-visualizar-graficas-y-filtrar-metricas-del-dashboard: done
+  6-3-mantener-aislamiento-y-rendimiento-visible-en-el-dashboard: done
   epic-6-retrospective: optional
 
-  epic-7: backlog
-  7-1-operar-como-superadmin-con-acceso-auditado: backlog
-  7-2-registrar-auditoria-de-cambios-y-eventos-relevantes: backlog
-  7-3-exportar-la-informacion-completa-al-retiro-del-tenant: backlog
+  epic-7: done
+  7-1-operar-como-superadmin-con-acceso-auditado: done
+  7-2-registrar-auditoria-de-cambios-y-eventos-relevantes: done
+  7-3-exportar-la-informacion-completa-al-retiro-del-tenant: done
   epic-7-retrospective: optional
 
   epic-8: backlog

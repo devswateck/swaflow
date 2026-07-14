@@ -12,6 +12,7 @@ CONVERSATION_EVENT_TYPES = (
     "appointment.calendar_synced",
     "appointment.cancelled",
     "appointment.created",
+    "appointment.updated",
     "conversation.appointment_intent_prepared",
     "conversation.appointment_preference_selected",
     "conversation.assigned",

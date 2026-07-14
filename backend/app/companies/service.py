@@ -1,5 +1,6 @@
 import logging
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -31,6 +32,13 @@ def _audit_company_event(db: Session, **kwargs) -> None:
                 "entity_type": kwargs.get("entity_type"),
             },
         )
+
+
+def _validate_timezone(value: str) -> None:
+    try:
+        ZoneInfo(value)
+    except ZoneInfoNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid timezone") from exc
 
 
 def list_companies(
@@ -200,6 +208,8 @@ def update_company(
         actor_user=actor_user,
     )
     for field, value in payload.model_dump(exclude_unset=True).items():
+        if field == "timezone" and value is not None:
+            _validate_timezone(value)
         if field == "business_mode" and value is not None and value not in COMPANY_BUSINESS_MODES:
             if company.business_mode != value:
                 raise HTTPException(

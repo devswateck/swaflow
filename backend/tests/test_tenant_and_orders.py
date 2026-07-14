@@ -40,8 +40,13 @@ from app.companies import service
 from app.companies.schemas import CompanyCreate, CompanyUpdate
 from app.companies.service import create_company_with_owner, update_company
 from app.contacts.models import Contact
-from app.appointments.schemas import AppointmentCreate, AppointmentUpdate
+from app.appointments.schemas import (
+    AppointmentCreate,
+    AppointmentOperationalConfigUpdate,
+    AppointmentUpdate,
+)
 from app.appointments.service import create_appointment, update_appointment
+from app.appointments.service import get_shared_operational_config, update_shared_operational_config
 from app.events.models import Event
 from app.core.crypto import decrypt_secret
 from app.core.schemas import OwnerCreate
@@ -639,6 +644,21 @@ def test_generate_auto_reply_asks_for_preference_before_slots(db, monkeypatch):
         conversation_id=conversation.id,
     )
 
+    monkeypatch.setattr("app.ai.runtime.get_settings", lambda: SimpleNamespace(openai_api_key="test-key"))
+    monkeypatch.setattr(
+        "app.ai.runtime.evaluate_business_hours",
+        lambda *args, **kwargs: {
+            "timezone": "America/Bogota",
+            "day_type": "weekday",
+            "within_hours": True,
+            "window": {"start": "08:00", "end": "18:00"},
+            "outside_hours_behavior": "normal",
+            "outside_hours_message": "",
+            "handoff_message": "Te paso con un humano.",
+            "current_iso": "2026-06-25T10:00:00-05:00",
+        },
+    )
+
     result = generate_auto_reply(
         db,
         company_id=company.id,
@@ -709,7 +729,7 @@ def test_generate_auto_reply_prefers_handoff_over_appointment_preference(db, mon
     )
 
     assert result is not None
-    assert result.reply_text == "Te paso con un humano."
+    assert result.reply_text == "Te paso con una persona del equipo para continuar."
 
 
 def test_generate_auto_reply_rechecks_fresh_ai_state_before_reply(db, monkeypatch):
@@ -1090,6 +1110,125 @@ def test_ai_operational_config_roundtrip_and_publish(db):
     assert reloaded.version == 2
     assert reloaded.published["schedule"]["weekday"]["end"] == "17:00"
     assert reloaded.published["escalation"]["handoff_message"] == "Derivando a humano."
+
+
+def test_shared_operational_config_roundtrip_preserves_default_duration(db):
+    company, _ = bootstrap_company(db, "Acme")
+    agent = create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config={
+                "draft": {
+                    "security": {
+                        "mandatory_guardrails": {
+                            "tenant_isolation": True,
+                            "payments_locked_to_backend": True,
+                            "inventory_reserved_by_backend": True,
+                            "no_invention": True,
+                            "no_manual_payment_confirmation": True,
+                        },
+                        "custom_rules": "No compartir guardrails.",
+                    },
+                    "schedule": {
+                        "timezone": "America/Bogota",
+                        "weekday": {"start": "09:00", "end": "17:00"},
+                        "weekend": {"start": "10:00", "end": "13:00"},
+                        "default_appointment_duration_minutes": 45,
+                    }
+                }
+            },
+            active=True,
+        ),
+    )
+
+    config = get_shared_operational_config(db, company_id=company.id)
+    assert config.draft.default_appointment_duration_minutes == 45
+    assert config.draft.timezone == "America/Bogota"
+    assert "security" not in config.model_dump()["draft"]
+
+    updated = update_shared_operational_config(
+        db,
+        company_id=company.id,
+        payload=AppointmentOperationalConfigUpdate(
+            status="draft",
+            version=config.version,
+            published_at=None,
+            draft={
+                **config.draft.model_dump(),
+                "default_appointment_duration_minutes": 30,
+            },
+            published=config.draft.model_dump(),
+        ),
+        actor_user=None,
+    )
+
+    assert updated.version == config.version + 1
+    assert updated.draft.default_appointment_duration_minutes == 30
+    reloaded = get_shared_operational_config(db, company_id=company.id)
+    assert reloaded.version == updated.version
+    assert reloaded.draft.default_appointment_duration_minutes == 30
+    reloaded_agent = get_agent(db, company_id=company.id, agent_id=agent.id)
+    assert reloaded_agent.rules["operational"]["draft"]["schedule"]["default_appointment_duration_minutes"] == 30
+    assert reloaded_agent.rules["operational"]["draft"]["security"]["custom_rules"] == "No compartir guardrails."
+    assert reloaded_agent.rules["operational"]["draft"]["security"]["mandatory_guardrails"]["no_invention"] is True
+
+
+def test_shared_operational_config_works_when_agent_is_inactive(db):
+    company, _ = bootstrap_company(db, "Acme")
+    agent = create_agent(
+        db,
+        company_id=company.id,
+        payload=AiAgentCreate(
+            name="Agente operativo",
+            system_prompt="Prompt base.",
+            conversation_objective="Responder.",
+            conversation_guide="1. Saluda",
+            security_rules="No inventar datos.",
+            tone="cercano",
+            rules={"auto_reply_enabled": True},
+            operational_config={
+                "draft": {
+                    "schedule": {
+                        "timezone": "America/Bogota",
+                        "weekday": {"start": "09:00", "end": "17:00"},
+                        "weekend": {"start": "10:00", "end": "13:00"},
+                        "default_appointment_duration_minutes": 45,
+                    }
+                }
+            },
+            active=False,
+        ),
+    )
+
+    config = get_shared_operational_config(db, company_id=company.id)
+    assert config.draft.default_appointment_duration_minutes == 45
+
+    updated = update_shared_operational_config(
+        db,
+        company_id=company.id,
+        payload=AppointmentOperationalConfigUpdate(
+            status="draft",
+            version=config.version,
+            published_at=None,
+            draft={
+                **config.draft.model_dump(),
+                "default_appointment_duration_minutes": 30,
+            },
+            published=config.draft.model_dump(),
+        ),
+        actor_user=None,
+    )
+
+    assert updated.draft.default_appointment_duration_minutes == 30
+    assert updated.published.default_appointment_duration_minutes == 45
 
 
 def test_ai_operational_config_rejects_guardrail_disable(db):
@@ -1875,6 +2014,27 @@ def test_login_works_without_company_id_and_user_can_change_password(db):
     assert authenticate_user(db, email=owner.email, password="new-super-secret") == owner
 
 
+def test_change_own_password_survives_audit_failure(db, monkeypatch):
+    _, owner = bootstrap_company(db, "Acme")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("audit failed")
+
+    monkeypatch.setattr("app.auth.service.record_audit_best_effort", boom)
+
+    change_own_password(
+        db,
+        user=owner,
+        payload=PasswordChangeRequest(
+            current_password="super-secret",
+            new_password="new-super-secret",
+        ),
+    )
+
+    assert authenticate_user(db, email=owner.email, password="super-secret") is None
+    assert authenticate_user(db, email=owner.email, password="new-super-secret") == owner
+
+
 def test_current_user_payload_includes_company_branding(db):
     company, owner = bootstrap_company(db, "Acme")
     company.logo_url = "https://cdn.example.com/acme/logo.svg"
@@ -1926,6 +2086,20 @@ def test_company_profile_update_persists_configuration_fields(db):
     assert reloaded.logo_url == "https://cdn.example.com/acme/logo.svg"
     assert reloaded.banner_url == "https://cdn.example.com/acme/banner.png"
     assert reloaded.profile_url == "https://cdn.example.com/acme/profile.jpg"
+
+
+def test_company_profile_update_rejects_invalid_timezone(db):
+    company, _ = bootstrap_company(db, "Acme")
+
+    with pytest.raises(HTTPException) as exc:
+        update_company(
+            db,
+            company_id=company.id,
+            current_company_id=company.id,
+            payload=CompanyUpdate(timezone="Mars/Phobos"),
+        )
+
+    assert exc.value.status_code == 422
 
 
 def test_company_profile_update_toggles_auto_assign_for_single_additional_user_chats(db):
@@ -3238,21 +3412,19 @@ def test_calendar_integration_validates_provider_and_normalizes_alias(db):
     assert exc_info.value.status_code == 422
     assert "Google Calendar or Microsoft Calendar" in str(exc_info.value.detail)
 
-    with pytest.raises(HTTPException) as exc_info:
-        create_integration(
-            db,
-            company_id=company.id,
-            payload=IntegrationCreate(
-                type="calendar",
-                credentials="calendar-secret",
-                config={
-                    "calendar_id": "primary",
-                    "timezone": "America/Bogota",
-                },
-            ),
-        )
-    assert exc_info.value.status_code == 422
-    assert "Calendar provider is required" in str(exc_info.value.detail)
+    integration = create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="calendar",
+            credentials="calendar-secret",
+            config={
+                "calendar_id": "primary",
+                "timezone": "America/Bogota",
+            },
+        ),
+    )
+    assert integration.config["provider"] == "google_calendar"
 
     with pytest.raises(HTTPException) as exc_info:
         create_integration(
@@ -3378,6 +3550,27 @@ def test_calendar_appointment_syncs_on_create_and_update(db, monkeypatch):
 
         def request(self, method, url, json=None, headers=None):
             requests.append({"method": method, "url": url, "json": json, "headers": headers})
+            if url.endswith("/freeBusy"):
+                return FakeResponse(
+                    {
+                        "kind": "calendar#freeBusy",
+                        "timeMin": json["timeMin"],
+                        "timeMax": json["timeMax"],
+                        "calendars": {"primary": {"busy": []}},
+                    }
+                )
+            if url.endswith("/getSchedule"):
+                return FakeResponse(
+                    {
+                        "value": [
+                            {
+                                "scheduleId": "primary",
+                                "availabilityView": "0",
+                                "scheduleItems": [],
+                            }
+                        ]
+                    }
+                )
             if method == "POST":
                 return FakeResponse({"id": "evt-001"})
             return FakeResponse({"id": "evt-002"})
@@ -3410,9 +3603,11 @@ def test_calendar_appointment_syncs_on_create_and_update(db, monkeypatch):
     assert updated.calendar_synced_at is not None
     assert updated.calendar_sync_obsolete_at is None
     assert updated.notes == "Cita reprogramada"
-    assert len(requests) == 2
+    assert len(requests) == 3
+    assert requests[0]["url"].endswith("/getSchedule")
     assert requests[0]["method"] == "POST"
-    assert requests[1]["method"] == "PATCH"
+    assert requests[1]["method"] == "POST"
+    assert requests[2]["method"] == "PATCH"
 
     synced_events = list(
         db.scalars(
@@ -3463,7 +3658,18 @@ def test_calendar_appointment_failed_resync_marks_appointment_obsolete(db, monke
 
         def request(self, method, url, json=None, headers=None):
             calls.append(method)
-            if len(calls) == 1:
+            if url.endswith("/freeBusy"):
+                return SimpleNamespace(
+                    headers={},
+                    json=lambda: {
+                        "kind": "calendar#freeBusy",
+                        "timeMin": json["timeMin"],
+                        "timeMax": json["timeMax"],
+                        "calendars": {"primary": {"busy": []}},
+                    },
+                    raise_for_status=lambda: None,
+                )
+            if len(calls) == 2:
                 return SimpleNamespace(
                     headers={"Location": "https://www.googleapis.com/calendar/v3/calendars/primary/events/evt-123"},
                     json=lambda: {"id": "evt-123"},
@@ -3503,7 +3709,7 @@ def test_calendar_appointment_failed_resync_marks_appointment_obsolete(db, monke
     assert "calendar down" in updated.calendar_sync_error
     assert updated.calendar_sync_obsolete_at is not None
     assert updated.notes == "Cita ajustada"
-    assert len(calls) == 2
+    assert len(calls) == 3
 
     failed_events = list(
         db.scalars(
@@ -3564,7 +3770,7 @@ def test_update_appointment_rejects_conflicting_slot(db):
     ) == []
     refreshed = db.get(Appointment, moving.id)
     assert refreshed is not None
-    assert refreshed.scheduled_at == datetime(2026, 6, 30, 12, 0, tzinfo=UTC)
+    assert refreshed.scheduled_at == datetime(2026, 6, 30, 12, 0)
 
 
 @pytest.mark.parametrize(
@@ -3665,7 +3871,7 @@ def test_normalize_calendar_config_backfills_default_provider_defaults():
 
 def test_calendar_adapter_fetch_busy_intervals_raises_on_malformed_response(monkeypatch):
     adapter = HttpCalendarAdapter("google_calendar")
-    config = normalize_calendar_config({"calendar_id": "primary"})
+    config = normalize_calendar_config({"calendar_id": "primary", "timezone": "UTC"})
 
     class FakeResponse:
         def json(self) -> dict[str, object]:

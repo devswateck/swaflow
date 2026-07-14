@@ -4,10 +4,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
 from app.appointments.models import Appointment
+from app.appointments.schemas import (
+    AppointmentOperationalConfigRead,
+    AppointmentOperationalConfigUpdate,
+)
 from app.appointments.schemas import (
     AppointmentAvailabilityOption,
     AppointmentAvailabilityRead,
@@ -16,7 +20,11 @@ from app.appointments.schemas import (
     AppointmentUpdate,
 )
 from app.ai.models import AiAgent
-from app.ai.operational import build_operational_config, get_effective_operational_section
+from app.ai.operational import (
+    build_operational_config,
+    get_default_appointment_duration_minutes as get_operational_default_appointment_duration_minutes,
+    get_effective_operational_section,
+)
 from app.audit.service import record_audit_best_effort
 from app.companies.models import Company
 from app.contacts.service import get_contact
@@ -109,6 +117,11 @@ def _get_company_operational_section(db: Session, *, company_id: UUID) -> tuple[
     if isinstance(schedule, dict):
         timezone_name = str(schedule.get("timezone") or timezone_name or "UTC")
     return section, _normalize_timezone(timezone_name)
+
+
+def _get_default_duration_minutes(section: dict) -> int:
+    operational_config = {"draft": section, "published": section, "status": "draft", "version": 1}
+    return get_operational_default_appointment_duration_minutes(operational_config)
 
 
 def _preferred_window(period: str) -> dict[str, str]:
@@ -331,26 +344,80 @@ def _mark_calendar_sync_failure(appointment: Appointment, reason: Exception) -> 
     return status_value
 
 
+def _appointment_list_stmt(
+    db: Session,
+    *,
+    company_id: UUID,
+    scheduled_from: date | None = None,
+    scheduled_to: date | None = None,
+    status: str | None = None,
+    contact_id: UUID | None = None,
+    assigned_user_id: UUID | None = None,
+    source: str | None = None,
+) -> Select:
+    company = _get_company(db, company_id=company_id)
+    tzinfo = _normalize_timezone(company.timezone)
+    stmt = select(Appointment).where(Appointment.company_id == company_id)
+
+    if scheduled_from is not None:
+        range_start = datetime.combine(scheduled_from, time.min, tzinfo=tzinfo).astimezone(UTC)
+        stmt = stmt.where(Appointment.scheduled_at >= range_start)
+    if scheduled_to is not None:
+        range_end = datetime.combine(scheduled_to + timedelta(days=1), time.min, tzinfo=tzinfo).astimezone(UTC)
+        stmt = stmt.where(Appointment.scheduled_at < range_end)
+    if status:
+        stmt = stmt.where(Appointment.status == status)
+    if contact_id is not None:
+        stmt = stmt.where(Appointment.contact_id == contact_id)
+    if assigned_user_id is not None:
+        stmt = stmt.where(Appointment.assigned_user_id == assigned_user_id)
+    if source == "inbox":
+        stmt = stmt.where(Appointment.conversation_id.is_not(None))
+    elif source == "manual":
+        stmt = stmt.where(Appointment.conversation_id.is_(None))
+
+    return stmt.order_by(Appointment.scheduled_at.asc(), Appointment.created_at.asc(), Appointment.id.asc())
+
+
 def list_appointments(
-    db: Session, *, company_id: UUID, limit: int, offset: int, focus_appointment_id: UUID | None = None
+    db: Session,
+    *,
+    company_id: UUID,
+    limit: int,
+    offset: int,
+    focus_appointment_id: UUID | None = None,
+    scheduled_from: date | None = None,
+    scheduled_to: date | None = None,
+    status: str | None = None,
+    contact_id: UUID | None = None,
+    assigned_user_id: UUID | None = None,
+    source: str | None = None,
 ) -> list[Appointment]:
-    appointments = list(
-        db.scalars(
-            select(Appointment)
-            .where(Appointment.company_id == company_id)
-            .order_by(Appointment.scheduled_at.asc(), Appointment.created_at.asc())
-            .limit(limit)
-            .offset(offset)
-        )
+    stmt = _appointment_list_stmt(
+        db,
+        company_id=company_id,
+        scheduled_from=scheduled_from,
+        scheduled_to=scheduled_to,
+        status=status,
+        contact_id=contact_id,
+        assigned_user_id=assigned_user_id,
+        source=source,
     )
+    appointments = list(db.scalars(stmt.limit(limit).offset(offset)))
     if focus_appointment_id is None or any(appointment.id == focus_appointment_id for appointment in appointments):
         return appointments
 
     focused_appointment = db.scalar(
-        select(Appointment).where(
-            Appointment.company_id == company_id,
-            Appointment.id == focus_appointment_id,
-        )
+        _appointment_list_stmt(
+            db,
+            company_id=company_id,
+            scheduled_from=scheduled_from,
+            scheduled_to=scheduled_to,
+            status=status,
+            contact_id=contact_id,
+            assigned_user_id=assigned_user_id,
+            source=source,
+        ).where(Appointment.id == focus_appointment_id)
     )
     if focused_appointment is None:
         return appointments
@@ -383,6 +450,7 @@ def get_appointment_availability(
     if payload.conversation_id is not None:
         get_conversation(db, company_id=company_id, conversation_id=payload.conversation_id)
     section, tzinfo = _get_company_operational_section(db, company_id=company_id)
+    duration_minutes = payload.duration_minutes or _get_default_duration_minutes(section)
     now_local = datetime.now(tzinfo)
     start_day = (now_local + timedelta(days=1)).date()
     effective_horizon_days = min(payload.horizon_days, DEFAULT_AVAILABILITY_HORIZON_DAYS)
@@ -416,7 +484,7 @@ def get_appointment_availability(
         day_slots = _candidate_slots_for_day(
             day_start=day_window[0],
             day_end=day_window[1],
-            duration_minutes=payload.duration_minutes,
+            duration_minutes=duration_minutes,
             busy_intervals=combined_busy_intervals,
             horizon_end=range_end,
         )
@@ -435,7 +503,7 @@ def get_appointment_availability(
             payload={
                 "conversation_id": str(payload.conversation_id),
                 "preferred_period": payload.preferred_period,
-                "duration_minutes": payload.duration_minutes,
+                "duration_minutes": duration_minutes,
                 "horizon_days": effective_horizon_days,
                 "max_options": 3,
                 "selected_at": datetime.now(UTC).isoformat(),
@@ -447,7 +515,7 @@ def get_appointment_availability(
         company_id=company_id,
         timezone=getattr(tzinfo, "key", str(tzinfo)),
         preferred_period=payload.preferred_period,
-        duration_minutes=payload.duration_minutes,
+        duration_minutes=duration_minutes,
         horizon_days=effective_horizon_days,
         max_options=3,
         calendar_integration_active=calendar_active,
@@ -541,11 +609,13 @@ def create_appointment(
         conversation_id=payload.conversation_id,
         assigned_user_id=payload.assigned_user_id,
     )
+    section, _ = _get_company_operational_section(db, company_id=company_id)
+    duration_minutes = payload.duration_minutes or _get_default_duration_minutes(section)
     _ensure_appointment_slot_available(
         db,
         company_id=company_id,
         scheduled_at=payload.scheduled_at,
-        duration_minutes=payload.duration_minutes,
+        duration_minutes=duration_minutes,
     )
     appointment = Appointment(
         company_id=company_id,
@@ -553,7 +623,7 @@ def create_appointment(
         conversation_id=payload.conversation_id,
         assigned_user_id=payload.assigned_user_id,
         scheduled_at=payload.scheduled_at,
-        duration_minutes=payload.duration_minutes,
+        duration_minutes=duration_minutes,
         notes=payload.notes,
     )
     db.add(appointment)
@@ -674,9 +744,16 @@ def update_appointment(
     appointment = get_appointment(db, company_id=company_id, appointment_id=appointment_id)
     data = payload.model_dump(exclude_unset=True)
     _validate_links(db, company_id=company_id, assigned_user_id=data.get("assigned_user_id"))
+    if any(key in data and data[key] is None for key in ("scheduled_at", "duration_minutes")):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Use omission, not null, for appointment updates",
+        )
     if {"scheduled_at", "duration_minutes"} & data.keys():
         next_scheduled_at = data.get("scheduled_at", appointment.scheduled_at)
-        next_duration_minutes = data.get("duration_minutes", appointment.duration_minutes)
+        next_duration_minutes = (
+            data.get("duration_minutes") if data.get("duration_minutes") is not None else appointment.duration_minutes
+        )
         _ensure_appointment_slot_available(
             db,
             company_id=company_id,
@@ -688,6 +765,28 @@ def update_appointment(
         setattr(appointment, field, value)
     db.commit()
     db.refresh(appointment)
+    create_event(
+        db,
+        company_id=company_id,
+        event_type="appointment.updated",
+        payload={
+            "appointment_id": str(appointment.id),
+            "conversation_id": str(appointment.conversation_id) if appointment.conversation_id else None,
+            "scheduled_at": appointment.scheduled_at.isoformat(),
+            "status": appointment.status,
+        },
+    )
+    db.commit()
+    realtime_manager.publish(
+        company_id,
+        "appointment.updated",
+        {
+            "appointment_id": str(appointment.id),
+            "conversation_id": str(appointment.conversation_id) if appointment.conversation_id else None,
+            "scheduled_at": appointment.scheduled_at.isoformat(),
+            "status": appointment.status,
+        },
+    )
     record_audit_best_effort(
         db,
         company_id=company_id,
@@ -769,6 +868,92 @@ def update_appointment(
         )
         db.refresh(appointment)
     return appointment
+
+
+def _shared_schedule_from_operational_config(operational_config: dict) -> AppointmentOperationalConfigRead:
+    draft_section = operational_config.get("draft") if isinstance(operational_config, dict) else {}
+    published_section = operational_config.get("published") if isinstance(operational_config, dict) else {}
+    draft_schedule = draft_section.get("schedule") if isinstance(draft_section, dict) else {}
+    published_schedule = published_section.get("schedule") if isinstance(published_section, dict) else {}
+    if not isinstance(published_schedule, dict):
+        published_schedule = draft_schedule if isinstance(draft_schedule, dict) else {}
+    return AppointmentOperationalConfigRead(
+        status=str(operational_config.get("status") or "draft"),
+        version=int(operational_config.get("version") or 1),
+        published_at=operational_config.get("published_at"),
+        draft=draft_schedule if isinstance(draft_schedule, dict) else {},
+        published=published_schedule if isinstance(published_schedule, dict) else {},
+    )
+
+
+def get_shared_operational_config(db: Session, *, company_id: UUID) -> AppointmentOperationalConfigRead:
+    agent = db.scalar(
+        select(AiAgent)
+        .where(AiAgent.company_id == company_id)
+        .order_by(AiAgent.updated_at.desc(), AiAgent.created_at.desc())
+    )
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI agent not found")
+    operational_config = build_operational_config(
+        agent.rules if isinstance(agent.rules, dict) else {},
+        fallback_timezone=_get_company(db, company_id=company_id).timezone,
+    )
+    return _shared_schedule_from_operational_config(operational_config)
+
+
+def update_shared_operational_config(
+    db: Session,
+    *,
+    company_id: UUID,
+    payload: AppointmentOperationalConfigUpdate,
+    actor_user: User | None = None,
+) -> AppointmentOperationalConfigRead:
+    from app.ai.service import update_operational_config as update_ai_operational_config
+
+    agent = db.scalar(
+        select(AiAgent)
+        .where(AiAgent.company_id == company_id)
+        .order_by(AiAgent.updated_at.desc(), AiAgent.created_at.desc())
+    )
+    if agent is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="AI agent not found")
+    operational_config = build_operational_config(
+        agent.rules if isinstance(agent.rules, dict) else {},
+        fallback_timezone=_get_company(db, company_id=company_id).timezone,
+    )
+    current_config = _shared_schedule_from_operational_config(operational_config)
+    if payload.version != current_config.version:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Agenda config changed; reload and retry",
+        )
+    draft_section = operational_config.get("draft") if isinstance(operational_config, dict) else {}
+    published_section = operational_config.get("published") if isinstance(operational_config, dict) else {}
+    next_operational_config = {
+        "status": payload.status,
+        "version": current_config.version + 1,
+        "published_at": payload.published_at,
+        "draft": {
+            **(draft_section if isinstance(draft_section, dict) else {}),
+            "schedule": payload.draft.model_dump(),
+        },
+        "published": {
+            **(published_section if isinstance(published_section, dict) else {}),
+            "schedule": payload.published.model_dump(),
+        },
+    }
+    updated_agent = update_ai_operational_config(
+        db,
+        company_id=company_id,
+        agent_id=agent.id,
+        payload=next_operational_config,
+        actor_user=actor_user,
+    )
+    updated_operational_config = build_operational_config(
+        updated_agent.rules if isinstance(updated_agent.rules, dict) else {},
+        fallback_timezone=_get_company(db, company_id=company_id).timezone,
+    )
+    return _shared_schedule_from_operational_config(updated_operational_config)
 
 
 def cancel_appointment(

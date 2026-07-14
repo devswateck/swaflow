@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, ForeignKey, String, Text
+from sqlalchemy import JSON, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
@@ -8,6 +8,7 @@ from app.core.models import CreatedAtMixin, IdMixin, TenantMixin
 
 class Message(Base, IdMixin, TenantMixin, CreatedAtMixin):
     __tablename__ = "messages"
+    __table_args__ = (Index("ix_messages_company_created_at", "company_id", "created_at"),)
 
     conversation_id: Mapped[object] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("conversations.id"), nullable=False, index=True

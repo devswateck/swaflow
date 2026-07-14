@@ -1,3 +1,4 @@
+import logging
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
@@ -7,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.auth.schemas import PasswordChangeRequest
-from app.audit.service import record_audit
+from app.audit.service import record_audit_best_effort
 from app.core.security import create_access_token, decode_token, hash_password, verify_password
 from app.users.permissions import effective_module_permissions, ensure_module_access
 from app.users.models import User
@@ -16,6 +17,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 SUPERADMIN_ROLE = "superadmin"
+logger = logging.getLogger(__name__)
 
 
 def is_superadmin(user: User) -> bool:
@@ -56,6 +58,7 @@ def build_current_user_payload(user: User) -> dict[str, object]:
         "role": user.role,
         "status": user.status,
         "module_permissions": effective_module_permissions(user),
+        "company_currency": company.currency if company is not None else None,
         "company_timezone": company.timezone if company is not None else None,
         "company_logo_url": company.logo_url if company is not None else None,
         "company_banner_url": company.banner_url if company is not None else None,
@@ -124,13 +127,20 @@ def change_own_password(
             detail="Current password is incorrect",
     )
     user.password_hash = hash_password(payload.new_password)
-    record_audit(
-        db,
-        company_id=user.company_id,
-        actor_user=actor_user or user,
-        action="auth.password_changed",
-        entity_type="user",
-        entity_id=user.id,
-        summary="User password updated",
-    )
     db.commit()
+    db.refresh(user)
+    try:
+        record_audit_best_effort(
+            db,
+            company_id=user.company_id,
+            actor_user=actor_user or user,
+            action="auth.password_changed",
+            entity_type="user",
+            entity_id=user.id,
+            summary="User password updated",
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist password change audit",
+            extra={"company_id": str(user.company_id), "user_id": str(user.id)},
+        )

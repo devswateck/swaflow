@@ -11,6 +11,7 @@ from app.companies.routes import router as companies_router
 from app.contacts.routes import router as contacts_router
 from app.conversations.routes import router as conversations_router
 from app.core.config import get_settings
+from app.dashboard.routes import router as dashboard_router
 from app.events.routes import router as events_router
 from app.funnels.routes import router as funnels_router
 from app.integrations.routes import router as integrations_router
@@ -60,6 +61,7 @@ api_router.include_router(auth_router)
 api_router.include_router(companies_router)
 api_router.include_router(users_router)
 api_router.include_router(contacts_router)
+api_router.include_router(dashboard_router)
 api_router.include_router(whatsapp_router)
 api_router.include_router(conversations_router)
 api_router.include_router(products_router)

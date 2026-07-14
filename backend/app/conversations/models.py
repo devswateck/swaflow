@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import Uuid
 
@@ -10,6 +10,12 @@ from app.core.models import IdMixin, TenantMixin, TimestampMixin
 
 class Conversation(Base, IdMixin, TenantMixin, TimestampMixin):
     __tablename__ = "conversations"
+    __table_args__ = (
+        Index("ix_conversations_company_created_at", "company_id", "created_at"),
+        Index("ix_conversations_company_last_message_at", "company_id", "last_message_at"),
+        Index("ix_conversations_company_assigned_user_status", "company_id", "assigned_user_id", "status"),
+        Index("ix_conversations_company_funnel_id_funnel_step_id", "company_id", "funnel_id", "funnel_step_id"),
+    )
 
     contact_id: Mapped[object] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("contacts.id"), nullable=False, index=True

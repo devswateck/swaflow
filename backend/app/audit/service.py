@@ -139,16 +139,28 @@ def record_superadmin_access(
     }
     if metadata:
         safe_metadata.update(metadata)
-    return record_audit_best_effort(
-        db,
-        company_id=company_id,
-        actor_user=actor_user,
-        action=action,
-        entity_type=entity_type,
-        entity_id=entity_id,
-        summary=summary,
-        metadata=safe_metadata,
-    )
+    try:
+        return record_audit_best_effort(
+            db,
+            company_id=company_id,
+            actor_user=actor_user,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            summary=summary,
+            metadata=safe_metadata,
+        )
+    except Exception:
+        logger.exception(
+            "Failed to persist superadmin access audit",
+            extra={
+                "company_id": str(company_id),
+                "actor_user_id": str(actor_user.id),
+                "action": action,
+                "entity_type": entity_type,
+            },
+        )
+        return None
 
 
 def list_audit_logs(

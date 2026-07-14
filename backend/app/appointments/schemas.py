@@ -4,6 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from app.ai.schemas import AiOperationalScheduleRead
 from app.core.schemas import TimestampedRead
 
 
@@ -12,7 +13,7 @@ class AppointmentCreate(BaseModel):
     conversation_id: UUID | None = None
     assigned_user_id: UUID | None = None
     scheduled_at: datetime
-    duration_minutes: int = Field(default=60, ge=15, le=480)
+    duration_minutes: int | None = Field(default=None, ge=15, le=480)
     notes: str | None = None
 
 
@@ -26,7 +27,7 @@ class AppointmentUpdate(BaseModel):
 
 class AppointmentAvailabilityRequest(BaseModel):
     preferred_period: Literal["morning", "afternoon"]
-    duration_minutes: int = Field(default=60, ge=15, le=480)
+    duration_minutes: int | None = Field(default=None, ge=15, le=480)
     horizon_days: int = Field(default=7, ge=1, le=7)
     max_options: Literal[3] = 3
     conversation_id: UUID | None = None
@@ -48,6 +49,22 @@ class AppointmentAvailabilityRead(BaseModel):
     validation_source: Literal["external", "internal", "internal_fallback"]
     validation_error: str | None = None
     options: list[AppointmentAvailabilityOption]
+
+
+class AppointmentOperationalConfigRead(BaseModel):
+    status: Literal["draft", "published"] = "draft"
+    version: int = 1
+    published_at: str | None = None
+    draft: AiOperationalScheduleRead = Field(default_factory=AiOperationalScheduleRead)
+    published: AiOperationalScheduleRead = Field(default_factory=AiOperationalScheduleRead)
+
+
+class AppointmentOperationalConfigUpdate(BaseModel):
+    status: Literal["draft", "published"] = "draft"
+    version: int = 1
+    published_at: str | None = None
+    draft: AiOperationalScheduleRead = Field(default_factory=AiOperationalScheduleRead)
+    published: AiOperationalScheduleRead = Field(default_factory=AiOperationalScheduleRead)
 
 
 class AppointmentRead(TimestampedRead):

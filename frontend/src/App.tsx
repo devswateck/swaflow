@@ -46,6 +46,20 @@ import {
   Sun,
   X,
 } from "lucide-react";
+import {
+  Area,
+  AreaChart,
+  Bar,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { ApiError, api, realtimeUrl } from "./lib/api";
 import { useAuthStore } from "./lib/auth";
@@ -58,6 +72,7 @@ type CurrentUser = {
   role: string;
   status: string;
   module_permissions: Record<string, boolean>;
+  company_currency: string | null;
   company_timezone: string | null;
   company_logo_url: string | null;
   company_banner_url: string | null;
@@ -148,6 +163,7 @@ type AiOperationalSchedule = {
   timezone: string;
   weekday: AiOperationalWindow;
   weekend: AiOperationalWindow;
+  default_appointment_duration_minutes: number;
   outside_hours_behavior: "handoff" | "hold" | "auto_reply";
   inside_hours_behavior: "normal" | "priority";
   outside_hours_message: string;
@@ -194,6 +210,14 @@ type AiOperationalConfig = {
   published_at: string | null;
   draft: AiOperationalSection;
   published: AiOperationalSection;
+};
+
+type AppointmentOperationalConfig = {
+  status: "draft" | "published";
+  version: number;
+  published_at: string | null;
+  draft: AiOperationalSchedule;
+  published: AiOperationalSchedule;
 };
 
 type AiOperationalSection = {
@@ -478,9 +502,66 @@ type ApiAppointment = {
   updated_at: string;
 };
 
+type DashboardSummary = {
+  total_conversations: number;
+  total_unread: number;
+  confirmed_sales_total: number;
+  appointments_total: number;
+};
+
+type DashboardAnalyticsPoint = {
+  date: string;
+  chatsReceived: number;
+  chatsSent: number;
+  ordersCreated: number;
+  ordersPaid: number;
+  ordersPaidTotal: number;
+  appointmentsScheduled: number;
+  appointmentsCompleted: number;
+  appointmentsCancelled: number;
+};
+
+type DashboardAnalytics = {
+  date_from: string;
+  date_to: string;
+  timezone: string;
+  summary: DashboardSummary;
+  series: DashboardAnalyticsPoint[];
+};
+
+type ApiDashboardAnalyticsPoint = {
+  date: string;
+  chats_received: number | string;
+  chats_sent: number | string;
+  orders_created: number | string;
+  orders_paid: number | string;
+  orders_paid_total: number | string;
+  appointments_scheduled: number | string;
+  appointments_completed: number | string;
+  appointments_cancelled: number | string;
+};
+
+type ApiDashboardAnalytics = {
+  date_from: string;
+  date_to: string;
+  timezone: string;
+  summary: DashboardSummary;
+  series: ApiDashboardAnalyticsPoint[];
+};
+
+type DashboardFilters = {
+  dateFrom: string;
+  dateTo: string;
+  assignedUserId: string;
+  status: string;
+  funnelId: string;
+  funnelStepId: string;
+  productId: string;
+};
+
 type ApiAppointmentAvailabilityRequest = {
   preferred_period: "morning" | "afternoon";
-  duration_minutes: number;
+  duration_minutes?: number;
   horizon_days?: number;
   max_options?: number;
   conversation_id?: string | null;
@@ -547,6 +628,15 @@ type OrderFilters = {
   conversationId: string;
   productId: string;
   assignedUserId: string;
+};
+
+type AppointmentFilters = {
+  scheduledFrom: string;
+  scheduledTo: string;
+  status: string;
+  contactId: string;
+  assignedUserId: string;
+  source: "" | "inbox" | "manual";
 };
 
 type OrdersLoadContext = {
@@ -973,12 +1063,54 @@ function createInteractiveTemplateForm() {
   };
 }
 
-const formatMoney = (value: number, currency = "COP") =>
-  new Intl.NumberFormat("es-CO", {
-    style: "currency",
-    currency,
-    maximumFractionDigits: 0,
-  }).format(value);
+function defaultDashboardSummary(): DashboardSummary {
+  return {
+    total_conversations: 0,
+    total_unread: 0,
+    confirmed_sales_total: 0,
+    appointments_total: 0,
+  };
+}
+
+function defaultDashboardAnalytics(): DashboardAnalytics {
+  return {
+    date_from: "",
+    date_to: "",
+    timezone: "UTC",
+    summary: defaultDashboardSummary(),
+    series: [],
+  };
+}
+
+function shiftDateKey(dateKey: string, deltaDays: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  if (!year || !month || !day) {
+    return dateKey;
+  }
+  const shifted = new Date(Date.UTC(year, month - 1, day));
+  shifted.setUTCDate(shifted.getUTCDate() + deltaDays);
+  return shifted.toISOString().slice(0, 10);
+}
+
+function formatDateKeyInTimeZone(value: Date, timeZone: string) {
+  const parts = getTimeZoneParts(value, timeZone);
+  const pad = (segment: number) => String(segment).padStart(2, "0");
+  return `${parts.year}-${pad(parts.month)}-${pad(parts.day)}`;
+}
+
+function getDefaultDashboardFilters(timeZone?: string | null): DashboardFilters {
+  const normalizedTimeZone = normalizeTimeZone(timeZone ?? null) ?? "UTC";
+  const today = formatDateKeyInTimeZone(new Date(), normalizedTimeZone);
+  return {
+    dateFrom: shiftDateKey(today, -29),
+    dateTo: today,
+    assignedUserId: "",
+    status: "",
+    funnelId: "",
+    funnelStepId: "",
+    productId: "",
+  };
+}
 
 function getStoredPage(): PageKey {
   const storedPage = localStorage.getItem("swaflow_active_page");
@@ -1016,6 +1148,15 @@ function getStoredCompanyLogoUrl(): string | null {
 
 function formatPhone(phone: string) {
   return phone.startsWith("+") ? phone : `+${phone}`;
+}
+
+function formatMoney(value: number, currency: string) {
+  const safeCurrency = /^[A-Z]{3}$/.test(currency) ? currency : "COP";
+  return new Intl.NumberFormat("es-CO", {
+    style: "currency",
+    currency: safeCurrency,
+    maximumFractionDigits: 0,
+  }).format(value);
 }
 
 const integrationDefinitions: IntegrationDefinition[] = [
@@ -1287,6 +1428,7 @@ function buildDefaultOperationalSection(timezone = "UTC"): AiOperationalSection 
       timezone,
       weekday: { start: "08:00", end: "18:00" },
       weekend: { start: "08:00", end: "14:00" },
+      default_appointment_duration_minutes: 60,
       outside_hours_behavior: "handoff",
       inside_hours_behavior: "normal",
       outside_hours_message: "Estamos fuera de horario. Te contactamos apenas retomemos atencion.",
@@ -1324,6 +1466,10 @@ function buildDefaultOperationalSection(timezone = "UTC"): AiOperationalSection 
   };
 }
 
+function buildDefaultAgendaSchedule(timezone = "UTC"): AiOperationalSchedule {
+  return buildDefaultOperationalSection(timezone).schedule;
+}
+
 function cloneOperationalSection(section: AiOperationalSection): AiOperationalSection {
   return {
     security: {
@@ -1350,8 +1496,20 @@ function cloneOperationalSection(section: AiOperationalSection): AiOperationalSe
   };
 }
 
+function cloneAgendaSchedule(schedule: AiOperationalSchedule): AiOperationalSchedule {
+  return {
+    ...schedule,
+    weekday: { ...schedule.weekday },
+    weekend: { ...schedule.weekend },
+  };
+}
+
 function readBoolean(value: unknown, fallback = false) {
   return typeof value === "boolean" ? value : fallback;
+}
+
+function readNumber(value: unknown, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }
 
 function readNumberString(value: unknown, fallback = "0.75") {
@@ -1402,6 +1560,10 @@ function readOperationalSection(value: unknown, fallback = buildDefaultOperation
         start: readString((schedule?.weekend as Record<string, unknown> | undefined)?.start, fallback.schedule.weekend.start),
         end: readString((schedule?.weekend as Record<string, unknown> | undefined)?.end, fallback.schedule.weekend.end),
       },
+      default_appointment_duration_minutes: readNumber(
+        schedule?.default_appointment_duration_minutes,
+        fallback.schedule.default_appointment_duration_minutes,
+      ),
       outside_hours_behavior: (readString(schedule?.outside_hours_behavior, fallback.schedule.outside_hours_behavior) as
         | "handoff"
         | "hold"
@@ -1456,6 +1618,39 @@ function readOperationalSection(value: unknown, fallback = buildDefaultOperation
   };
 }
 
+function readAgendaSchedule(value: unknown, fallback = buildDefaultAgendaSchedule()): AiOperationalSchedule {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return cloneAgendaSchedule(fallback);
+  }
+  const source = value as Record<string, unknown>;
+  const weekday = source.weekday as Record<string, unknown> | undefined;
+  const weekend = source.weekend as Record<string, unknown> | undefined;
+  return {
+    timezone: readString(source.timezone, fallback.timezone),
+    weekday: {
+      start: readString(weekday?.start, fallback.weekday.start),
+      end: readString(weekday?.end, fallback.weekday.end),
+    },
+    weekend: {
+      start: readString(weekend?.start, fallback.weekend.start),
+      end: readString(weekend?.end, fallback.weekend.end),
+    },
+    default_appointment_duration_minutes: readNumber(
+      source.default_appointment_duration_minutes,
+      fallback.default_appointment_duration_minutes,
+    ),
+    outside_hours_behavior: (readString(source.outside_hours_behavior, fallback.outside_hours_behavior) as
+      | "handoff"
+      | "hold"
+      | "auto_reply"),
+    inside_hours_behavior: (readString(source.inside_hours_behavior, fallback.inside_hours_behavior) as
+      | "normal"
+      | "priority"),
+    outside_hours_message: readString(source.outside_hours_message, fallback.outside_hours_message),
+    handoff_message: readString(source.handoff_message, fallback.handoff_message),
+  };
+}
+
 function buildDefaultOperationalConfig(timezone?: string | null): AiOperationalConfig {
   const section = buildDefaultOperationalSection(timezone ?? "UTC");
   return {
@@ -1486,6 +1681,36 @@ function normalizeOperationalConfig(value: unknown, fallbackTimezone?: string | 
   };
 }
 
+function buildDefaultAgendaConfig(timezone?: string | null): AppointmentOperationalConfig {
+  const schedule = buildDefaultAgendaSchedule(timezone ?? "UTC");
+  return {
+    status: "draft",
+    version: 1,
+    published_at: null,
+    draft: schedule,
+    published: cloneAgendaSchedule(schedule),
+  };
+}
+
+function normalizeAgendaConfig(value: unknown, fallbackTimezone?: string | null): AppointmentOperationalConfig {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return buildDefaultAgendaConfig(fallbackTimezone);
+  }
+  const source = value as Record<string, unknown>;
+  const defaultSchedule = buildDefaultAgendaSchedule(fallbackTimezone ?? "UTC");
+  const hasVersionedSections = Boolean(source.draft || source.published);
+  const draftSource = hasVersionedSections ? source.draft : source;
+  const publishedSource = hasVersionedSections ? source.published : source;
+  const status = source.status === "published" ? "published" : "draft";
+  return {
+    status,
+    version: typeof source.version === "number" ? source.version : 1,
+    published_at: typeof source.published_at === "string" ? source.published_at : null,
+    draft: readAgendaSchedule(draftSource, defaultSchedule),
+    published: readAgendaSchedule(publishedSource, defaultSchedule),
+  };
+}
+
 function operationalConfigFromAgent(
   agent: AiAgentResponse | null,
   fallbackTimezone?: string | null,
@@ -1508,8 +1733,18 @@ function operationalPayloadFromConfig(config: AiOperationalConfig): Record<strin
   };
 }
 
+function agendaPayloadFromConfig(config: AppointmentOperationalConfig): Record<string, unknown> {
+  return {
+    status: config.status,
+    version: config.version,
+    published_at: config.published_at,
+    draft: config.draft,
+    published: config.published,
+  };
+}
+
 function operationalScheduleSummary(section: AiOperationalSection) {
-  return `L-V ${section.schedule.weekday.start}-${section.schedule.weekday.end} | S-D ${section.schedule.weekend.start}-${section.schedule.weekend.end}`;
+  return `L-V ${section.schedule.weekday.start}-${section.schedule.weekday.end} | S-D ${section.schedule.weekend.start}-${section.schedule.weekend.end} | ${section.schedule.default_appointment_duration_minutes} min`;
 }
 
 function aiFormFromAgent(agent: AiAgentResponse | null, defaultSystemPrompt: string): AiAgentForm {
@@ -1935,6 +2170,35 @@ function formatMonthYearLabel(value: string, timeZone?: string) {
   return label.charAt(0).toUpperCase() + label.slice(1);
 }
 
+function formatDashboardDateLabel(value: string, timeZone?: string) {
+  void timeZone;
+  const date = new Date(`${value}T00:00:00Z`);
+  return new Intl.DateTimeFormat("es-CO", {
+    day: "2-digit",
+    month: "short",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+function formatDashboardFreshnessLabel(updatedAt: number | null, now: number) {
+  if (!updatedAt) {
+    return "Sin actualización";
+  }
+  const elapsedMinutes = Math.max(0, Math.floor((now - updatedAt) / 60000));
+  if (elapsedMinutes < 1) {
+    return "Actualizado hace <1 min";
+  }
+  if (elapsedMinutes < 60) {
+    return `Actualizado hace ${elapsedMinutes} min`;
+  }
+  const elapsedHours = Math.floor(elapsedMinutes / 60);
+  if (elapsedHours < 24) {
+    return `Actualizado hace ${elapsedHours} h`;
+  }
+  const elapsedDays = Math.floor(elapsedHours / 24);
+  return `Actualizado hace ${elapsedDays} d`;
+}
+
 function normalizeTimeZone(timeZone: string | null) {
   if (!timeZone) {
     return null;
@@ -1984,13 +2248,29 @@ function mapApiOrder(order: ApiOrder): Order {
   };
 }
 
-function formatDateTimeLocal(value: Date) {
-  const pad = (segment: number) => String(segment).padStart(2, "0");
-  return [
-    value.getFullYear(),
-    pad(value.getMonth() + 1),
-    pad(value.getDate()),
-  ].join("-") + `T${pad(value.getHours())}:${pad(value.getMinutes())}`;
+function mapApiDashboardAnalytics(analytics: ApiDashboardAnalytics): DashboardAnalytics {
+  return {
+    date_from: analytics.date_from,
+    date_to: analytics.date_to,
+    timezone: analytics.timezone || "UTC",
+    summary: {
+      total_conversations: Number(analytics.summary.total_conversations) || 0,
+      total_unread: Number(analytics.summary.total_unread) || 0,
+      confirmed_sales_total: Number(analytics.summary.confirmed_sales_total) || 0,
+      appointments_total: Number(analytics.summary.appointments_total) || 0,
+    },
+    series: analytics.series.map((point) => ({
+      date: point.date,
+      chatsReceived: Number(point.chats_received) || 0,
+      chatsSent: Number(point.chats_sent) || 0,
+      ordersCreated: Number(point.orders_created) || 0,
+      ordersPaid: Number(point.orders_paid) || 0,
+      ordersPaidTotal: Number(point.orders_paid_total) || 0,
+      appointmentsScheduled: Number(point.appointments_scheduled) || 0,
+      appointmentsCompleted: Number(point.appointments_completed) || 0,
+      appointmentsCancelled: Number(point.appointments_cancelled) || 0,
+    })),
+  };
 }
 
 function getTimeZoneParts(value: Date, timeZone: string) {
@@ -2051,26 +2331,6 @@ function localDateTimeValueToIsoInTimeZone(value: string, timeZone: string) {
   return new Date(guessUtc).toISOString();
 }
 
-function getInitialAppointmentScheduledAt(timeZone?: string | null) {
-  if (!timeZone) {
-    const nextHour = new Date();
-    nextHour.setHours(nextHour.getHours() + 1);
-    return formatDateTimeLocal(nextHour);
-  }
-  const nowParts = getTimeZoneParts(new Date(), timeZone);
-  const nextHour = new Date(
-    Date.UTC(
-      nowParts.year,
-      nowParts.month - 1,
-      nowParts.day,
-      nowParts.hour + 1,
-      nowParts.minute,
-      nowParts.second,
-    ),
-  );
-  return `${nextHour.getUTCFullYear()}-${String(nextHour.getUTCMonth() + 1).padStart(2, "0")}-${String(nextHour.getUTCDate()).padStart(2, "0")}T${String(nextHour.getUTCHours()).padStart(2, "0")}:${String(nextHour.getUTCMinutes()).padStart(2, "0")}`;
-}
-
 function formatDateTimeLabelInTimeZone(value: Date | string, timeZone: string) {
   return new Intl.DateTimeFormat("es-CO", {
     dateStyle: "full",
@@ -2081,11 +2341,31 @@ function formatDateTimeLabelInTimeZone(value: Date | string, timeZone: string) {
 
 const DEFAULT_APPOINTMENT_DURATION_MINUTES = 60;
 
+const DEFAULT_APPOINTMENT_FILTERS: AppointmentFilters = {
+  scheduledFrom: "",
+  scheduledTo: "",
+  status: "",
+  contactId: "",
+  assignedUserId: "",
+  source: "",
+};
+
 function createIdempotencyKey() {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
     return crypto.randomUUID();
   }
   return `order-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function areAppointmentFiltersEmpty(filters: AppointmentFilters) {
+  return (
+    !filters.scheduledFrom &&
+    !filters.scheduledTo &&
+    !filters.status &&
+    !filters.contactId &&
+    !filters.assignedUserId &&
+    !filters.source
+  );
 }
 
 function App() {
@@ -2115,12 +2395,23 @@ function App() {
     productId: "",
     assignedUserId: "",
   });
-  const [appointments, setAppointments] = useState<ApiAppointment[]>([]);
+  const [appointmentView, setAppointmentView] = useState<ApiAppointment[]>([]);
+  const [dashboardSummary, setDashboardSummary] = useState<DashboardSummary>(defaultDashboardSummary());
+  const [dashboardSummaryError, setDashboardSummaryError] = useState("");
+  const [dashboardSummaryUpdatedAt, setDashboardSummaryUpdatedAt] = useState<number | null>(null);
+  const [dashboardSummaryLoading, setDashboardSummaryLoading] = useState(false);
+  const [dashboardFilters, setDashboardFilters] = useState<DashboardFilters>(getDefaultDashboardFilters());
+  const [dashboardAnalytics, setDashboardAnalytics] = useState<DashboardAnalytics>(defaultDashboardAnalytics());
+  const [dashboardAnalyticsLoading, setDashboardAnalyticsLoading] = useState(false);
+  const [dashboardAnalyticsError, setDashboardAnalyticsError] = useState("");
+  const [dashboardAnalyticsUpdatedAt, setDashboardAnalyticsUpdatedAt] = useState<number | null>(null);
+  const [dashboardClock, setDashboardClock] = useState(() => Date.now());
   const [appointmentsLoading, setAppointmentsLoading] = useState(false);
   const [appointmentsError, setAppointmentsError] = useState("");
   const [appointmentMessage, setAppointmentMessage] = useState("");
   const [appointmentSaving, setAppointmentSaving] = useState(false);
   const [appointmentDraft, setAppointmentDraft] = useState<AppointmentDraft | null>(null);
+  const [appointmentFilters, setAppointmentFilters] = useState<AppointmentFilters>(DEFAULT_APPOINTMENT_FILTERS);
   const [contacts, setContacts] = useState<ApiContact[]>([]);
   const [funnels, setFunnels] = useState<ApiFunnel[]>([]);
   const [tenantUsers, setTenantUsers] = useState<TenantUser[]>([]);
@@ -2134,9 +2425,19 @@ function App() {
   const conversationDetailRequestIdRef = useRef(0);
   const conversationDetailAbortControllerRef = useRef<AbortController | null>(null);
   const orderFiltersRef = useRef(orderFilters);
+  const appointmentFiltersRef = useRef(appointmentFilters);
+  const appointmentViewRequestIdRef = useRef(0);
+  const dashboardSummaryRequestIdRef = useRef(0);
+  const dashboardAnalyticsRequestIdRef = useRef(0);
+  const dashboardAnalyticsAbortControllerRef = useRef<AbortController | null>(null);
+  const dashboardSnapshotRefreshPromiseRef = useRef<Promise<void> | null>(null);
   const hasLoadedOrdersOnceRef = useRef(false);
   const ordersRequestIdRef = useRef(0);
   const orderLoadErrorRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    appointmentFiltersRef.current = appointmentFilters;
+  }, [appointmentFilters]);
 
   const visibleActivePage = currentUser && canAccessPage(currentUser, activePage) ? activePage : "dashboard";
   const page = pageCopy[visibleActivePage];
@@ -2150,6 +2451,11 @@ function App() {
   const totalUnread = useMemo(
     () => conversations.reduce((total, conversation) => total + conversation.unreadCount, 0),
     [conversations],
+  );
+  const dashboardSummaryFreshnessLabel = formatDashboardFreshnessLabel(dashboardSummaryUpdatedAt, dashboardClock);
+  const dashboardAnalyticsFreshnessLabel = formatDashboardFreshnessLabel(
+    dashboardAnalyticsUpdatedAt,
+    dashboardClock,
   );
 
   useEffect(() => {
@@ -2216,6 +2522,172 @@ function App() {
     orderFiltersRef.current = orderFilters;
   }, [orderFilters]);
 
+  useEffect(() => {
+    dashboardSummaryRequestIdRef.current += 1;
+    setDashboardSummary(defaultDashboardSummary());
+    setDashboardSummaryError("");
+    setDashboardSummaryUpdatedAt(null);
+    setDashboardSummaryLoading(Boolean(currentUser?.company_id));
+    dashboardAnalyticsRequestIdRef.current += 1;
+    setDashboardAnalytics(defaultDashboardAnalytics());
+    setDashboardAnalyticsError("");
+    setDashboardAnalyticsUpdatedAt(null);
+    setDashboardAnalyticsLoading(false);
+    setDashboardFilters(getDefaultDashboardFilters(currentUser?.company_timezone ?? null));
+    appointmentViewRequestIdRef.current += 1;
+    setAppointmentsLoading(false);
+    setAppointmentsError("");
+    setAppointmentFilters(DEFAULT_APPOINTMENT_FILTERS);
+    setAppointmentView([]);
+  }, [currentUser?.company_id, currentUser?.company_timezone]);
+
+  const loadDashboardSummary = useCallback(async () => {
+    const requestId = ++dashboardSummaryRequestIdRef.current;
+    setDashboardSummaryLoading(true);
+    try {
+      const response = await api<DashboardSummary>("/dashboard/summary");
+      if (requestId !== dashboardSummaryRequestIdRef.current) {
+        return false;
+      }
+      setDashboardSummary({
+        total_conversations: Number(response.total_conversations) || 0,
+        total_unread: Number(response.total_unread) || 0,
+        confirmed_sales_total: Number(response.confirmed_sales_total) || 0,
+        appointments_total: Number(response.appointments_total) || 0,
+      });
+      setDashboardSummaryUpdatedAt(Date.now());
+      setDashboardSummaryError("");
+      return true;
+    } catch (caught) {
+      if (requestId === dashboardSummaryRequestIdRef.current) {
+        setDashboardSummary(defaultDashboardSummary());
+        setDashboardSummaryUpdatedAt(null);
+        setDashboardSummaryError(
+          caught instanceof Error ? caught.message : "No pudimos cargar el resumen del dashboard",
+        );
+      }
+      return false;
+    } finally {
+      if (requestId === dashboardSummaryRequestIdRef.current) {
+        setDashboardSummaryLoading(false);
+      }
+    }
+  }, []);
+
+  const loadDashboardAnalytics = useCallback(async (filters: DashboardFilters) => {
+    const requestId = ++dashboardAnalyticsRequestIdRef.current;
+    dashboardAnalyticsAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    dashboardAnalyticsAbortControllerRef.current = abortController;
+    if (
+      (filters.dateFrom && !filters.dateTo) ||
+      (!filters.dateFrom && filters.dateTo) ||
+      (filters.dateFrom && filters.dateTo && filters.dateFrom > filters.dateTo)
+    ) {
+      setDashboardAnalytics(defaultDashboardAnalytics());
+      setDashboardAnalyticsUpdatedAt(null);
+      setDashboardAnalyticsError("Rango inválido");
+      setDashboardAnalyticsLoading(false);
+      if (dashboardAnalyticsAbortControllerRef.current === abortController) {
+        dashboardAnalyticsAbortControllerRef.current = null;
+      }
+      return false;
+    }
+    const { signal } = abortController;
+    setDashboardAnalyticsLoading(true);
+    setDashboardAnalyticsError("");
+    try {
+      const params = new URLSearchParams();
+      if (filters.dateFrom) {
+        params.set("date_from", filters.dateFrom);
+      }
+      if (filters.dateTo) {
+        params.set("date_to", filters.dateTo);
+      }
+      if (filters.assignedUserId) {
+        params.set("assigned_user_id", filters.assignedUserId);
+      }
+      if (filters.status) {
+        params.set("status", filters.status);
+      }
+      if (filters.funnelId) {
+        params.set("funnel_id", filters.funnelId);
+      }
+      if (filters.funnelStepId) {
+        params.set("funnel_step_id", filters.funnelStepId);
+      }
+      if (filters.productId) {
+        params.set("product_id", filters.productId);
+      }
+      const response = await api<ApiDashboardAnalytics>(
+        `/dashboard/analytics${params.toString() ? `?${params.toString()}` : ""}`,
+        { signal },
+      );
+      if (requestId !== dashboardAnalyticsRequestIdRef.current) {
+        return false;
+      }
+      setDashboardAnalytics(mapApiDashboardAnalytics(response));
+      setDashboardAnalyticsUpdatedAt(Date.now());
+      return true;
+    } catch (caught) {
+      if (requestId === dashboardAnalyticsRequestIdRef.current) {
+        setDashboardAnalytics(defaultDashboardAnalytics());
+        setDashboardAnalyticsUpdatedAt(null);
+        setDashboardAnalyticsError(caught instanceof Error ? caught.message : "No pudimos cargar la analitica del dashboard");
+      }
+      return false;
+    } finally {
+      if (requestId === dashboardAnalyticsRequestIdRef.current) {
+        setDashboardAnalyticsLoading(false);
+      }
+      if (dashboardAnalyticsAbortControllerRef.current === abortController) {
+        dashboardAnalyticsAbortControllerRef.current = null;
+      }
+    }
+  }, []);
+
+  const refreshDashboardSnapshot = useCallback(async () => {
+    if (dashboardSnapshotRefreshPromiseRef.current) {
+      await dashboardSnapshotRefreshPromiseRef.current;
+      return;
+    }
+    const refreshPromise = Promise.all([loadDashboardSummary(), loadDashboardAnalytics(dashboardFilters)]).then(
+      () => undefined,
+    );
+    dashboardSnapshotRefreshPromiseRef.current = refreshPromise;
+    try {
+      await refreshPromise;
+    } finally {
+      if (dashboardSnapshotRefreshPromiseRef.current === refreshPromise) {
+        dashboardSnapshotRefreshPromiseRef.current = null;
+      }
+    }
+  }, [dashboardFilters, loadDashboardAnalytics, loadDashboardSummary]);
+
+  useEffect(() => {
+    if (!currentUser || visibleActivePage !== "dashboard") {
+      return;
+    }
+    setDashboardSummaryLoading(true);
+    void loadDashboardSummary();
+  }, [currentUser, loadDashboardSummary, visibleActivePage]);
+
+  useEffect(() => {
+    if (!currentUser || visibleActivePage !== "dashboard") {
+      return;
+    }
+    void loadDashboardAnalytics(dashboardFilters);
+  }, [currentUser, dashboardFilters, loadDashboardAnalytics, visibleActivePage]);
+
+  useEffect(() => {
+    if (visibleActivePage !== "dashboard") {
+      return;
+    }
+    setDashboardClock(Date.now());
+    const timer = window.setInterval(() => setDashboardClock(Date.now()), 60000);
+    return () => window.clearInterval(timer);
+  }, [visibleActivePage]);
+
   const loadInbox = useCallback(
     async (
       {
@@ -2243,6 +2715,7 @@ function App() {
       const response = await api<ApiConversation[]>(`/conversations${params.toString() ? `?${params.toString()}` : ""}`);
       const mapped = response.map(mapApiConversation);
       setConversations(mapped);
+      void refreshDashboardSnapshot();
       const currentSelected = selectedConversationIdRef.current;
       if (currentSelected && mapped.some((conversation) => conversation.id === currentSelected)) {
         setSelectedConversationId(currentSelected);
@@ -2259,7 +2732,7 @@ function App() {
         setInboxLoading(false);
       }
     }
-  }, [inboxFunnelFilterId, inboxStepFilterId]);
+  }, [inboxFunnelFilterId, inboxStepFilterId, refreshDashboardSnapshot]);
 
   const loadConversationDetail = useCallback(async (conversationId: string, markRead = true) => {
     const requestId = ++conversationDetailRequestIdRef.current;
@@ -2288,6 +2761,7 @@ function App() {
                 : conversation,
             ),
           );
+          void refreshDashboardSnapshot();
         } catch {
           // Best effort: if marking as read fails, keep the existing unread count.
         }
@@ -2319,6 +2793,7 @@ function App() {
             : conversation,
         ),
       );
+      void refreshDashboardSnapshot();
     } catch (caught) {
       if (signal.aborted || conversationDetailRequestIdRef.current !== requestId) {
         return;
@@ -2339,7 +2814,7 @@ function App() {
         conversationDetailAbortControllerRef.current = null;
       }
     }
-  }, []);
+  }, [refreshDashboardSnapshot]);
 
   const loadAppointmentIntentContext = useCallback(async (conversationId: string) => {
     return await api<ApiAppointmentIntentContext>(`/conversations/${conversationId}/appointment-intent`);
@@ -2408,38 +2883,128 @@ function App() {
     }
     setOrders(response.map(mapApiOrder));
     setOrderLoadError("");
+    void refreshDashboardSnapshot();
     return true;
-  }, []);
+  }, [refreshDashboardSnapshot]);
 
-  const loadAppointments = useCallback(
+  const fetchAppointments = useCallback(
+    async ({
+      filters = DEFAULT_APPOINTMENT_FILTERS,
+      focusAppointmentId = null,
+    }: {
+      filters?: AppointmentFilters;
+      focusAppointmentId?: string | null;
+    } = {}) => {
+      const params = new URLSearchParams({ limit: "200", offset: "0" });
+      if (filters.scheduledFrom) {
+        params.set("scheduled_from", filters.scheduledFrom);
+      }
+      if (filters.scheduledTo) {
+        params.set("scheduled_to", filters.scheduledTo);
+      }
+      if (filters.status) {
+        params.set("status", filters.status);
+      }
+      if (filters.contactId) {
+        params.set("contact_id", filters.contactId);
+      }
+      if (filters.assignedUserId) {
+        params.set("assigned_user_id", filters.assignedUserId);
+      }
+      if (filters.source) {
+        params.set("source", filters.source);
+      }
+      if (focusAppointmentId) {
+        params.set("focus_appointment_id", focusAppointmentId);
+      }
+      return await api<ApiAppointment[]>(`/appointments?${params.toString()}`);
+    },
+    [],
+  );
+
+  const refreshAppointmentsGlobal = useCallback(
     async ({
       showLoading = false,
       focusAppointmentId = null,
     }: { showLoading?: boolean; focusAppointmentId?: string | null } = {}) => {
+      const requestId = ++appointmentViewRequestIdRef.current;
       if (showLoading) {
         setAppointmentsLoading(true);
       }
       setAppointmentsError("");
       try {
-        const params = new URLSearchParams({ limit: "200", offset: "0" });
-        if (focusAppointmentId) {
-          params.set("focus_appointment_id", focusAppointmentId);
+        const response = await fetchAppointments({
+          filters: DEFAULT_APPOINTMENT_FILTERS,
+          focusAppointmentId,
+        });
+        if (requestId !== appointmentViewRequestIdRef.current) {
+          return false;
         }
-        const response = await api<ApiAppointment[]>(`/appointments?${params.toString()}`);
-        setAppointments(response);
+        if (areAppointmentFiltersEmpty(appointmentFiltersRef.current)) {
+          setAppointmentView(response);
+        }
+        void refreshDashboardSnapshot();
         return response;
       } catch (caught) {
+        if (requestId !== appointmentViewRequestIdRef.current) {
+          return false;
+        }
         const message = caught instanceof Error ? caught.message : "No fue posible cargar las citas";
         setAppointmentsError(message);
         throw caught;
       } finally {
-        if (showLoading) {
+        if (showLoading && requestId === appointmentViewRequestIdRef.current) {
           setAppointmentsLoading(false);
         }
       }
     },
-    [],
+    [fetchAppointments, refreshDashboardSnapshot],
   );
+
+  const refreshAppointmentView = useCallback(
+    async ({
+      showLoading = false,
+      focusAppointmentId = null,
+    }: { showLoading?: boolean; focusAppointmentId?: string | null } = {}) => {
+      const requestId = ++appointmentViewRequestIdRef.current;
+      if (showLoading) {
+        setAppointmentsLoading(true);
+      }
+      setAppointmentsError("");
+      try {
+        const response = await fetchAppointments({
+          filters: appointmentFiltersRef.current,
+          focusAppointmentId,
+        });
+        if (requestId !== appointmentViewRequestIdRef.current) {
+          return false;
+        }
+        setAppointmentView(response);
+        void refreshDashboardSnapshot();
+        return response;
+      } catch (caught) {
+        if (requestId !== appointmentViewRequestIdRef.current) {
+          return false;
+        }
+        const message = caught instanceof Error ? caught.message : "No fue posible cargar las citas";
+        setAppointmentsError(message);
+        throw caught;
+      } finally {
+        if (showLoading && requestId === appointmentViewRequestIdRef.current) {
+          setAppointmentsLoading(false);
+        }
+      }
+    },
+    [fetchAppointments, refreshDashboardSnapshot],
+  );
+
+  const refreshAppointmentData = useCallback(async () => {
+    if (areAppointmentFiltersEmpty(appointmentFiltersRef.current)) {
+      await refreshAppointmentsGlobal({ showLoading: true });
+      return;
+    }
+    await refreshAppointmentView({ showLoading: true });
+  }, [refreshAppointmentView, refreshAppointmentsGlobal]);
 
   const loadContacts = useCallback(async () => {
     try {
@@ -2465,10 +3030,6 @@ function App() {
       throw caught;
     }
   }, [loadOrders]);
-
-  const refreshAppointments = useCallback(async () => {
-    return loadAppointments();
-  }, [loadAppointments]);
 
   useEffect(() => {
     if (!token) {
@@ -2510,12 +3071,26 @@ function App() {
     void loadCatalogData();
     if (canAccessPage(currentUser, "appointments")) {
       void loadContacts();
-      void refreshAppointments().catch(() => {
-        // Appointment load errors are already captured in the page state.
-      });
     }
     hasLoadedOrdersOnceRef.current = true;
-  }, [currentUser, loadCatalogData, loadContacts, refreshAppointments, refreshOrders]);
+  }, [currentUser, loadCatalogData, loadContacts, refreshOrders]);
+
+  useEffect(() => {
+    if (!currentUser || !canAccessPage(currentUser, "appointments")) {
+      return;
+    }
+
+    if (areAppointmentFiltersEmpty(appointmentFilters)) {
+      void refreshAppointmentsGlobal({ showLoading: true }).catch(() => {
+        // Appointment load errors are already captured in the page state.
+      });
+      return;
+    }
+
+    void refreshAppointmentView({ showLoading: true }).catch(() => {
+      // Appointment load errors are already captured in the page state.
+    });
+  }, [appointmentFilters, currentUser, refreshAppointmentView, refreshAppointmentsGlobal]);
 
   useEffect(() => {
     if (!currentUser || !hasLoadedOrdersOnceRef.current) {
@@ -2667,9 +3242,14 @@ function App() {
         }
         if (eventType.startsWith("appointment.")) {
           if (currentUser && canAccessPage(currentUser, "appointments")) {
-            void refreshAppointments().catch(() => {
+            void refreshAppointmentsGlobal().catch(() => {
               // The page-level error state is already updated by refreshAppointments.
             });
+            if (!areAppointmentFiltersEmpty(appointmentFiltersRef.current)) {
+              void refreshAppointmentView().catch(() => {
+                // The page-level error state is already updated by refreshAppointmentView.
+              });
+            }
           }
         }
         const conversationId = message.payload?.conversation_id;
@@ -2720,7 +3300,8 @@ function App() {
     loadCatalogData,
     loadConversationDetail,
     loadInbox,
-    refreshAppointments,
+    refreshAppointmentView,
+    refreshAppointmentsGlobal,
     refreshOrders,
     setToken,
     token,
@@ -2837,8 +3418,11 @@ function App() {
       });
       setAppointmentMessage("Cita guardada");
       setAppointmentDraft(null);
+      await refreshAppointmentsGlobal({ focusAppointmentId: appointment.id });
+      if (!areAppointmentFiltersEmpty(appointmentFiltersRef.current)) {
+        await refreshAppointmentView({ focusAppointmentId: appointment.id });
+      }
       await Promise.all([
-        loadAppointments({ focusAppointmentId: appointment.id }).catch(() => null),
         payload.conversation_id ? loadConversationDetail(payload.conversation_id, false).catch(() => null) : Promise.resolve(),
         payload.conversation_id ? loadInbox().catch(() => null) : Promise.resolve(),
       ]);
@@ -3061,10 +3645,24 @@ function App() {
             {accessNotice ? <Notice tone="error" message={accessNotice} /> : null}
             {visibleActivePage === "dashboard" ? (
               <DashboardPage
-                conversations={conversations}
-                orders={orders}
-                appointments={appointments}
+                summary={dashboardSummary}
+                summaryError={dashboardSummaryError}
+                summaryFreshnessLabel={dashboardSummaryFreshnessLabel}
+                summaryLoading={dashboardSummaryLoading}
+                analytics={dashboardAnalytics}
+                analyticsFreshnessLabel={dashboardAnalyticsFreshnessLabel}
+                filters={dashboardFilters}
+                onChangeFilters={setDashboardFilters}
                 onNavigate={goToPage}
+                onRefresh={() => {
+                  void refreshDashboardSnapshot();
+                }}
+                loading={dashboardAnalyticsLoading}
+                error={dashboardAnalyticsError}
+                currency={currentUser?.company_currency ?? null}
+                tenantUsers={tenantUsers}
+                funnels={funnels}
+                products={products}
               />
             ) : null}
             {visibleActivePage === "inbox" ? (
@@ -3117,12 +3715,15 @@ function App() {
               />
             ) : null}
             {visibleActivePage === "appointments" ? (
-            <AppointmentsPage
-                appointments={appointments}
+              <AppointmentsPage
+                appointments={appointmentView}
                 appointmentDraft={appointmentDraft}
                 appointmentMessage={appointmentMessage}
                 appointmentSaving={appointmentSaving}
                 appointmentError={appointmentsError}
+                appointmentFilters={appointmentFilters}
+                onChangeAppointmentFilters={setAppointmentFilters}
+                onRefreshAppointments={refreshAppointmentData}
                 contacts={contacts}
                 onOpenAppointmentDraft={openAppointmentDraft}
                 onLoadAppointmentAvailability={loadAppointmentAvailability}
@@ -3152,6 +3753,7 @@ function App() {
                     user
                         ? {
                           ...user,
+                          company_currency: profile.currency,
                           company_timezone: profile.timezone,
                           company_logo_url: profile.logo_url,
                           company_banner_url: profile.banner_url,
@@ -3374,94 +3976,395 @@ function NavList({
 }
 
 function DashboardPage({
-  conversations,
-  orders,
-  appointments,
+  summary,
+  summaryError,
+  summaryFreshnessLabel,
+  summaryLoading,
+  analytics,
+  analyticsFreshnessLabel,
+  filters,
+  onChangeFilters,
   onNavigate,
+  onRefresh,
+  loading,
+  error,
+  currency,
+  tenantUsers,
+  funnels,
+  products,
 }: {
-  conversations: Conversation[];
-  orders: Order[];
-  appointments: ApiAppointment[];
+  summary: DashboardSummary;
+  summaryError: string;
+  summaryFreshnessLabel: string;
+  summaryLoading: boolean;
+  analytics: DashboardAnalytics;
+  analyticsFreshnessLabel: string;
+  filters: DashboardFilters;
+  onChangeFilters: (update: SetStateAction<DashboardFilters>) => void;
   onNavigate: (page: PageKey) => void;
+  onRefresh: () => void;
+  loading: boolean;
+  error: string;
+  currency: string | null;
+  tenantUsers: TenantUser[];
+  funnels: ApiFunnel[];
+  products: Product[];
 }) {
-  const paidTotal = orders
-    .filter((order) => order.status === "paid")
-    .reduce((total, order) => total + order.total, 0);
-  const waitingPayment = orders.filter((order) => order.status === "waiting_payment").length;
-  const metrics = [
-    { label: "Conversaciones abiertas", value: String(conversations.length), tone: "text-brand" },
-    { label: "Ordenes en pago", value: String(waitingPayment), tone: "text-warn" },
-    { label: "Ventas confirmadas", value: formatMoney(paidTotal), tone: "text-ink" },
-    { label: "Citas agendadas", value: String(appointments.length), tone: "text-danger" },
+  const tenantUserOptions = tenantUsers;
+  const showUserFilter = tenantUserOptions.length > 1;
+  const productOptions = products;
+  const selectedFunnel = funnels.find((funnel) => funnel.id === filters.funnelId) ?? null;
+  const funnelStepOptions = selectedFunnel
+    ? selectedFunnel.steps.map((step) => ({
+        value: step.id,
+        label: step.name,
+      }))
+    : funnels.flatMap((funnel) =>
+        funnel.steps.map((step) => ({
+          value: step.id,
+          label: `${funnel.name} · ${step.name}`,
+        })),
+      );
+
+  const summaryCards = [
+    {
+      label: "Chats totales",
+      value: String(summary.total_conversations),
+      tone: "text-brand",
+      action: () => onNavigate("inbox"),
+    },
+    {
+      label: "Chats pendientes por leer",
+      value: summary.total_unread > 99 ? "99+" : String(summary.total_unread),
+      tone: "text-warn",
+      action: () => onNavigate("inbox"),
+    },
+    {
+      label: "Ventas confirmadas",
+      value: formatMoney(summary.confirmed_sales_total, currency ?? "COP"),
+      tone: "text-ink",
+      action: () => onNavigate("orders"),
+    },
+    {
+      label: "Agendamientos",
+      value: String(summary.appointments_total),
+      tone: "text-danger",
+      action: () => onNavigate("appointments"),
+    },
   ];
-  const pipeline = ["Mensaje recibido", "Intencion detectada", "Stock validado", "Link de pago enviado"];
+
+  const filteredSummaryCards = [
+    {
+      label: "Chats en el rango",
+      value: String(analytics.summary.total_conversations),
+    },
+    {
+      label: "Sin leer",
+      value: analytics.summary.total_unread > 99 ? "99+" : String(analytics.summary.total_unread),
+    },
+    {
+      label: "Ventas filtradas",
+      value: formatMoney(analytics.summary.confirmed_sales_total, currency ?? "COP"),
+    },
+    {
+      label: "Citas filtradas",
+      value: String(analytics.summary.appointments_total),
+    },
+  ];
+
+  const hasSeries = analytics.series.length > 0;
+  const dateRangeLabel = filters.dateFrom && filters.dateTo ? `${filters.dateFrom} · ${filters.dateTo}` : "Rango no definido";
+  const formatUserOptionLabel = (user: TenantUser) =>
+    user.status === "active" ? user.name : `${user.name} (Inactivo)`;
+  const formatProductOptionLabel = (product: Product) =>
+    product.status === "active" ? product.name : `${product.name} (Inactivo)`;
 
   return (
-    <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
-      <section className="min-w-0 space-y-5">
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {metrics.map((metric) => (
-            <article key={metric.label} className="rounded border border-line bg-white p-4 shadow-soft">
-              <p className="text-xs font-medium text-slate-500">{metric.label}</p>
-              <p className={`mt-3 text-2xl font-semibold ${metric.tone}`}>{metric.value}</p>
-            </article>
-          ))}
-        </div>
-
-        <section className="rounded border border-line bg-white shadow-soft">
-          <SectionHeader
-            title="Inbox activo"
-            subtitle="Conversaciones que requieren accion"
-            action={
-              <IconButton title="Ver inbox" onClick={() => onNavigate("inbox")}>
-                <Inbox className="h-4 w-4" />
-              </IconButton>
-            }
-          />
-          <div className="divide-y divide-line">
-            {conversations.map((conversation) => (
-              <article key={conversation.id} className="grid gap-3 px-4 py-4 sm:grid-cols-[220px_1fr_100px]">
-                <div>
-                  <p className="text-sm font-medium">{conversation.name}</p>
-                  <p className="text-xs text-slate-500">{conversation.phone}</p>
-                </div>
-                <p className="min-w-0 text-sm text-slate-600">{conversation.message}</p>
-                <StatusBadge value={conversation.state} />
-              </article>
+    <div className="space-y-5">
+      <section className="rounded border border-line bg-surface shadow-soft">
+        <SectionHeader title="Resumen operativo" subtitle={summaryFreshnessLabel} />
+        {summaryLoading ? (
+          <DashboardSummarySkeleton />
+        ) : (
+          <div className="grid gap-3 px-4 pb-4 sm:grid-cols-2 xl:grid-cols-4">
+            {summaryCards.map((metric) => (
+              <button
+                key={metric.label}
+                type="button"
+                className="rounded border border-line bg-surface p-4 text-left shadow-soft transition hover:border-brandAccent/50 hover:shadow-glow"
+                onClick={metric.action}
+              >
+                <p className="text-xs font-medium text-inkMuted">{metric.label}</p>
+                <p className={`mt-3 text-2xl font-semibold ${metric.tone}`}>{metric.value}</p>
+              </button>
             ))}
           </div>
-        </section>
-
-        <section className="rounded border border-line bg-white p-4 shadow-soft">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">Flujo de compra</h2>
-            <CreditCard className="h-4 w-4 text-brand" />
-          </div>
-          <div className="grid gap-3 md:grid-cols-4">
-            {pipeline.map((step, index) => (
-              <div key={step} className="rounded border border-line bg-panel p-3">
-                <div className="mb-3 flex h-8 w-8 items-center justify-center rounded bg-white text-sm font-semibold text-brand">
-                  {index + 1}
-                </div>
-                <p className="text-sm font-medium">{step}</p>
-              </div>
-            ))}
-          </div>
-        </section>
+        )}
       </section>
 
-      <aside className="space-y-5">
-        <InfoPanel title="IA comercial" icon={Bot}>
-          <KeyValue label="Clasificador" value="Activo" strong />
-          <KeyValue label="Tools simuladas" value="4" />
-          <KeyValue label="Handoff humano" value="Listo" />
-        </InfoPanel>
-        <InfoPanel title="Equipo" icon={UserRound}>
-          {["Owner", "Admin", "Agent"].map((role) => (
-            <KeyValue key={role} label={role} value="Listo" />
-          ))}
-        </InfoPanel>
-      </aside>
+      <section className="rounded border border-line bg-surface shadow-soft">
+        {summaryError ? <Notice tone="error" message={summaryError} /> : null}
+        <SectionHeader
+          title="Filtros de analítica"
+          subtitle={`Rango ${dateRangeLabel} · ${analytics.timezone} · ${analyticsFreshnessLabel}`}
+          action={
+            <div className="flex items-center gap-2">
+              {loading ? <span className="text-xs text-inkMuted">Actualizando...</span> : null}
+              <IconButton title="Refrescar analítica" onClick={onRefresh}>
+                <RefreshCw className="h-4 w-4" />
+              </IconButton>
+            </div>
+          }
+        />
+        <div className="grid gap-3 border-b border-line px-4 py-4 md:grid-cols-2 xl:grid-cols-4">
+          <DashboardField label="Desde" htmlFor="dashboard-date-from">
+            <input
+              id="dashboard-date-from"
+              type="date"
+              className="h-10 w-full rounded border border-line bg-background px-3 text-sm outline-none transition focus:border-brandAccent"
+              value={filters.dateFrom}
+              onChange={(event) => onChangeFilters((current) => ({ ...current, dateFrom: event.target.value }))}
+            />
+          </DashboardField>
+          <DashboardField label="Hasta" htmlFor="dashboard-date-to">
+            <input
+              id="dashboard-date-to"
+              type="date"
+              className="h-10 w-full rounded border border-line bg-background px-3 text-sm outline-none transition focus:border-brandAccent"
+              value={filters.dateTo}
+              onChange={(event) => onChangeFilters((current) => ({ ...current, dateTo: event.target.value }))}
+            />
+          </DashboardField>
+          {showUserFilter ? (
+            <DashboardField label="Asesor / usuario" htmlFor="dashboard-assigned-user">
+              <select
+                id="dashboard-assigned-user"
+                className="h-10 w-full rounded border border-line bg-background px-3 text-sm outline-none transition focus:border-brandAccent"
+                value={filters.assignedUserId}
+                onChange={(event) =>
+                  onChangeFilters((current) => ({ ...current, assignedUserId: event.target.value }))
+                }
+              >
+                <option value="">Todos</option>
+                {tenantUserOptions.map((user) => (
+                  <option key={user.id} value={user.id}>
+                    {formatUserOptionLabel(user)}
+                  </option>
+                ))}
+              </select>
+            </DashboardField>
+          ) : (
+            <DashboardField label="Asesor / usuario" htmlFor="dashboard-assigned-user">
+              <input
+                id="dashboard-assigned-user"
+                className="h-10 w-full rounded border border-line bg-background px-3 text-sm text-inkMuted outline-none"
+                value={tenantUserOptions[0] ? formatUserOptionLabel(tenantUserOptions[0]) : "Sin usuarios"}
+                readOnly
+              />
+            </DashboardField>
+          )}
+          <DashboardField label="Estado de chat" htmlFor="dashboard-status">
+            <select
+              id="dashboard-status"
+              className="h-10 w-full rounded border border-line bg-background px-3 text-sm outline-none transition focus:border-brandAccent"
+              value={filters.status}
+              onChange={(event) => onChangeFilters((current) => ({ ...current, status: event.target.value }))}
+            >
+              <option value="">Todos</option>
+              <option value="open">Abiertas</option>
+              <option value="waiting_customer">Esperando cliente</option>
+              <option value="waiting_human">Esperando humano</option>
+              <option value="closed">Cerradas</option>
+            </select>
+          </DashboardField>
+          <DashboardField label="Funnel" htmlFor="dashboard-funnel">
+            <select
+              id="dashboard-funnel"
+              className="h-10 w-full rounded border border-line bg-background px-3 text-sm outline-none transition focus:border-brandAccent"
+              value={filters.funnelId}
+              onChange={(event) =>
+                onChangeFilters((current) => ({
+                  ...current,
+                  funnelId: event.target.value,
+                  funnelStepId: "",
+                }))
+              }
+            >
+              <option value="">Todos</option>
+              {funnels.map((funnel) => (
+                <option key={funnel.id} value={funnel.id}>
+                  {funnel.name}
+                </option>
+              ))}
+            </select>
+          </DashboardField>
+          <DashboardField label="Etapa" htmlFor="dashboard-funnel-step">
+            <select
+              id="dashboard-funnel-step"
+              className="h-10 w-full rounded border border-line bg-background px-3 text-sm outline-none transition focus:border-brandAccent"
+              value={filters.funnelStepId}
+              onChange={(event) =>
+                onChangeFilters((current) => ({ ...current, funnelStepId: event.target.value }))
+              }
+              disabled={funnelStepOptions.length === 0}
+            >
+              <option value="">Todas</option>
+              {funnelStepOptions.map((step) => (
+                <option key={step.value} value={step.value}>
+                  {step.label}
+                </option>
+              ))}
+            </select>
+          </DashboardField>
+          {productOptions.length > 0 ? (
+            <DashboardField label="Producto" htmlFor="dashboard-product">
+              <select
+                id="dashboard-product"
+                className="h-10 w-full rounded border border-line bg-background px-3 text-sm outline-none transition focus:border-brandAccent"
+                value={filters.productId}
+                onChange={(event) => onChangeFilters((current) => ({ ...current, productId: event.target.value }))}
+              >
+                <option value="">Todos</option>
+                {productOptions.map((product) => (
+                  <option key={product.id} value={product.id}>
+                    {formatProductOptionLabel(product)}
+                  </option>
+                ))}
+              </select>
+            </DashboardField>
+          ) : (
+            <DashboardField label="Producto" htmlFor="dashboard-product">
+              <input
+                id="dashboard-product"
+                className="h-10 w-full rounded border border-line bg-background px-3 text-sm text-inkMuted outline-none"
+                value="Sin productos"
+                readOnly
+              />
+            </DashboardField>
+          )}
+        </div>
+
+        {loading ? (
+          <DashboardMetricSkeleton />
+        ) : (
+          <div className="grid gap-3 px-4 py-4 sm:grid-cols-2 xl:grid-cols-4">
+            {filteredSummaryCards.map((metric) => (
+              <MetricPill key={metric.label} label={metric.label} value={metric.value} />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {error ? <Notice tone="error" message={error} /> : null}
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <DashboardChartPanel
+          title="Chats en el tiempo"
+          subtitle="Mensajes entrantes y salientes del tenant"
+          loading={loading}
+          hasData={hasSeries}
+          emptyTitle="No hay serie de chats para el rango seleccionado"
+          emptyDescription="Prueba un rango distinto o limpia filtros para ver actividad real."
+          action={null}
+        >
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={analytics.series} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(218, 221, 232, 0.45)" />
+              <XAxis dataKey="date" tickFormatter={(value) => formatDashboardDateLabel(String(value), analytics.timezone)} />
+              <YAxis allowDecimals={false} />
+              <Tooltip
+                labelFormatter={(label) => `Día ${formatDashboardDateLabel(String(label), analytics.timezone)}`}
+                formatter={(value, _name, props) => [
+                  String(value),
+                  props?.dataKey === "chatsReceived" ? "Entrantes" : "Salientes",
+                ]}
+              />
+              <Legend />
+              <Line type="monotone" dataKey="chatsReceived" name="Entrantes" stroke="#ff3de8" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="chatsSent" name="Salientes" stroke="#7c3aed" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        </DashboardChartPanel>
+
+        <DashboardChartPanel
+          title="Ventas en el tiempo"
+          subtitle="Ordenes creadas y ventas confirmadas"
+          loading={loading}
+          hasData={hasSeries}
+          emptyTitle="No hay serie de ventas para el rango seleccionado"
+          emptyDescription="Elige otro rango o quita filtros de producto y responsable."
+          action={<StatusBadge value={`${analytics.summary.confirmed_sales_total > 0 ? "Ventas activas" : "Sin ventas"}`} />}
+        >
+          <ResponsiveContainer width="100%" height={300}>
+            <ComposedChart data={analytics.series} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(218, 221, 232, 0.45)" />
+              <XAxis dataKey="date" tickFormatter={(value) => formatDashboardDateLabel(String(value), analytics.timezone)} />
+              <YAxis yAxisId="left" allowDecimals={false} />
+              <YAxis yAxisId="right" orientation="right" tickFormatter={(value) => formatMoney(Number(value) || 0, currency ?? "COP")} />
+              <Tooltip
+                labelFormatter={(label) => `Día ${formatDashboardDateLabel(String(label), analytics.timezone)}`}
+                formatter={(value, _name, props) => {
+                  if (props?.dataKey === "ordersPaidTotal") {
+                    return [formatMoney(Number(value) || 0, currency ?? "COP"), "Monto pagado"];
+                  }
+                  if (props?.dataKey === "ordersPaid") {
+                    return [String(value), "Ordenes pagadas"];
+                  }
+                  return [String(value), "Ordenes creadas"];
+                }}
+              />
+              <Legend />
+              <Bar yAxisId="left" dataKey="ordersCreated" name="Ordenes creadas" fill="#a855f7" radius={[6, 6, 0, 0]} />
+              <Bar yAxisId="left" dataKey="ordersPaid" name="Ordenes pagadas" fill="#ff3de8" radius={[6, 6, 0, 0]} />
+              <Line yAxisId="right" type="monotone" dataKey="ordersPaidTotal" name="Monto pagado" stroke="#0f172a" strokeWidth={2} dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </DashboardChartPanel>
+
+        <DashboardChartPanel
+          title="Agendamientos en el tiempo"
+          subtitle="Citas creadas, completadas y canceladas"
+          loading={loading}
+          hasData={hasSeries}
+          emptyTitle="No hay serie de citas para el rango seleccionado"
+          emptyDescription="Prueba con otro rango o revisa si el tenant tiene citas creadas."
+          action={<StatusBadge value={analytics.summary.appointments_total > 0 ? "Agenda activa" : "Sin citas"} />}
+          fullWidth
+        >
+          <ResponsiveContainer width="100%" height={320}>
+            <AreaChart data={analytics.series} margin={{ top: 8, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(218, 221, 232, 0.45)" />
+              <XAxis dataKey="date" tickFormatter={(value) => formatDashboardDateLabel(String(value), analytics.timezone)} />
+              <YAxis allowDecimals={false} />
+              <Tooltip
+                labelFormatter={(label) => `Día ${formatDashboardDateLabel(String(label), analytics.timezone)}`}
+              />
+              <Legend />
+              <Area
+                type="monotone"
+                dataKey="appointmentsScheduled"
+                name="Creadas"
+                stroke="#ff3de8"
+                fill="rgba(255, 61, 232, 0.18)"
+              />
+              <Area
+                type="monotone"
+                dataKey="appointmentsCompleted"
+                name="Completadas"
+                stroke="#7c3aed"
+                fill="rgba(124, 58, 237, 0.18)"
+              />
+              <Area
+                type="monotone"
+                dataKey="appointmentsCancelled"
+                name="Canceladas"
+                stroke="#f59e0b"
+                fill="rgba(245, 158, 11, 0.16)"
+              />
+            </AreaChart>
+          </ResponsiveContainer>
+        </DashboardChartPanel>
+      </div>
     </div>
   );
 }
@@ -4738,6 +5641,9 @@ function AppointmentsPage({
   appointmentMessage,
   appointmentSaving,
   appointmentError,
+  appointmentFilters,
+  onChangeAppointmentFilters,
+  onRefreshAppointments,
   contacts,
   onOpenAppointmentDraft,
   onLoadAppointmentAvailability,
@@ -4751,6 +5657,9 @@ function AppointmentsPage({
   appointmentMessage: string;
   appointmentSaving: boolean;
   appointmentError: string;
+  appointmentFilters: AppointmentFilters;
+  onChangeAppointmentFilters: (value: SetStateAction<AppointmentFilters>) => void;
+  onRefreshAppointments: () => Promise<void>;
   contacts: ApiContact[];
   onOpenAppointmentDraft: () => void;
   onLoadAppointmentAvailability: (payload: ApiAppointmentAvailabilityRequest) => Promise<ApiAppointmentAvailability>;
@@ -4807,21 +5716,50 @@ function AppointmentsPage({
     ],
     [tenantUsers],
   );
+  const hasActiveFilters = !areAppointmentFiltersEmpty(appointmentFilters);
   const [preferredPeriod, setPreferredPeriod] = useState<"morning" | "afternoon" | "">("");
   const [availability, setAvailability] = useState<ApiAppointmentAvailability | null>(null);
   const [availabilityLoading, setAvailabilityLoading] = useState(false);
   const [availabilityError, setAvailabilityError] = useState("");
-  const normalizedCompanyTimeZone = normalizeTimeZone(currentUser.company_timezone ?? null);
+  const [agendaConfig, setAgendaConfig] = useState<AppointmentOperationalConfig | null>(null);
+  const [agendaConfigLoading, setAgendaConfigLoading] = useState(false);
+  const [agendaConfigSaving, setAgendaConfigSaving] = useState(false);
+  const [agendaConfigError, setAgendaConfigError] = useState("");
+  const [agendaConfigMessage, setAgendaConfigMessage] = useState("");
+  const agendaSection =
+    agendaConfig?.status === "published"
+      ? agendaConfig.published
+      : agendaConfig?.draft ?? buildDefaultAgendaSchedule(currentUser.company_timezone ?? "UTC");
+  const normalizedCompanyTimeZone = normalizeTimeZone(agendaSection.timezone ?? currentUser.company_timezone ?? null);
   const defaultAppointmentTimeZone =
     normalizedCompanyTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
   const appointmentTimeZone =
-    availability?.timezone ?? normalizedCompanyTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    availability?.timezone ??
+    normalizedCompanyTimeZone ??
+    Intl.DateTimeFormat().resolvedOptions().timeZone;
   const [scheduledAtValue, setScheduledAtValue] = useState("");
   const [selectedAvailabilityOption, setSelectedAvailabilityOption] = useState<string | null>(null);
   const [durationMinutesValue, setDurationMinutesValue] = useState(DEFAULT_APPOINTMENT_DURATION_MINUTES);
+  const [agendaDurationDraft, setAgendaDurationDraft] = useState(DEFAULT_APPOINTMENT_DURATION_MINUTES);
+  const [agendaTimezoneDraft, setAgendaTimezoneDraft] = useState(currentUser.company_timezone ?? "UTC");
+  const [agendaWeekdayStartDraft, setAgendaWeekdayStartDraft] = useState("08:00");
+  const [agendaWeekdayEndDraft, setAgendaWeekdayEndDraft] = useState("18:00");
+  const [agendaWeekendStartDraft, setAgendaWeekendStartDraft] = useState("08:00");
+  const [agendaWeekendEndDraft, setAgendaWeekendEndDraft] = useState("14:00");
   const draftKey = appointmentDraft
     ? `${appointmentDraft.source}-${appointmentDraft.contactId || "manual"}-${appointmentDraft.preparedAt}`
     : "manual-empty";
+
+  function updateAppointmentFilter<K extends keyof AppointmentFilters>(key: K, value: AppointmentFilters[K]) {
+    onChangeAppointmentFilters((current) => ({
+      ...current,
+      [key]: value,
+    }));
+  }
+
+  function resetAppointmentFilters() {
+    onChangeAppointmentFilters(DEFAULT_APPOINTMENT_FILTERS);
+  }
 
   useEffect(() => {
     setPreferredPeriod("");
@@ -4829,8 +5767,58 @@ function AppointmentsPage({
     setAvailabilityError("");
     setScheduledAtValue("");
     setSelectedAvailabilityOption(null);
-    setDurationMinutesValue(DEFAULT_APPOINTMENT_DURATION_MINUTES);
-  }, [defaultAppointmentTimeZone, draftKey]);
+    setDurationMinutesValue(agendaSection.default_appointment_duration_minutes);
+    setAgendaDurationDraft(agendaSection.default_appointment_duration_minutes);
+    setAgendaTimezoneDraft(agendaSection.timezone);
+    setAgendaWeekdayStartDraft(agendaSection.weekday.start);
+    setAgendaWeekdayEndDraft(agendaSection.weekday.end);
+    setAgendaWeekendStartDraft(agendaSection.weekend.start);
+    setAgendaWeekendEndDraft(agendaSection.weekend.end);
+  }, [
+    agendaSection.default_appointment_duration_minutes,
+    agendaSection.timezone,
+    agendaSection.weekday.start,
+    agendaSection.weekday.end,
+    agendaSection.weekend.start,
+    agendaSection.weekend.end,
+    defaultAppointmentTimeZone,
+    draftKey,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadAgendaConfig() {
+      setAgendaConfigLoading(true);
+      setAgendaConfigError("");
+      try {
+        const response = await api<AppointmentOperationalConfig>("/appointments/operational-config");
+        if (cancelled) {
+          return;
+        }
+        setAgendaConfig(normalizeAgendaConfig(response, currentUser.company_timezone));
+      } catch (caught) {
+        if (!cancelled) {
+          if (caught instanceof ApiError && caught.status === 404) {
+            setAgendaConfig(buildDefaultAgendaConfig(currentUser.company_timezone));
+            return;
+          }
+          setAgendaConfigError(caught instanceof Error ? caught.message : "No fue posible cargar las reglas de agenda");
+          setAgendaConfig(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setAgendaConfigLoading(false);
+        }
+      }
+    }
+
+    void loadAgendaConfig();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser.company_id, currentUser.company_timezone]);
 
   const appointmentAssignedLabel = appointmentDraft
     ? getConversationAssignmentLabel(
@@ -4945,9 +5933,65 @@ function AppointmentsPage({
     setSelectedAvailabilityOption(null);
   }
 
+  async function saveAgendaConfig() {
+    setAgendaConfigSaving(true);
+    setAgendaConfigError("");
+    setAgendaConfigMessage("");
+    try {
+      const baseConfig = agendaConfig ?? buildDefaultAgendaConfig(currentUser.company_timezone);
+      const currentSection = baseConfig.status === "published" ? baseConfig.published : baseConfig.draft;
+      const nextSection = {
+        ...cloneAgendaSchedule(currentSection),
+        timezone: agendaTimezoneDraft.trim() || currentUser.company_timezone || "UTC",
+        weekday: {
+          start: agendaWeekdayStartDraft.trim() || "08:00",
+          end: agendaWeekdayEndDraft.trim() || "18:00",
+        },
+        weekend: {
+          start: agendaWeekendStartDraft.trim() || "08:00",
+          end: agendaWeekendEndDraft.trim() || "14:00",
+        },
+        default_appointment_duration_minutes: Number.isFinite(agendaDurationDraft)
+          ? agendaDurationDraft
+          : DEFAULT_APPOINTMENT_DURATION_MINUTES,
+      };
+      const nextConfig: AppointmentOperationalConfig = {
+        status: "published",
+        version: baseConfig.version,
+        published_at: baseConfig.published_at ?? new Date().toISOString(),
+        draft: nextSection,
+        published: nextSection,
+      };
+      const saved = await api<AppointmentOperationalConfig>("/appointments/operational-config", {
+        method: "PUT",
+        body: JSON.stringify(agendaPayloadFromConfig(nextConfig)),
+      });
+      setAgendaConfig(normalizeAgendaConfig(saved, currentUser.company_timezone));
+      const savedSection = saved.status === "published" ? saved.published : saved.draft;
+      setAgendaTimezoneDraft(savedSection.timezone);
+      setAgendaWeekdayStartDraft(savedSection.weekday.start);
+      setAgendaWeekdayEndDraft(savedSection.weekday.end);
+      setAgendaWeekendStartDraft(savedSection.weekend.start);
+      setAgendaWeekendEndDraft(savedSection.weekend.end);
+      setDurationMinutesValue(savedSection.default_appointment_duration_minutes);
+      setAgendaDurationDraft(savedSection.default_appointment_duration_minutes);
+      setAgendaConfigMessage("Reglas de agenda guardadas");
+      setAvailability(null);
+      setAvailabilityError("");
+      setPreferredPeriod("");
+      setScheduledAtValue("");
+      setSelectedAvailabilityOption(null);
+    } catch (caught) {
+      setAgendaConfigError(caught instanceof Error ? caught.message : "No fue posible guardar las reglas de agenda");
+    } finally {
+      setAgendaConfigSaving(false);
+    }
+  }
+
   const appointmentRows = appointments.map((appointment) => {
     const contact = contactLookup.get(appointment.contact_id);
     const assignedUser = appointment.assigned_user_id ? userLookup.get(appointment.assigned_user_id) : null;
+    const sourceLabel = appointment.conversation_id ? "Inbox" : "Manual";
     const scheduledAtLabel = formatDateTimeLabelInTimeZone(
       appointment.scheduled_at,
       normalizedCompanyTimeZone ?? appointmentTimeZone,
@@ -4956,6 +6000,7 @@ function AppointmentsPage({
       contact ? `${contact.name?.trim() || formatPhone(contact.phone)} · ${formatPhone(contact.phone)}` : appointment.contact_id.slice(0, 8),
       scheduledAtLabel,
       appointment.status,
+      sourceLabel,
       appointment.calendar_sync_status ?? "sin sincronizacion",
       assignedUser?.name ?? "Sin asignar",
     ];
@@ -4965,6 +6010,195 @@ function AppointmentsPage({
     <div className="space-y-4">
       {appointmentError ? <Notice tone="error" message={appointmentError} /> : null}
       {appointmentMessage ? <Notice tone="success" message={appointmentMessage} /> : null}
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader
+          title="Filtros de citas"
+          subtitle={hasActiveFilters ? "Vista filtrada del tenant" : "Vista completa del tenant"}
+          action={
+            <div className="flex items-center gap-2">
+              {hasActiveFilters ? (
+                <button
+                  className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
+                  type="button"
+                  onClick={resetAppointmentFilters}
+                >
+                  Limpiar filtros
+                </button>
+              ) : null}
+              <button
+                className="inline-flex h-9 items-center gap-2 rounded border border-line px-3 text-sm"
+                type="button"
+                onClick={() => void onRefreshAppointments()}
+              >
+                <RefreshCw className="h-4 w-4" />
+                Actualizar
+              </button>
+            </div>
+          }
+        />
+        <div className="grid gap-3 border-t border-line bg-panel/20 px-4 py-4 lg:grid-cols-2 xl:grid-cols-5">
+          <TextInput
+            label="Desde"
+            type="date"
+            value={appointmentFilters.scheduledFrom}
+            onChange={(value) => updateAppointmentFilter("scheduledFrom", value)}
+          />
+          <TextInput
+            label="Hasta"
+            type="date"
+            value={appointmentFilters.scheduledTo}
+            onChange={(value) => updateAppointmentFilter("scheduledTo", value)}
+          />
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Estado</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={appointmentFilters.status}
+              onChange={(event) => updateAppointmentFilter("status", event.target.value)}
+            >
+              <option value="">Todos los estados</option>
+              <option value="scheduled">Agendada</option>
+              <option value="cancelled">Cancelada</option>
+              <option value="completed">Completada</option>
+              <option value="no_show">No asistio</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Responsable</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={appointmentFilters.assignedUserId}
+              onChange={(event) => updateAppointmentFilter("assignedUserId", event.target.value)}
+            >
+              <option value="">Todos los responsables</option>
+              {tenantUsers.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Cliente</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={appointmentFilters.contactId}
+              onChange={(event) => updateAppointmentFilter("contactId", event.target.value)}
+            >
+              <option value="">Todos los clientes</option>
+              {contacts.map((contact) => (
+                <option key={contact.id} value={contact.id}>
+                  {contact.name?.trim() || formatPhone(contact.phone)} · {formatPhone(contact.phone)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-xs font-medium text-slate-500">Origen</span>
+            <select
+              className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+              value={appointmentFilters.source}
+              onChange={(event) => updateAppointmentFilter("source", event.target.value as AppointmentFilters["source"])}
+            >
+              <option value="">Todos los orígenes</option>
+              <option value="inbox">Inbox</option>
+              <option value="manual">Manual</option>
+            </select>
+          </label>
+        </div>
+      </section>
+      <section className="rounded border border-line bg-white shadow-soft">
+        <SectionHeader
+          title="Reglas de agenda compartidas"
+          subtitle="La misma configuracion alimenta IA y Citas"
+          action={
+            <button
+              className="inline-flex h-9 items-center gap-2 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+              type="button"
+              disabled={agendaConfigLoading || agendaConfigSaving}
+              onClick={() => void saveAgendaConfig()}
+            >
+              <Save className="h-4 w-4" />
+              {agendaConfigSaving ? "Guardando..." : "Guardar reglas"}
+            </button>
+          }
+        />
+        <div className="space-y-4 border-t border-line px-4 py-4">
+          {agendaConfigLoading ? <Notice tone="warning" message="Cargando reglas de agenda..." /> : null}
+          {agendaConfigError ? <Notice tone="error" message={agendaConfigError} /> : null}
+          {agendaConfigMessage ? <Notice tone="success" message={agendaConfigMessage} /> : null}
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">Zona horaria</span>
+              <input
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                value={agendaTimezoneDraft}
+                disabled={agendaConfigLoading || agendaConfigSaving}
+                onChange={(event) => setAgendaTimezoneDraft(event.target.value)}
+                placeholder="America/Bogota"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">L-V inicio</span>
+              <input
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                value={agendaWeekdayStartDraft}
+                disabled={agendaConfigLoading || agendaConfigSaving}
+                onChange={(event) => setAgendaWeekdayStartDraft(event.target.value)}
+                placeholder="08:00"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">L-V fin</span>
+              <input
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                value={agendaWeekdayEndDraft}
+                disabled={agendaConfigLoading || agendaConfigSaving}
+                onChange={(event) => setAgendaWeekdayEndDraft(event.target.value)}
+                placeholder="18:00"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">S-D inicio</span>
+              <input
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                value={agendaWeekendStartDraft}
+                disabled={agendaConfigLoading || agendaConfigSaving}
+                onChange={(event) => setAgendaWeekendStartDraft(event.target.value)}
+                placeholder="08:00"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">S-D fin</span>
+              <input
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                value={agendaWeekendEndDraft}
+                disabled={agendaConfigLoading || agendaConfigSaving}
+                onChange={(event) => setAgendaWeekendEndDraft(event.target.value)}
+                placeholder="14:00"
+              />
+            </label>
+            <label className="block">
+              <span className="text-xs font-medium text-slate-500">Duracion base (min)</span>
+              <input
+                className="mt-1 h-10 w-full rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand disabled:cursor-not-allowed disabled:bg-panel"
+                type="number"
+                min={15}
+                max={480}
+                step={15}
+                value={agendaDurationDraft}
+                disabled={agendaConfigLoading || agendaConfigSaving}
+                onChange={(event) =>
+                  setAgendaDurationDraft(Number(event.target.value) || DEFAULT_APPOINTMENT_DURATION_MINUTES)
+                }
+              />
+            </label>
+          </div>
+          <p className="text-xs text-slate-500">
+            El horario y la duracion se comparten con IA. Esta duracion alimenta el valor inicial del formulario y la validacion de disponibilidad.
+          </p>
+        </div>
+      </section>
       <section className="rounded border border-line bg-white shadow-soft">
         <SectionHeader
           title="Agenda"
@@ -5253,7 +6487,7 @@ function AppointmentsPage({
         />
         {appointments.length ? (
           <DataTable
-            headers={["Cliente", "Fecha", "Estado", "Sync", "Asesor"]}
+            headers={["Cliente", "Fecha", "Estado", "Origen", "Sync", "Asesor"]}
             rows={appointmentRows}
           />
         ) : (
@@ -6621,6 +7855,19 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
                       schedule: {
                         ...current.schedule,
                         weekend: { ...current.schedule.weekend, end: value },
+                      },
+                    }))
+                  }
+                />
+                <TextInput
+                  label="Duracion base cita (min)"
+                  value={String(operationalConfig.draft.schedule.default_appointment_duration_minutes)}
+                  onChange={(value) =>
+                    updateOperationalDraft((current) => ({
+                      ...current,
+                      schedule: {
+                        ...current.schedule,
+                        default_appointment_duration_minutes: Number(value) || 60,
                       },
                     }))
                   }
@@ -9164,6 +10411,114 @@ function MetricPill({ label, value }: { label: string; value: string }) {
       <p className="text-xs text-slate-500">{label}</p>
       <p className="text-sm font-semibold">{value}</p>
     </div>
+  );
+}
+
+function DashboardField({
+  label,
+  htmlFor,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  children: ReactNode;
+}) {
+  return (
+    <label className="block space-y-2 text-sm" htmlFor={htmlFor}>
+      <span className="block text-xs font-medium text-inkMuted">{label}</span>
+      <div>{children}</div>
+    </label>
+  );
+}
+
+function DashboardEmptyState({
+  title,
+  description,
+}: {
+  title: string;
+  description: string;
+}) {
+  return (
+    <div className="flex min-h-[300px] flex-col items-center justify-center rounded border border-dashed border-line bg-panel px-6 py-10 text-center">
+      <p className="text-sm font-semibold text-ink">{title}</p>
+      <p className="mt-2 max-w-md text-sm text-inkMuted">{description}</p>
+    </div>
+  );
+}
+
+function DashboardChartSkeleton() {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="h-4 w-40 rounded bg-surfaceMuted" />
+        <div className="h-4 w-24 rounded bg-surfaceMuted" />
+      </div>
+      <div className="grid h-[280px] grid-cols-6 gap-3 rounded border border-line bg-panel p-4">
+        {Array.from({ length: 6 }).map((_, index) => (
+          <div key={index} className="flex items-end">
+            <div className="h-1/3 w-full rounded bg-brandAccent/20" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DashboardSummarySkeleton() {
+  return (
+    <div className="grid gap-3 px-4 pb-4 sm:grid-cols-2 xl:grid-cols-4 animate-pulse">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="rounded border border-line bg-surface p-4 shadow-soft">
+          <div className="h-3 w-20 rounded bg-surfaceMuted" />
+          <div className="mt-3 h-8 w-24 rounded bg-surfaceMuted" />
+          <div className="mt-5 h-3 w-16 rounded bg-surfaceMuted" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DashboardMetricSkeleton() {
+  return (
+    <div className="grid gap-3 px-4 py-4 sm:grid-cols-2 xl:grid-cols-4 animate-pulse">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div key={index} className="rounded border border-line bg-panel px-3 py-2">
+          <div className="h-3 w-24 rounded bg-surfaceMuted" />
+          <div className="mt-3 h-4 w-16 rounded bg-surfaceMuted" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DashboardChartPanel({
+  title,
+  subtitle,
+  action,
+  loading,
+  hasData,
+  emptyTitle,
+  emptyDescription,
+  children,
+  fullWidth = false,
+}: {
+  title: string;
+  subtitle: string;
+  action?: ReactNode;
+  loading: boolean;
+  hasData: boolean;
+  emptyTitle: string;
+  emptyDescription: string;
+  children: ReactNode;
+  fullWidth?: boolean;
+}) {
+  return (
+    <section className={`rounded border border-line bg-surface shadow-soft ${fullWidth ? "xl:col-span-2" : ""}`}>
+      <SectionHeader title={title} subtitle={subtitle} action={action} />
+      <div className="p-4">
+        {loading ? <DashboardChartSkeleton /> : hasData ? children : <DashboardEmptyState title={emptyTitle} description={emptyDescription} />}
+      </div>
+    </section>
   );
 }
 
