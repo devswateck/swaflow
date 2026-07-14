@@ -37,7 +37,12 @@ def upgrade() -> None:
             .values(idempotency_key=f"legacy:{order_id}")
         )
 
-    op.alter_column("orders", "idempotency_key", nullable=False)
+    op.alter_column(
+        "orders",
+        "idempotency_key",
+        existing_type=sa.String(length=255),
+        nullable=False,
+    )
     op.create_unique_constraint(
         "uq_orders_company_idempotency_key",
         "orders",
