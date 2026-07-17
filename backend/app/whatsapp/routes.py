@@ -51,15 +51,12 @@ def verify_whatsapp_webhook(
     mode: str | None = Query(default=None, alias="hub.mode"),
     verify_token: str | None = Query(default=None, alias="hub.verify_token"),
     challenge: str | None = Query(default=None, alias="hub.challenge"),
-    db: Session = Depends(get_db),
 ) -> PlainTextResponse:
     settings = get_settings()
     if mode == "subscribe" and challenge:
         if settings.whatsapp_verify_token:
             if verify_token == settings.whatsapp_verify_token:
                 return PlainTextResponse(challenge)
-        elif verify_token and service.verify_token_exists(db, verify_token=verify_token):
-            return PlainTextResponse(challenge)
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid verify token")
 
 
@@ -83,7 +80,7 @@ def get_whatsapp_setup(
     settings = get_settings()
     return WhatsAppSetupRead(
         callback_url=f"{settings.public_base_url.rstrip('/')}/api/v1/webhooks/whatsapp",
-        verify_token=settings.whatsapp_verify_token,
+        verify_token_configured=bool(settings.whatsapp_verify_token),
         graph_api_version=settings.whatsapp_graph_api_version,
         app_secret_configured=bool(settings.whatsapp_app_secret),
     )

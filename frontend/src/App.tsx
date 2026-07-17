@@ -4,10 +4,12 @@ import {
   type SetStateAction,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { flushSync } from "react-dom";
 import {
   AlertCircle,
   Bell,
@@ -103,7 +105,7 @@ type TokenResponse = {
 
 type WhatsAppSetup = {
   callback_url: string;
-  verify_token: string | null;
+  verify_token_configured: boolean;
   graph_api_version: string;
   app_secret_configured: boolean;
 };
@@ -113,7 +115,6 @@ type WhatsAppAccount = {
   company_id: string;
   phone_number_id: string;
   business_account_id: string | null;
-  verify_token: string;
   status: string;
 };
 
@@ -468,6 +469,7 @@ type ApiAppointmentIntentContext = {
   preferred_period: "morning" | "afternoon" | null;
   source: string;
   prepared_at: string;
+  snapshot_version: string;
 };
 
 type ApiContact = {
@@ -717,6 +719,7 @@ type AppointmentDraft = {
   assignedUserId: string | null;
   assignedLabel: string;
   preparedAt: string;
+  snapshotVersion: string;
   source: "inbox" | "manual";
 };
 
@@ -1897,6 +1900,7 @@ function buildAppointmentDraftFromContext(
     assignedUserId: context.assigned_user_id,
     assignedLabel: getConversationAssignmentLabel(assignedConversation, currentUser, tenantUsers),
     preparedAt: context.prepared_at,
+    snapshotVersion: context.snapshot_version,
     source: context.source === "inbox" ? "inbox" : "manual",
   };
 }
@@ -1933,6 +1937,7 @@ function buildManualAppointmentDraft(currentUser: CurrentUser, tenantUsers: Tena
     assignedUserId: null,
     assignedLabel: getConversationAssignmentLabel(manualConversation, currentUser, tenantUsers),
     preparedAt: new Date().toISOString(),
+    snapshotVersion: `manual-${manualConversation.id}`,
     source: "manual",
   };
 }
@@ -1953,6 +1958,22 @@ function getConversationAssignmentLabel(
     return `Asignado a ${assignee.name}`;
   }
   return "Asignado a otro asesor";
+}
+
+function getConversationAiLabel(conversation: { aiEnabled: boolean }) {
+  return conversation.aiEnabled ? "IA activa" : "IA pausada";
+}
+
+function getConversationClassificationLabel(conversation: {
+  funnelName: string | null;
+  funnelStepName: string | null;
+}) {
+  if (!conversation.funnelName) {
+    return "Sin clasificacion";
+  }
+  return conversation.funnelStepName
+    ? `${conversation.funnelName} / ${conversation.funnelStepName}`
+    : conversation.funnelName;
 }
 
 function mapApiMessage(message: ApiMessage): InboxMessage {
@@ -2040,6 +2061,42 @@ function mapApiConversationEvent(event: ApiEvent): ConversationEvent {
     description: formatConversationEventDescription(event),
     createdAt: event.created_at,
     status: event.status,
+  };
+}
+
+function getLatestAppointmentIntentSnapshotMeta(events: ApiEvent[] | null | undefined) {
+  const candidates = (events ?? []).filter(
+    (event) => event.event_type === "conversation.appointment_intent_prepared",
+  );
+  if (!candidates.length) {
+    return null;
+  }
+  const latest = candidates.reduce((currentLatest, event) => {
+    const currentPreparedAt =
+      typeof currentLatest.payload.prepared_at === "string"
+        ? currentLatest.payload.prepared_at
+        : currentLatest.created_at;
+    const eventPreparedAt =
+      typeof event.payload.prepared_at === "string" ? event.payload.prepared_at : event.created_at;
+    if (eventPreparedAt > currentPreparedAt) {
+      return event;
+    }
+    if (eventPreparedAt < currentPreparedAt) {
+      return currentLatest;
+    }
+    if (event.created_at > currentLatest.created_at) {
+      return event;
+    }
+    if (event.created_at < currentLatest.created_at) {
+      return currentLatest;
+    }
+    return event.id > currentLatest.id ? event : currentLatest;
+  });
+  const preparedAt =
+    typeof latest.payload.prepared_at === "string" ? latest.payload.prepared_at : latest.created_at;
+  return {
+    preparedAt,
+    snapshotVersion: `${preparedAt}|${latest.id}`,
   };
 }
 
@@ -2419,11 +2476,27 @@ function App() {
     getStoredSelectedConversationId,
   );
   const [selectedConversationDetail, setSelectedConversationDetail] = useState<Conversation | null>(null);
+  const [selectedConversationAppointmentIntentPreparedAt, setSelectedConversationAppointmentIntentPreparedAt] =
+    useState<string | null>(null);
+  const [selectedConversationAppointmentIntentSnapshotVersion, setSelectedConversationAppointmentIntentSnapshotVersion] =
+    useState<string | null>(null);
   const [inboxFunnelFilterId, setInboxFunnelFilterId] = useState<string>("");
   const [inboxStepFilterId, setInboxStepFilterId] = useState<string>("");
   const selectedConversationIdRef = useRef<string | null>(null);
+  const selectedConversationAppointmentIntentPreparedAtRef = useRef<string | null>(null);
+  const selectedConversationAppointmentIntentSnapshotVersionRef = useRef<string | null>(null);
+  const inboxRequestIdRef = useRef(0);
+  const inboxInflightRequestCountRef = useRef(0);
+  const inboxAbortControllerRef = useRef<AbortController | null>(null);
   const conversationDetailRequestIdRef = useRef(0);
   const conversationDetailAbortControllerRef = useRef<AbortController | null>(null);
+  const loadConversationDetailRef = useRef<((conversationId: string, markRead?: boolean) => Promise<void>) | null>(
+    null,
+  );
+  const appointmentIntentRequestIdRef = useRef(0);
+  const appointmentIntentAbortControllerRef = useRef<AbortController | null>(null);
+  const prepareAppointmentRequestIdRef = useRef(0);
+  const prepareAppointmentAbortControllerRef = useRef<AbortController | null>(null);
   const orderFiltersRef = useRef(orderFilters);
   const appointmentFiltersRef = useRef(appointmentFilters);
   const appointmentViewRequestIdRef = useRef(0);
@@ -2434,6 +2507,10 @@ function App() {
   const hasLoadedOrdersOnceRef = useRef(false);
   const ordersRequestIdRef = useRef(0);
   const orderLoadErrorRequestIdRef = useRef(0);
+  const setSelectedConversationIdSync = useCallback((nextValue: string | null) => {
+    selectedConversationIdRef.current = nextValue;
+    setSelectedConversationId(nextValue);
+  }, []);
 
   useEffect(() => {
     appointmentFiltersRef.current = appointmentFilters;
@@ -2502,9 +2579,18 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [accessNotice]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     selectedConversationIdRef.current = selectedConversationId;
   }, [selectedConversationId]);
+
+  useLayoutEffect(() => {
+    selectedConversationAppointmentIntentPreparedAtRef.current = selectedConversationAppointmentIntentPreparedAt;
+  }, [selectedConversationAppointmentIntentPreparedAt]);
+
+  useLayoutEffect(() => {
+    selectedConversationAppointmentIntentSnapshotVersionRef.current =
+      selectedConversationAppointmentIntentSnapshotVersion;
+  }, [selectedConversationAppointmentIntentSnapshotVersion]);
 
   useEffect(() => {
     try {
@@ -2700,39 +2786,69 @@ function App() {
         funnelStepId?: string | null;
       } = {},
     ) => {
-    if (showLoading) {
-      setInboxLoading(true);
-    }
-    setInboxError("");
-    try {
-      const params = new URLSearchParams();
-      if (funnelId) {
-        params.set("funnel_id", funnelId);
-      }
-      if (funnelStepId) {
-        params.set("funnel_step_id", funnelStepId);
-      }
-      const response = await api<ApiConversation[]>(`/conversations${params.toString() ? `?${params.toString()}` : ""}`);
-      const mapped = response.map(mapApiConversation);
-      setConversations(mapped);
-      void refreshDashboardSnapshot();
-      const currentSelected = selectedConversationIdRef.current;
-      if (currentSelected && mapped.some((conversation) => conversation.id === currentSelected)) {
-        setSelectedConversationId(currentSelected);
-      } else if (currentSelected) {
-        setSelectedConversationId(null);
-        setSelectedConversationDetail(null);
-        setConversationMessages([]);
-        setConversationEvents([]);
-      }
-    } catch (caught) {
-      setInboxError(caught instanceof Error ? caught.message : "No fue posible actualizar el inbox");
-    } finally {
+      const requestId = ++inboxRequestIdRef.current;
+      inboxAbortControllerRef.current?.abort();
+      const abortController = new AbortController();
+      inboxAbortControllerRef.current = abortController;
+      const { signal } = abortController;
+      inboxInflightRequestCountRef.current += 1;
       if (showLoading) {
-        setInboxLoading(false);
+        setInboxLoading(true);
       }
-    }
-  }, [inboxFunnelFilterId, inboxStepFilterId, refreshDashboardSnapshot]);
+      try {
+        const params = new URLSearchParams();
+        if (funnelId) {
+          params.set("funnel_id", funnelId);
+        }
+        if (funnelStepId) {
+          params.set("funnel_step_id", funnelStepId);
+        }
+        const response = await api<ApiConversation[]>(
+          `/conversations${params.toString() ? `?${params.toString()}` : ""}`,
+          {
+            signal,
+          },
+        );
+        if (signal.aborted || requestId !== inboxRequestIdRef.current) {
+          return false;
+        }
+        const mapped = response.map(mapApiConversation);
+        setConversations(mapped);
+        void refreshDashboardSnapshot();
+        const currentSelected = selectedConversationIdRef.current;
+        if (currentSelected && mapped.some((conversation) => conversation.id === currentSelected)) {
+          setSelectedConversationIdSync(currentSelected);
+          void loadConversationDetailRef.current?.(currentSelected, false);
+        } else if (currentSelected) {
+          setSelectedConversationIdSync(null);
+          setSelectedConversationDetail(null);
+          setConversationMessages([]);
+          setConversationEvents([]);
+        }
+        setInboxError("");
+        return true;
+      } catch (caught) {
+        if (!signal.aborted && requestId === inboxRequestIdRef.current) {
+          setInboxError(caught instanceof Error ? caught.message : "No fue posible actualizar el inbox");
+        }
+        return false;
+      } finally {
+        inboxInflightRequestCountRef.current = Math.max(0, inboxInflightRequestCountRef.current - 1);
+        if (inboxInflightRequestCountRef.current === 0) {
+          setInboxLoading(false);
+        }
+        if (inboxAbortControllerRef.current === abortController) {
+          inboxAbortControllerRef.current = null;
+        }
+      }
+    },
+    [
+      inboxFunnelFilterId,
+      inboxStepFilterId,
+      refreshDashboardSnapshot,
+      setSelectedConversationIdSync,
+    ],
+  );
 
   const loadConversationDetail = useCallback(async (conversationId: string, markRead = true) => {
     const requestId = ++conversationDetailRequestIdRef.current;
@@ -2783,6 +2899,11 @@ function App() {
         ...mapApiConversation(detail),
         unreadCount: detail.unread_count,
       };
+      const latestAppointmentIntent = getLatestAppointmentIntentSnapshotMeta(detail.events);
+      setSelectedConversationAppointmentIntentPreparedAt(latestAppointmentIntent?.preparedAt ?? null);
+      setSelectedConversationAppointmentIntentSnapshotVersion(
+        latestAppointmentIntent?.snapshotVersion ?? null,
+      );
       setConversationMessages(detail.messages.map(mapApiMessage));
       setConversationEvents((detail.events ?? []).map(mapApiConversationEvent));
       setSelectedConversationDetail(mappedDetail);
@@ -2799,25 +2920,38 @@ function App() {
         return;
       }
       if (caught instanceof ApiError && caught.status === 404 && selectedConversationIdRef.current === conversationId) {
-        setSelectedConversationId(null);
+        setSelectedConversationIdSync(null);
         setSelectedConversationDetail(null);
+        setSelectedConversationAppointmentIntentPreparedAt(null);
+        setSelectedConversationAppointmentIntentSnapshotVersion(null);
         setConversationMessages([]);
         setConversationEvents([]);
+        return;
+      }
+      if (selectedConversationIdRef.current !== conversationId) {
         return;
       }
       setConversationMessages([]);
       setConversationEvents([]);
       setSelectedConversationDetail(null);
+      setSelectedConversationAppointmentIntentPreparedAt(null);
+      setSelectedConversationAppointmentIntentSnapshotVersion(null);
       setInboxError(caught instanceof Error ? caught.message : "No fue posible cargar la conversacion");
     } finally {
       if (conversationDetailAbortControllerRef.current === abortController) {
         conversationDetailAbortControllerRef.current = null;
       }
     }
-  }, [refreshDashboardSnapshot]);
+  }, [refreshDashboardSnapshot, setSelectedConversationIdSync]);
 
-  const loadAppointmentIntentContext = useCallback(async (conversationId: string) => {
-    return await api<ApiAppointmentIntentContext>(`/conversations/${conversationId}/appointment-intent`);
+  useLayoutEffect(() => {
+    loadConversationDetailRef.current = loadConversationDetail;
+  }, [loadConversationDetail]);
+
+  const loadAppointmentIntentContext = useCallback(async (conversationId: string, signal?: AbortSignal) => {
+    return await api<ApiAppointmentIntentContext>(`/conversations/${conversationId}/appointment-intent`, {
+      signal,
+    });
   }, []);
 
   const loadAppointmentAvailability = useCallback(
@@ -3149,6 +3283,8 @@ function App() {
       setConversationMessages([]);
       setConversationEvents([]);
       setSelectedConversationDetail(null);
+      setSelectedConversationAppointmentIntentPreparedAt(null);
+      setSelectedConversationAppointmentIntentSnapshotVersion(null);
       return;
     }
 
@@ -3166,42 +3302,82 @@ function App() {
       if (activePage !== "appointments") {
         setAppointmentDraft(null);
       }
+      appointmentIntentAbortControllerRef.current?.abort();
       return;
     }
     if (!selectedConversation) {
       if (appointmentDraft?.source !== "manual") {
         setAppointmentDraft(null);
       }
+      setSelectedConversationAppointmentIntentPreparedAt(null);
+      setSelectedConversationAppointmentIntentSnapshotVersion(null);
+      appointmentIntentAbortControllerRef.current?.abort();
       return;
     }
-    if (appointmentDraft?.conversationId === selectedConversation.id) {
+    const selectedConversationSnapshotVersion = selectedConversationAppointmentIntentSnapshotVersion;
+    if (
+      appointmentDraft?.source !== "manual" &&
+      appointmentDraft?.conversationId === selectedConversation.id &&
+      appointmentDraft.snapshotVersion === selectedConversationSnapshotVersion
+    ) {
       return;
     }
 
-    let cancelled = false;
-    loadAppointmentIntentContext(selectedConversation.id)
+    const requestId = ++appointmentIntentRequestIdRef.current;
+    appointmentIntentAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    appointmentIntentAbortControllerRef.current = abortController;
+    const { signal } = abortController;
+    loadAppointmentIntentContext(selectedConversation.id, signal)
       .then((context) => {
-        if (cancelled) {
+        if (
+          signal.aborted ||
+          requestId !== appointmentIntentRequestIdRef.current ||
+          selectedConversationIdRef.current !== selectedConversation.id
+        ) {
           return;
         }
+        if (
+          selectedConversationAppointmentIntentSnapshotVersionRef.current &&
+          context.snapshot_version !== selectedConversationAppointmentIntentSnapshotVersionRef.current
+        ) {
+          return;
+        }
+        setSelectedConversationAppointmentIntentPreparedAt(context.prepared_at);
+        setSelectedConversationAppointmentIntentSnapshotVersion(context.snapshot_version);
         setAppointmentDraft(buildAppointmentDraftFromContext(context, currentUser, tenantUsers));
       })
-      .catch(() => {
-        if (!cancelled) {
-          setAppointmentDraft(null);
+      .catch((caught) => {
+        if (
+          signal.aborted ||
+          requestId !== appointmentIntentRequestIdRef.current ||
+          selectedConversationIdRef.current !== selectedConversation.id
+        ) {
+          return;
         }
+        if (caught instanceof ApiError && caught.status === 404) {
+          setSelectedConversationAppointmentIntentPreparedAt(null);
+          setSelectedConversationAppointmentIntentSnapshotVersion(null);
+          setAppointmentDraft(null);
+          return;
+        }
+        setAppointmentDraft(null);
       });
 
     return () => {
-      cancelled = true;
+      abortController.abort();
     };
   }, [
     activePage,
     appointmentDraft?.conversationId,
+    appointmentDraft?.preparedAt,
+    appointmentDraft?.snapshotVersion,
     appointmentDraft?.source,
     currentUser,
     loadAppointmentIntentContext,
     selectedConversation,
+    selectedConversationAppointmentIntentPreparedAt,
+    selectedConversationAppointmentIntentSnapshotVersion,
     tenantUsers,
   ]);
 
@@ -3362,7 +3538,7 @@ function App() {
   }
 
   function openConversationFromOrders(conversationId: string) {
-    setSelectedConversationId(conversationId);
+    setSelectedConversationIdSync(conversationId);
     setActivePage("inbox");
   }
 
@@ -3370,7 +3546,9 @@ function App() {
     if (!currentUser) {
       return;
     }
-    setSelectedConversationId(null);
+    setSelectedConversationIdSync(null);
+    setSelectedConversationAppointmentIntentPreparedAt(null);
+    setSelectedConversationAppointmentIntentSnapshotVersion(null);
     setAppointmentMessage("");
     setAppointmentsError("");
     setAppointmentDraft(buildManualAppointmentDraft(currentUser, tenantUsers));
@@ -3385,18 +3563,48 @@ function App() {
     if (selectedConversationIdRef.current !== requestedConversationId) {
       return;
     }
-    const context = await api<ApiAppointmentIntentContext>(`/conversations/${selectedConversation.id}/prepare-appointment`, {
-      method: "POST",
-    });
-    if (selectedConversationIdRef.current !== requestedConversationId) {
-      return;
-    }
-    setAppointmentDraft(buildAppointmentDraftFromContext(context, currentUser, tenantUsers));
-    setAppointmentMessage("");
-    setAppointmentsError("");
-    setActivePage("appointments");
-    if (selectedConversationIdRef.current === requestedConversationId) {
-      await loadConversationDetail(requestedConversationId, false).catch(() => null);
+    const requestId = ++prepareAppointmentRequestIdRef.current;
+    prepareAppointmentAbortControllerRef.current?.abort();
+    const abortController = new AbortController();
+    prepareAppointmentAbortControllerRef.current = abortController;
+    const { signal } = abortController;
+    try {
+      const context = await api<ApiAppointmentIntentContext>(
+        `/conversations/${selectedConversation.id}/prepare-appointment`,
+        {
+          method: "POST",
+          signal,
+        },
+      );
+      if (
+        signal.aborted ||
+        requestId !== prepareAppointmentRequestIdRef.current ||
+        selectedConversationIdRef.current !== requestedConversationId
+      ) {
+        return;
+      }
+      setSelectedConversationAppointmentIntentPreparedAt(context.prepared_at);
+      setSelectedConversationAppointmentIntentSnapshotVersion(context.snapshot_version);
+      setAppointmentDraft(buildAppointmentDraftFromContext(context, currentUser, tenantUsers));
+      setAppointmentMessage("");
+      setAppointmentsError("");
+      setActivePage("appointments");
+      if (selectedConversationIdRef.current === requestedConversationId) {
+        await loadConversationDetail(requestedConversationId, false).catch(() => null);
+      }
+    } catch (caught) {
+      if (
+        signal.aborted ||
+        requestId !== prepareAppointmentRequestIdRef.current ||
+        selectedConversationIdRef.current !== requestedConversationId
+      ) {
+        return;
+      }
+      throw caught;
+    } finally {
+      if (prepareAppointmentAbortControllerRef.current === abortController) {
+        prepareAppointmentAbortControllerRef.current = null;
+      }
     }
   }
 
@@ -3443,28 +3651,33 @@ function App() {
     if (!selectedConversation) {
       return;
     }
+    const requestedConversationId = selectedConversation.id;
+    const requestedPhone = selectedConversation.phone;
     setInboxError("");
     const response = await api<ApiWhatsAppSendTextResponse>("/whatsapp/messages", {
       method: "POST",
       body: JSON.stringify({
-        to: selectedConversation.phone,
+        to: requestedPhone,
         body: content,
       }),
     });
-    selectedConversationIdRef.current = response.conversation_id;
-    setSelectedConversationId(response.conversation_id);
-    setConversationMessages((current) => [
-      ...current,
-      {
-        id: response.message_id,
-        side: "right",
-        text: content,
-        createdAt: new Date().toISOString(),
-        metadataJson: {},
-      },
-    ]);
+    if (selectedConversationIdRef.current === requestedConversationId) {
+      flushSync(() => {
+        setSelectedConversationIdSync(response.conversation_id);
+      });
+      setConversationMessages((current) => [
+        ...current,
+        {
+          id: response.message_id,
+          side: "right",
+          text: content,
+          createdAt: new Date().toISOString(),
+          metadataJson: {},
+        },
+      ]);
+      void loadConversationDetail(response.conversation_id, false);
+    }
     void refreshInbox();
-    void loadConversationDetail(response.conversation_id, false);
   }
 
   async function assignConversationFunnel(
@@ -4451,6 +4664,12 @@ function InboxPage({
   const selectedConversationAssignmentLabel = selectedConversation
     ? getConversationAssignmentLabel(selectedConversation, currentUser, tenantUsers)
     : "";
+  const selectedConversationAiLabel = selectedConversation
+    ? getConversationAiLabel(selectedConversation)
+    : "";
+  const selectedConversationClassificationLabel = selectedConversation
+    ? getConversationClassificationLabel(selectedConversation)
+    : "";
   const canAccessAppointments = canAccessPage(currentUser, "appointments");
   const selectedConversationIdValue = selectedConversation?.id ?? null;
   const selectedConversationAssignedUserId = selectedConversation?.assignedUserId ?? null;
@@ -4700,22 +4919,38 @@ function InboxPage({
                       </span>
                     ) : null}
                   </div>
-                  <div className="flex flex-col items-end gap-1">
-                    <StatusBadge value={conversation.state} />
-                    <StatusBadge value={conversation.aiEnabled ? "IA activa" : "IA pausada"} />
-                  </div>
+                  <StatusBadge value={conversation.state} />
                 </div>
                 <p className="mt-1 text-xs text-slate-500">{conversation.phone}</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {getConversationAssignmentLabel(conversation, currentUser, tenantUsers)}
+                <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                  <div className="rounded border border-line bg-white px-3 py-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Responsable humano
+                    </p>
+                    <p className="mt-1 text-xs font-medium text-slate-800">
+                      {getConversationAssignmentLabel(conversation, currentUser, tenantUsers)}
+                    </p>
+                  </div>
+                  <div className="rounded border border-line bg-white px-3 py-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">IA</p>
+                    <div className="mt-1">
+                      <StatusBadge value={getConversationAiLabel(conversation)} />
+                    </div>
+                  </div>
+                  <div className="rounded border border-line bg-white px-3 py-2">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                      Clasificación comercial
+                    </p>
+                    <p className="mt-1 text-xs font-medium text-slate-800">
+                      {getConversationClassificationLabel(conversation)}
+                    </p>
+                  </div>
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  {conversation.availableProductCount > 0
+                    ? `${conversation.availableProductCount} productos disponibles para ofrecer`
+                    : "Sin productos disponibles confirmados"}
                 </p>
-                {conversation.availableProductCount > 0 ? (
-                  <p className="mt-1 text-xs text-slate-500">
-                    {conversation.availableProductCount} productos disponibles para ofrecer
-                  </p>
-                ) : (
-                  <p className="mt-1 text-xs text-slate-500">Sin productos disponibles confirmados</p>
-                )}
                 <p className="mt-2 line-clamp-2 text-sm text-slate-600">{conversation.message}</p>
               </button>
             ))
@@ -4732,15 +4967,195 @@ function InboxPage({
           <>
             <SectionHeader
               title={selectedConversation.name}
-              subtitle={`${selectedConversation.phone} · ${selectedConversationAssignmentLabel} · ${selectedConversation.availableProductCount} productos disponibles`}
+              subtitle={`${selectedConversation.phone} · ${selectedConversation.availableProductCount} productos disponibles`}
               action={
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <StatusBadge value={selectedConversation.state} />
-                  <StatusBadge value={selectedConversation.aiEnabled ? "IA activa" : "IA pausada"} />
-                </div>
+                <StatusBadge value={selectedConversation.state} />
               }
             />
             <div className="flex min-h-0 flex-1 flex-col gap-4 p-4">
+              <div className="grid shrink-0 gap-3 lg:grid-cols-3">
+                <div className="rounded border border-line bg-panel/30 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Responsable humano
+                      </h3>
+                      <p className="text-sm font-medium text-slate-800">{selectedConversationAssignmentLabel}</p>
+                    </div>
+                    <StatusBadge
+                      value={
+                        selectedConversation.assignedUserId === currentUser.id
+                          ? "Tomado por ti"
+                          : selectedConversation.assignedUserId
+                            ? "Asignado"
+                            : "Disponible"
+                      }
+                    />
+                  </div>
+                  <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
+                    {!selectedConversation.assignedUserId ? (
+                      <button
+                        className="h-10 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
+                        disabled={assignmentBusy}
+                        onClick={() => void takeConversation()}
+                      >
+                        {assignmentBusy ? "Tomando..." : "Tomar chat"}
+                      </button>
+                    ) : null}
+                    {canManageAssignment ? (
+                      <>
+                        <select
+                          className="h-10 flex-1 rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+                          value={assignmentTargetUserId}
+                          onChange={(event) => setAssignmentTargetUserId(event.target.value)}
+                        >
+                          {assignableUsers.map((user) => (
+                            <option key={user.id} value={user.id}>
+                              {user.name} · {user.role}
+                            </option>
+                          ))}
+                        </select>
+                        <button
+                          className="h-10 rounded border border-line px-3 text-sm disabled:opacity-60"
+                          disabled={assignmentBusy || !assignmentTargetUserId}
+                          onClick={() => void submitAssignment()}
+                        >
+                          {assignmentBusy
+                            ? "Actualizando..."
+                            : selectedConversation.assignedUserId
+                              ? "Reasignar"
+                              : "Asignar"}
+                        </button>
+                      </>
+                    ) : null}
+                  </div>
+                  {assignmentError ? <p className="mt-2 text-sm text-red-600">{assignmentError}</p> : null}
+                </div>
+
+                <div className="rounded border border-line bg-panel/30 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">IA</h3>
+                      <p className="text-sm font-medium text-slate-800">{selectedConversationAiLabel}</p>
+                    </div>
+                    <StatusBadge value={selectedConversationAiLabel} />
+                  </div>
+                  <p className="mt-3 text-xs text-slate-500">
+                    La IA se pausa o reactiva por conversacion sin tocar la asignacion ni la clasificacion.
+                  </p>
+                  <button
+                    className="mt-3 h-10 w-full rounded border border-line px-3 text-sm disabled:opacity-60"
+                    onClick={toggleConversationAi}
+                    disabled={aiActionBusy}
+                  >
+                    {aiActionBusy
+                      ? "Actualizando IA..."
+                      : selectedConversation.aiEnabled
+                        ? "Pausar IA"
+                        : "Reactivar IA"}
+                  </button>
+                  {aiActionError ? <p className="mt-2 text-sm text-red-600">{aiActionError}</p> : null}
+                </div>
+
+                <div className="rounded border border-line bg-panel/30 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Clasificación comercial
+                      </h3>
+                      <p className="text-sm font-medium text-slate-800">
+                        {selectedConversationClassificationLabel}
+                      </p>
+                    </div>
+                    <StatusBadge value={selectedConversationClassificationLabel} />
+                  </div>
+                  <p className="mt-3 text-xs text-slate-500">
+                    Funnel y paso comercial se ajustan aparte del responsable y del estado de IA.
+                  </p>
+                  <div className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+                    <select
+                      className="h-10 rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+                      value={selectedConversation.funnelId ?? ""}
+                      onChange={async (event) => {
+                        const nextFunnelId = event.target.value || null;
+                        const selectedFunnel = funnels.find((funnel) => funnel.id === nextFunnelId) ?? null;
+                        const firstStep = selectedFunnel?.steps?.[0] ?? null;
+                        setAssigningFunnel(true);
+                        try {
+                          await onAssignFunnel(
+                            selectedConversation.id,
+                            nextFunnelId,
+                            firstStep?.id ?? null,
+                            firstStep?.code ?? null,
+                          );
+                        } finally {
+                          setAssigningFunnel(false);
+                        }
+                      }}
+                    >
+                      <option value="">Sin funnel</option>
+                      {funnels.map((funnel) => (
+                        <option key={funnel.id} value={funnel.id}>
+                          {funnel.name}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="h-10 rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
+                      value={selectedConversation.funnelStepId ?? ""}
+                      disabled={!selectedConversation.funnelId || assigningFunnel}
+                      onChange={async (event) => {
+                        const selectedFunnel = funnels.find(
+                          (funnel) => funnel.id === selectedConversation.funnelId,
+                        );
+                        const nextStep =
+                          selectedFunnel?.steps.find((step) => step.id === event.target.value) ?? null;
+                        setAssigningFunnel(true);
+                        try {
+                          await onAssignFunnel(
+                            selectedConversation.id,
+                            selectedConversation.funnelId,
+                            nextStep?.id ?? null,
+                            nextStep?.code ?? null,
+                          );
+                        } finally {
+                          setAssigningFunnel(false);
+                        }
+                      }}
+                    >
+                      <option value="">Paso no definido</option>
+                      {(funnels.find((funnel) => funnel.id === selectedConversation.funnelId)?.steps ?? []).map(
+                        (step) => (
+                          <option key={step.id} value={step.id}>
+                            {step.position}. {step.name}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                    <div className="flex items-center text-xs text-slate-500">
+                      {assigningFunnel
+                        ? "Actualizando funnel..."
+                        : selectedConversation.funnelName
+                          ? `${selectedConversation.funnelName}${selectedConversation.funnelStepName ? ` / ${selectedConversation.funnelStepName}` : ""}`
+                          : "Sin clasificacion"}
+                    </div>
+                  </div>
+                  <button
+                    className="mt-3 h-10 w-full rounded border border-line px-3 text-sm disabled:opacity-60"
+                    onClick={() => void prepareAppointmentIntent()}
+                    disabled={appointmentIntentBusy || !canAccessAppointments}
+                    title={!canAccessAppointments ? "No tienes permiso para crear citas" : undefined}
+                  >
+                    {appointmentIntentBusy
+                      ? "Preparando agenda..."
+                      : canAccessAppointments
+                        ? "Preparar agenda"
+                        : "Agenda no disponible"}
+                  </button>
+                  {appointmentIntentError ? <p className="mt-2 text-sm text-red-600">{appointmentIntentError}</p> : null}
+                </div>
+              </div>
+
               <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-2">
                 {messages.length ? (
                   messages.map((message) => (
@@ -4785,163 +5200,6 @@ function InboxPage({
                   ) : (
                     <p className="text-sm text-slate-500">Sin eventos relevantes para esta conversacion</p>
                   )}
-                </div>
-              </div>
-
-              <div className="grid shrink-0 gap-3 sm:grid-cols-2">
-                <button
-                  className="h-10 rounded border border-line px-3 text-sm disabled:opacity-60"
-                  onClick={toggleConversationAi}
-                  disabled={aiActionBusy}
-                >
-                  {aiActionBusy
-                    ? "Actualizando IA..."
-                    : selectedConversation.aiEnabled
-                      ? "Pausar IA"
-                      : "Reactivar IA"}
-                </button>
-                <button
-                  className="h-10 rounded border border-line px-3 text-sm disabled:opacity-60"
-                  onClick={() => void prepareAppointmentIntent()}
-                  disabled={appointmentIntentBusy || !canAccessAppointments}
-                  title={!canAccessAppointments ? "No tienes permiso para crear citas" : undefined}
-                >
-                  {appointmentIntentBusy
-                    ? "Preparando agenda..."
-                    : canAccessAppointments
-                      ? "Preparar agenda"
-                      : "Agenda no disponible"}
-                </button>
-              </div>
-              {aiActionError ? <p className="text-sm text-red-600">{aiActionError}</p> : null}
-              {appointmentIntentError ? <p className="text-sm text-red-600">{appointmentIntentError}</p> : null}
-
-              <div className="rounded border border-line bg-panel/30 p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Asignacion
-                    </h3>
-                    <p className="text-sm font-medium text-slate-800">
-                      {selectedConversationAssignmentLabel}
-                    </p>
-                  </div>
-                  <StatusBadge
-                    value={
-                      selectedConversation.assignedUserId === currentUser.id
-                        ? "Tomado por ti"
-                        : selectedConversation.assignedUserId
-                          ? "Asignado"
-                          : "Disponible"
-                    }
-                  />
-                </div>
-                <div className="mt-3 flex flex-col gap-2 md:flex-row md:items-center">
-                  {!selectedConversation.assignedUserId ? (
-                    <button
-                      className="h-10 rounded bg-brand px-3 text-sm font-medium text-white disabled:opacity-60"
-                      disabled={assignmentBusy}
-                      onClick={() => void takeConversation()}
-                    >
-                      {assignmentBusy ? "Tomando..." : "Tomar chat"}
-                    </button>
-                  ) : null}
-                  {canManageAssignment ? (
-                    <>
-                      <select
-                        className="h-10 flex-1 rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
-                        value={assignmentTargetUserId}
-                        onChange={(event) => setAssignmentTargetUserId(event.target.value)}
-                      >
-                        {assignableUsers.map((user) => (
-                          <option key={user.id} value={user.id}>
-                            {user.name} · {user.role}
-                          </option>
-                        ))}
-                      </select>
-                      <button
-                        className="h-10 rounded border border-line px-3 text-sm disabled:opacity-60"
-                        disabled={assignmentBusy || !assignmentTargetUserId}
-                        onClick={() => void submitAssignment()}
-                      >
-                        {assignmentBusy
-                          ? "Actualizando..."
-                          : selectedConversation.assignedUserId
-                            ? "Reasignar"
-                            : "Asignar"}
-                      </button>
-                    </>
-                  ) : null}
-                </div>
-                {assignmentError ? <p className="mt-2 text-sm text-red-600">{assignmentError}</p> : null}
-              </div>
-
-              <div className="grid shrink-0 gap-3 md:grid-cols-[1fr_1fr_auto]">
-                <select
-                  className="h-10 rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
-                  value={selectedConversation.funnelId ?? ""}
-                  onChange={async (event) => {
-                    const nextFunnelId = event.target.value || null;
-                    const selectedFunnel = funnels.find((funnel) => funnel.id === nextFunnelId) ?? null;
-                    const firstStep = selectedFunnel?.steps?.[0] ?? null;
-                    setAssigningFunnel(true);
-                    try {
-                      await onAssignFunnel(
-                        selectedConversation.id,
-                        nextFunnelId,
-                        firstStep?.id ?? null,
-                        firstStep?.code ?? null,
-                      );
-                    } finally {
-                      setAssigningFunnel(false);
-                    }
-                  }}
-                >
-                  <option value="">Sin funnel</option>
-                  {funnels.map((funnel) => (
-                    <option key={funnel.id} value={funnel.id}>
-                      {funnel.name}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  className="h-10 rounded border border-line bg-white px-3 text-sm outline-none focus:border-brand"
-                  value={selectedConversation.funnelStepId ?? ""}
-                  disabled={!selectedConversation.funnelId || assigningFunnel}
-                  onChange={async (event) => {
-                    const selectedFunnel = funnels.find(
-                      (funnel) => funnel.id === selectedConversation.funnelId,
-                    );
-                    const nextStep =
-                      selectedFunnel?.steps.find((step) => step.id === event.target.value) ?? null;
-                    setAssigningFunnel(true);
-                    try {
-                      await onAssignFunnel(
-                        selectedConversation.id,
-                        selectedConversation.funnelId,
-                        nextStep?.id ?? null,
-                        nextStep?.code ?? null,
-                      );
-                    } finally {
-                      setAssigningFunnel(false);
-                    }
-                  }}
-                >
-                  <option value="">Paso no definido</option>
-                  {(funnels.find((funnel) => funnel.id === selectedConversation.funnelId)?.steps ?? []).map(
-                    (step) => (
-                      <option key={step.id} value={step.id}>
-                        {step.position}. {step.name}
-                      </option>
-                    ),
-                  )}
-                </select>
-                <div className="flex items-center text-xs text-slate-500">
-                  {assigningFunnel
-                    ? "Actualizando funnel..."
-                    : selectedConversation.funnelName
-                      ? `${selectedConversation.funnelName}${selectedConversation.funnelStepName ? ` / ${selectedConversation.funnelStepName}` : ""}`
-                      : "Sin clasificacion"}
                 </div>
               </div>
 
@@ -5747,7 +6005,7 @@ function AppointmentsPage({
   const [agendaWeekendStartDraft, setAgendaWeekendStartDraft] = useState("08:00");
   const [agendaWeekendEndDraft, setAgendaWeekendEndDraft] = useState("14:00");
   const draftKey = appointmentDraft
-    ? `${appointmentDraft.source}-${appointmentDraft.contactId || "manual"}-${appointmentDraft.preparedAt}`
+    ? `${appointmentDraft.source}-${appointmentDraft.contactId || "manual"}-${appointmentDraft.snapshotVersion}`
     : "manual-empty";
 
   function updateAppointmentFilter<K extends keyof AppointmentFilters>(key: K, value: AppointmentFilters[K]) {
@@ -8479,13 +8737,15 @@ function WhatsAppPage() {
     () => accounts.find((account) => account.id === selectedAccountId) ?? null,
     [accounts, selectedAccountId],
   );
-  const verifyTokenLocked = Boolean(setup?.verify_token);
+  const verifyTokenLocked = Boolean(
+    selectedAccount && selectedAccount.phone_number_id === phoneNumberId,
+  );
 
   function loadAccountIntoForm(account: WhatsAppAccount | null) {
     setSelectedAccountId(account?.id ?? null);
     setPhoneNumberId(account?.phone_number_id ?? "");
     setBusinessAccountId(account?.business_account_id ?? "");
-    setVerifyToken(setup?.verify_token ?? account?.verify_token ?? "");
+    setVerifyToken("");
     setAccessToken("");
   }
 
@@ -8507,7 +8767,7 @@ function WhatsAppPage() {
         setSelectedAccountId(firstAccount?.id ?? null);
         setPhoneNumberId(firstAccount?.phone_number_id ?? "");
         setBusinessAccountId(firstAccount?.business_account_id ?? "");
-        setVerifyToken(setupResponse.verify_token ?? firstAccount?.verify_token ?? "");
+        setVerifyToken("");
         setAccessToken("");
       } catch (caught) {
         if (!cancelled) {
@@ -8539,7 +8799,7 @@ function WhatsAppPage() {
       setSelectedAccountId(chosenAccount.id);
       setPhoneNumberId(chosenAccount.phone_number_id);
       setBusinessAccountId(chosenAccount.business_account_id ?? "");
-      setVerifyToken(setup?.verify_token ?? chosenAccount.verify_token);
+      setVerifyToken("");
       setAccessToken("");
     }
     return nextAccounts;
@@ -8551,7 +8811,7 @@ function WhatsAppPage() {
     setMessage("");
     setSaving(true);
     try {
-      const webhookVerifyToken = setup?.verify_token ?? verifyToken;
+      const webhookVerifyToken = verifyTokenLocked ? null : verifyToken;
       await api<WhatsAppAccount>("/whatsapp/accounts", {
         method: "POST",
         body: JSON.stringify({
@@ -8640,9 +8900,19 @@ function WhatsAppPage() {
                 Registra una cuenta nueva o selecciona una existente para editarla. El access token se cifra al guardar.
               </p>
             </div>
-            <span className="rounded border border-line bg-panel px-2 py-1 text-xs text-slate-600">
-              {selectedAccount ? "Edicion" : "Alta"}
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded border border-line bg-white px-2 py-1 text-xs text-slate-600"
+                disabled={loading}
+                onClick={() => loadAccountIntoForm(null)}
+              >
+                Nueva cuenta
+              </button>
+              <span className="rounded border border-line bg-panel px-2 py-1 text-xs text-slate-600">
+                {selectedAccount ? "Edicion" : "Alta"}
+              </span>
+            </div>
           </div>
           <form className="mt-4 grid gap-3 md:grid-cols-2" onSubmit={saveAccount}>
             <TextInput
@@ -8663,13 +8933,13 @@ function WhatsAppPage() {
               onChange={verifyTokenLocked ? undefined : setVerifyToken}
               readOnly={verifyTokenLocked}
               disabled={loading}
-              placeholder={verifyTokenLocked ? "Token global configurado" : "Define un token para esta cuenta"}
+              placeholder={verifyTokenLocked ? "Token de la cuenta seleccionada" : "Define un token para esta cuenta"}
             />
             <PasswordInput label="Access token" value={accessToken} onChange={setAccessToken} disabled={loading} />
             <div className="md:col-span-2">
               <p className="mb-2 text-xs text-slate-500">
                 {verifyTokenLocked
-                  ? "El verify token global ya esta configurado para el webhook."
+                  ? "Se reutilizara el verify token existente de la cuenta seleccionada."
                   : "Si no existe un token global, define aqui el verify token de esta cuenta."}
               </p>
               <button
@@ -8777,7 +9047,10 @@ function WhatsAppPage() {
       <div className="space-y-5">
         <InfoPanel title="Webhook" icon={MessageSquareText}>
           <KeyValue label="Callback URL" value={setup?.callback_url ?? "-"} />
-          <KeyValue label="Verify token" value={setup?.verify_token ?? "Por cuenta"} />
+          <KeyValue
+            label="Verify token"
+            value={setup?.verify_token_configured ? "Configurado" : "No configurado"}
+          />
           <KeyValue label="Graph API" value={setup?.graph_api_version ?? "-"} />
           <KeyValue label="Firma de webhook" value={setup?.app_secret_configured ? "Activa" : "Sin configurar"} />
         </InfoPanel>

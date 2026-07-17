@@ -1,20 +1,31 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 
 from app.auth.service import build_current_user_payload, build_token
+from app.audit.service import list_audit_logs
 from app.companies.service import create_company_with_owner, update_company
 from app.companies.schemas import CompanyCreate, CompanyUpdate
 from app.contacts.models import Contact
 from app.core.database import get_db
 from app.core.schemas import OwnerCreate
+from app.conversations.service import append_message
+from app.conversations.models import Conversation
 from app.main import app
 from app.conversations.schemas import ConversationCreate
+from app.conversations import service as conversation_service
 from app.conversations.service import assign_conversation, create_conversation
+from app.events.models import Event
+from app.integrations.models import CompanyIntegration
+from app.integrations.schemas import IntegrationCreate
+from app.integrations.service import create_integration
+from app.messages.models import Message
 from app.users.permissions import can_access_module, default_module_permissions, ensure_module_access
 from app.users.schemas import UserCreate, UserPasswordReset, UserUpdate
 from app.users.service import create_user, deactivate_user, get_user, reset_user_password, update_user
@@ -438,6 +449,188 @@ def test_conversation_ai_controls_require_inbox_module_permission(db, client):
     assert response.status_code == 403
 
 
+def test_inbox_write_routes_require_inbox_module_permission_and_keep_state_unchanged(
+    db, client, monkeypatch
+):
+    company, owner = bootstrap_company(db, "Acme")
+    blocked_user = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Agente sin inbox",
+            email="agent-no-inbox-write@acme.example.com",
+            password="super-secret-14",
+            role="agent",
+            module_permissions={"inbox": False},
+        ),
+    )
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    blocked_headers = {"Authorization": f"Bearer {build_token(blocked_user)}"}
+    published: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "app.conversations.service.realtime_manager.publish",
+        lambda company_id, event_type, payload: published.append((event_type, payload)),
+    )
+
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    conversation_id = conversation.id
+
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_id,
+        sender_type="customer",
+        content="Hola",
+        external_message_id="wamid-permission-test",
+    )
+    db.commit()
+
+    audit_count_before = len(list_audit_logs(db, company_id=company.id, limit=100, offset=0))
+    message_count_before = db.scalar(
+        select(func.count()).select_from(Message).where(
+            Message.company_id == company.id,
+            Message.conversation_id == conversation_id,
+        )
+    )
+
+    forbidden_create = client.post(
+        "/api/v1/conversations",
+        headers=blocked_headers,
+        json={"contact_id": str(contact.id), "channel": "whatsapp"},
+    )
+    assert forbidden_create.status_code == 403
+
+    forbidden_close = client.post(
+        f"/api/v1/conversations/{conversation_id}/close",
+        headers=blocked_headers,
+    )
+    assert forbidden_close.status_code == 403
+
+    forbidden_read = client.post(
+        f"/api/v1/conversations/{conversation_id}/read",
+        headers=blocked_headers,
+    )
+    assert forbidden_read.status_code == 403
+
+    forbidden_send = client.post(
+        f"/api/v1/conversations/{conversation_id}/send-message",
+        headers=blocked_headers,
+        json={"content": "Respuesta bloqueada"},
+    )
+    assert forbidden_send.status_code == 403
+
+    db.expire_all()
+    conversation = db.scalar(select(Conversation).where(Conversation.id == conversation_id))
+    assert conversation is not None
+    assert conversation.status == "open"
+    assert conversation.unread_count == 1
+    assert db.scalar(
+        select(func.count()).select_from(Message).where(
+            Message.company_id == company.id,
+            Message.conversation_id == conversation_id,
+        )
+    ) == message_count_before
+    assert len(list_audit_logs(db, company_id=company.id, limit=100, offset=0)) == audit_count_before
+    assert published == []
+
+
+def test_inbox_read_routes_require_inbox_module_permission_and_keep_state_unchanged(
+    db, client
+):
+    company, owner = bootstrap_company(db, "Acme")
+    blocked_user = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Agente sin inbox",
+            email="agent-no-inbox-read@acme.example.com",
+            password="super-secret-17",
+            role="agent",
+            module_permissions={"inbox": False},
+        ),
+    )
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112300")
+    db.add(contact)
+    db.commit()
+
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    conversation_id = conversation.id
+    headers = {"Authorization": f"Bearer {build_token(blocked_user)}"}
+
+    list_response = client.get("/api/v1/conversations", headers=headers)
+    assert list_response.status_code == 403
+
+    detail_response = client.get(f"/api/v1/conversations/{conversation_id}", headers=headers)
+    assert detail_response.status_code == 403
+
+    db.refresh(conversation)
+    assert conversation.status == "open"
+    assert conversation.assigned_user_id is None
+
+
+def test_integrations_write_routes_require_module_permission_and_respect_tenant_scope(db, client):
+    company_a, owner_a = bootstrap_company(db, "Acme")
+    company_b, owner_b = bootstrap_company(db, "Bravo")
+    blocked_user = create_user(
+        db,
+        company_id=company_a.id,
+        payload=UserCreate(
+            name="Agente sin integraciones",
+            email="agent-no-integrations@acme.example.com",
+            password="super-secret-15",
+            role="agent",
+            module_permissions={"integrations": False},
+        ),
+    )
+
+    integration = create_integration(
+        db,
+        company_id=company_a.id,
+        payload=IntegrationCreate(type="custom", config={"name": "ERP"}),
+        actor_user=owner_a,
+    )
+    db.commit()
+
+    blocked_headers = {"Authorization": f"Bearer {build_token(blocked_user)}"}
+    other_tenant_headers = {"Authorization": f"Bearer {build_token(owner_b)}"}
+
+    denied_create = client.post(
+        "/api/v1/integrations",
+        headers=blocked_headers,
+        json={"type": "custom", "config": {"name": "CRM"}},
+    )
+    assert denied_create.status_code == 403
+    assert (
+        db.scalar(
+            select(func.count()).select_from(CompanyIntegration).where(
+                CompanyIntegration.company_id == company_a.id
+            )
+        )
+        == 1
+    )
+
+    denied_update = client.put(
+        f"/api/v1/integrations/{integration.id}",
+        headers=other_tenant_headers,
+        json={"status": "inactive"},
+    )
+    assert denied_update.status_code == 404
+
+    db.refresh(integration)
+    assert integration.status == "active"
+
+
 def test_conversation_take_chat_blocks_stealing_an_assigned_thread(db, client):
     company, owner = bootstrap_company(db, "Acme")
     update_company(
@@ -533,6 +726,93 @@ def test_privileged_take_chat_can_overwrite_another_user_assignment(db):
 
     db.refresh(conversation)
     assert conversation.assigned_user_id == admin.id
+
+
+def test_conversation_assignment_is_idempotent_and_locks_company_scope(db, monkeypatch):
+    company, owner = bootstrap_company(db, "Acme")
+    other_company, _ = bootstrap_company(db, "Bravo")
+    agent = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Agente con inbox",
+            email="agent-lock@acme.example.com",
+            password="super-secret-13",
+            role="agent",
+            module_permissions={"inbox": True},
+        ),
+    )
+    update_company(
+        db,
+        company_id=company.id,
+        current_company_id=company.id,
+        payload=CompanyUpdate(auto_assign_single_additional_user_chats=False),
+        actor_user=owner,
+    )
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    other_contact = Contact(company_id=other_company.id, name="Cliente externo", phone="+573001112299")
+    db.add(contact)
+    db.add(other_contact)
+    db.commit()
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    other_conversation = create_conversation(
+        db,
+        company_id=other_company.id,
+        payload=ConversationCreate(contact_id=other_contact.id, channel="whatsapp"),
+    )
+    assert conversation.assigned_user_id is None
+    assert other_conversation.assigned_user_id is None
+
+    seen_company_lock: list[UUID] = []
+    original_lock_company_scope = conversation_service._lock_company_scope
+
+    def capture_lock_company_scope(db_session, *, company_id):
+        seen_company_lock.append(company_id)
+        return original_lock_company_scope(db_session, company_id=company_id)
+
+    monkeypatch.setattr(conversation_service, "_lock_company_scope", capture_lock_company_scope)
+
+    first = assign_conversation(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        assigned_user_id=agent.id,
+        actor_user=owner,
+    )
+    second = assign_conversation(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        assigned_user_id=agent.id,
+        actor_user=owner,
+    )
+
+    assert first.assigned_user_id == agent.id
+    assert second.assigned_user_id == agent.id
+    assert seen_company_lock == [company.id, company.id]
+    assert db.get(Conversation, other_conversation.id).assigned_user_id is None
+
+    audit_actions = [
+        log.action for log in list_audit_logs(db, company_id=company.id, limit=20, offset=0)
+    ]
+    assert audit_actions.count("conversation.assigned") == 1
+    assignment_events = list(
+        db.scalars(
+            select(Event).where(
+                Event.company_id == company.id,
+                Event.event_type == "conversation.assigned",
+            )
+        )
+    )
+    assert len(assignment_events) == 1
+    assert assignment_events[0].payload["conversation_id"] == str(conversation.id)
+    assert assignment_events[0].payload["assigned_user_id"] == str(agent.id)
+    assert assignment_events[0].payload["previous_assigned_user_id"] is None
+    assert assignment_events[0].payload["assignment_source"] == "manual"
 
 
 def test_company_auto_assign_toggle_requires_owner_or_admin(db, client):

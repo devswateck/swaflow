@@ -1,7 +1,10 @@
 import json
+import re
+from collections.abc import Mapping
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,6 +19,31 @@ from app.integrations.schemas import (
     OutboundWebhookUpdate,
 )
 from app.payments.contract import validate_payment_integration_config
+
+_SENSITIVE_KEY_NAMES = (
+    "credential",
+    "credentials",
+    "password",
+    "private_key",
+    "secret",
+    "secret_token",
+    "token",
+    "access_token",
+    "signature",
+    "api_key",
+    "client_secret",
+)
+_SAFE_AUDIT_FLAGS = {
+    "credentials_configured",
+    "secret_configured",
+    "app_secret_configured",
+    "signature_algorithm",
+    "token_count",
+}
+
+
+def _normalize_key_name(key: str) -> str:
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key).lower()
 
 
 def list_integrations(db: Session, *, company_id: UUID) -> list[CompanyIntegration]:
@@ -69,7 +97,7 @@ def create_integration(
         entity_type="integration",
         summary="Integration created",
         entity_id=integration.id,
-        metadata={"type": payload.type, "status": "active"},
+        metadata=_safe_audit_metadata(payload.model_dump()),
     )
     return integration
 
@@ -99,10 +127,31 @@ def _merge_secret_payload(current: str | None, incoming: str) -> str:
 
 
 def _safe_audit_metadata(data: dict) -> dict:
-    safe_data = dict(data)
-    safe_data.pop("credentials", None)
-    safe_data.pop("secret_token", None)
-    return safe_data
+    def _is_sensitive_key(key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        normalized = _normalize_key_name(key)
+        if normalized in _SAFE_AUDIT_FLAGS:
+            return False
+        return any(
+            re.search(rf"(^|[._-]){re.escape(fragment)}([._-]|$)", normalized) is not None
+            for fragment in _SENSITIVE_KEY_NAMES
+        )
+
+    def _sanitize(value):
+        if isinstance(value, Mapping):
+            return {
+                key: _sanitize(child)
+                for key, child in value.items()
+                if not _is_sensitive_key(key)
+            }
+        if isinstance(value, list):
+            return [_sanitize(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(_sanitize(item) for item in value)
+        return value
+
+    return jsonable_encoder(_sanitize(dict(data)))
 
 
 def get_integration(db: Session, *, company_id: UUID, integration_id: UUID) -> CompanyIntegration:
@@ -217,7 +266,7 @@ def create_outbound_webhook(
         entity_type="outbound_webhook",
         entity_id=webhook.id,
         summary="Outbound webhook created",
-        metadata={"event_type": payload.event_type, "target_url": str(payload.target_url)},
+        metadata=_safe_audit_metadata(payload.model_dump()),
     )
     return webhook
 

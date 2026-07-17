@@ -1177,26 +1177,44 @@ def _resolve_configured_action(
     return None
 
 
+def _decode_verify_token(value: str | None) -> str | None:
+    if not value:
+        return None
+    looks_encrypted = value.startswith("gAAAAA") or len(value) >= 60
+    if not looks_encrypted:
+        return value
+    try:
+        return decrypt_secret(value)
+    except Exception:
+        return None
+
+
 def create_account(db: Session, *, company_id: UUID, payload: WhatsAppAccountCreate) -> WhatsAppAccount:
     settings = get_settings()
-    verify_token = payload.verify_token or settings.whatsapp_verify_token
-    if not verify_token:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Verify token is required",
-        )
     account = db.scalar(
         select(WhatsAppAccount).where(
             WhatsAppAccount.company_id == company_id,
             WhatsAppAccount.phone_number_id == payload.phone_number_id,
         )
     )
+    if payload.verify_token:
+        verify_token = payload.verify_token
+    elif account is not None:
+        verify_token = _decode_verify_token(account.verify_token)
+    else:
+        verify_token = settings.whatsapp_verify_token
+    if account is None and not verify_token:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Verify token is required",
+        )
     if account is None:
         account = WhatsAppAccount(company_id=company_id, phone_number_id=payload.phone_number_id)
         db.add(account)
     account.business_account_id = payload.business_account_id
     account.access_token_encrypted = encrypt_secret(payload.access_token)
-    account.verify_token = verify_token
+    if verify_token is not None:
+        account.verify_token = encrypt_secret(verify_token)
     account.status = "active"
     db.commit()
     db.refresh(account)
@@ -1213,11 +1231,29 @@ def list_accounts(db: Session, *, company_id: UUID) -> list[WhatsAppAccount]:
     )
 
 
-def verify_token_exists(db: Session, *, verify_token: str) -> bool:
+def verify_token_exists(db: Session, *, company_id: UUID, verify_token: str) -> bool:
+    accounts = db.scalars(
+        select(WhatsAppAccount.verify_token).where(
+            WhatsAppAccount.company_id == company_id,
+            WhatsAppAccount.status == "active",
+        )
+    )
+    for stored_verify_token in accounts:
+        if stored_verify_token == verify_token:
+            return True
+        try:
+            if decrypt_secret(stored_verify_token) == verify_token:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def has_verify_token_configuration(db: Session, *, company_id: UUID) -> bool:
     return (
         db.scalar(
             select(WhatsAppAccount.id).where(
-                WhatsAppAccount.verify_token == verify_token,
+                WhatsAppAccount.company_id == company_id,
                 WhatsAppAccount.status == "active",
             )
         )

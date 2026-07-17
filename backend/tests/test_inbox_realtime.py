@@ -1023,6 +1023,136 @@ def test_ai_pause_and_resume_controls_auto_reply_and_realtime(db, monkeypatch):
     assert "conversation.ai_resumed" in [event_type for event_type, _ in published]
 
 
+def test_conversation_assignment_ai_and_funnel_mutations_stay_isolated(db):
+    company, owner = bootstrap_company(db, "Acme")
+    other_company, other_owner = bootstrap_company(db, "Bravo")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    other_contact = Contact(
+        company_id=other_company.id,
+        name="Cliente externo",
+        phone="+573001112299",
+    )
+    db.add(contact)
+    db.add(other_contact)
+    db.commit()
+
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    other_conversation = create_conversation(
+        db,
+        company_id=other_company.id,
+        payload=ConversationCreate(contact_id=other_contact.id, channel="whatsapp"),
+    )
+    original_funnel_id = conversation.funnel_id
+    original_step_id = conversation.funnel_step_id
+    original_current_step = conversation.current_step
+    other_original_state = (
+        other_conversation.assigned_user_id,
+        other_conversation.ai_enabled,
+        other_conversation.funnel_id,
+        other_conversation.funnel_step_id,
+        other_conversation.current_step,
+    )
+
+    assert conversation.assigned_user_id is None
+    assert conversation.ai_enabled is True
+    assert other_conversation.assigned_user_id is None
+    assert other_conversation.ai_enabled is True
+
+    assigned_conversation = assign_conversation(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        assigned_user_id=owner.id,
+        actor_user=owner,
+    )
+    assert assigned_conversation.assigned_user_id == owner.id
+    assert assigned_conversation.ai_enabled is True
+    assert assigned_conversation.funnel_id == original_funnel_id
+    assert assigned_conversation.funnel_step_id == original_step_id
+    assert assigned_conversation.current_step == original_current_step
+    reloaded_other_conversation = db.get(Conversation, other_conversation.id)
+    assert reloaded_other_conversation is not None
+    assert (
+        reloaded_other_conversation.assigned_user_id,
+        reloaded_other_conversation.ai_enabled,
+        reloaded_other_conversation.funnel_id,
+        reloaded_other_conversation.funnel_step_id,
+        reloaded_other_conversation.current_step,
+    ) == other_original_state
+
+    paused_conversation = set_conversation_ai_enabled(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        ai_enabled=False,
+        actor_user=owner,
+    )
+    assert paused_conversation.assigned_user_id == owner.id
+    assert paused_conversation.ai_enabled is False
+    assert paused_conversation.funnel_id == original_funnel_id
+    assert paused_conversation.funnel_step_id == original_step_id
+    assert paused_conversation.current_step == original_current_step
+    reloaded_other_conversation = db.get(Conversation, other_conversation.id)
+    assert reloaded_other_conversation is not None
+    assert (
+        reloaded_other_conversation.assigned_user_id,
+        reloaded_other_conversation.ai_enabled,
+        reloaded_other_conversation.funnel_id,
+        reloaded_other_conversation.funnel_step_id,
+        reloaded_other_conversation.current_step,
+    ) == other_original_state
+
+    classified_conversation = assign_conversation_funnel(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        funnel_id=original_funnel_id,
+        funnel_step_id=original_step_id,
+        current_step="seguimiento",
+        actor_user=owner,
+    )
+    assert classified_conversation.assigned_user_id == owner.id
+    assert classified_conversation.ai_enabled is False
+    assert classified_conversation.funnel_id == original_funnel_id
+    assert classified_conversation.funnel_step_id == original_step_id
+    assert classified_conversation.current_step == "seguimiento"
+    reloaded_other_conversation = db.get(Conversation, other_conversation.id)
+    assert reloaded_other_conversation is not None
+    assert (
+        reloaded_other_conversation.assigned_user_id,
+        reloaded_other_conversation.ai_enabled,
+        reloaded_other_conversation.funnel_id,
+        reloaded_other_conversation.funnel_step_id,
+        reloaded_other_conversation.current_step,
+    ) == other_original_state
+
+    unassigned_conversation = assign_conversation(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        assigned_user_id=None,
+        actor_user=owner,
+    )
+    assert unassigned_conversation.assigned_user_id is None
+    assert unassigned_conversation.ai_enabled is False
+    assert unassigned_conversation.funnel_id == original_funnel_id
+    assert unassigned_conversation.funnel_step_id == original_step_id
+    assert unassigned_conversation.current_step == "seguimiento"
+    reloaded_other_conversation = db.get(Conversation, other_conversation.id)
+    assert reloaded_other_conversation is not None
+    assert (
+        reloaded_other_conversation.assigned_user_id,
+        reloaded_other_conversation.ai_enabled,
+        reloaded_other_conversation.funnel_id,
+        reloaded_other_conversation.funnel_step_id,
+        reloaded_other_conversation.current_step,
+    ) == other_original_state
+
+
 def test_mark_conversation_read_is_idempotent(db, client):
     company, owner = bootstrap_company(db, "Acme")
     contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
@@ -1204,6 +1334,269 @@ def test_status_events_backfill_conversation_from_sent_message_event_when_messag
     assert status_events[0].payload["message_id"] == "wamid-status-backfill"
 
 
+def test_status_events_backfill_ambiguous_shared_external_id_from_unique_sent_event(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact_a = Contact(company_id=company.id, name="Cliente A", phone="+573001112233")
+    contact_b = Contact(company_id=company.id, name="Cliente B", phone="+573001112234")
+    db.add_all([contact_a, contact_b])
+    db.commit()
+
+    conversation_a = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact_a.id, channel="whatsapp"),
+    )
+    conversation_b = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact_b.id, channel="whatsapp"),
+    )
+
+    shared_external_message_id = "wamid-shared-sent-backfill"
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_a.id,
+        sender_type="agent",
+        content="Mensaje A",
+        external_message_id=shared_external_message_id,
+    )
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_b.id,
+        sender_type="agent",
+        content="Mensaje B",
+        external_message_id=shared_external_message_id,
+    )
+    create_event(
+        db,
+        company_id=company.id,
+        event_type="message.sent",
+        payload={
+            "conversation_id": str(conversation_a.id),
+            "contact_id": str(contact_a.id),
+            "message_id": "local-message-id-a",
+            "meta_message_id": shared_external_message_id,
+            "source": "agent_manual",
+        },
+    )
+    create_event(
+        db,
+        company_id=company.id,
+        event_type="message.status",
+        payload={
+            "message_id": shared_external_message_id,
+            "status": "delivered",
+        },
+    )
+
+    events_a = list_conversation_events(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_a.id,
+    )
+    events_b = list_conversation_events(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_b.id,
+    )
+
+    assert [event.payload["status"] for event in events_a if event.event_type == "message.status"] == [
+        "delivered"
+    ]
+    assert [event.payload["status"] for event in events_b if event.event_type == "message.status"] == []
+
+
+def test_list_conversation_events_honors_explicit_conversation_id_on_status_events(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact_a = Contact(company_id=company.id, name="Cliente A", phone="+573001112233")
+    contact_b = Contact(company_id=company.id, name="Cliente B", phone="+573001112234")
+    db.add_all([contact_a, contact_b])
+    db.commit()
+
+    conversation_a = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact_a.id, channel="whatsapp"),
+    )
+    conversation_b = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact_b.id, channel="whatsapp"),
+    )
+
+    shared_external_message_id = "wamid-explicit-status"
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_a.id,
+        sender_type="agent",
+        content="Mensaje A",
+        external_message_id=shared_external_message_id,
+    )
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_b.id,
+        sender_type="agent",
+        content="Mensaje B",
+        external_message_id=shared_external_message_id,
+    )
+    create_event(
+        db,
+        company_id=company.id,
+        event_type="message.status",
+        payload={
+            "conversation_id": str(conversation_a.id),
+            "message_id": shared_external_message_id,
+            "status": "read",
+        },
+    )
+
+    events_a = list_conversation_events(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_a.id,
+    )
+    events_b = list_conversation_events(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_b.id,
+    )
+
+    assert [event.payload["status"] for event in events_a if event.event_type == "message.status"] == [
+        "read"
+    ]
+    assert [event.payload["status"] for event in events_b if event.event_type == "message.status"] == []
+
+
+def test_list_conversation_events_does_not_leak_legacy_status_events_across_shared_external_ids(db):
+    company, _owner = bootstrap_company(db, "Acme")
+    contact_a = Contact(company_id=company.id, name="Cliente A", phone="+573001112233")
+    contact_b = Contact(company_id=company.id, name="Cliente B", phone="+573001112234")
+    db.add_all([contact_a, contact_b])
+    db.commit()
+
+    conversation_a = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact_a.id, channel="whatsapp"),
+    )
+    conversation_b = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact_b.id, channel="whatsapp"),
+    )
+
+    shared_external_message_id = "wamid-shared-status"
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_a.id,
+        sender_type="agent",
+        content="Mensaje A",
+        external_message_id=shared_external_message_id,
+    )
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_b.id,
+        sender_type="agent",
+        content="Mensaje B",
+        external_message_id=shared_external_message_id,
+    )
+    create_event(
+        db,
+        company_id=company.id,
+        event_type="message.status",
+        payload={
+            "message_id": shared_external_message_id,
+            "status": "delivered",
+        },
+    )
+
+    events_a = list_conversation_events(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_a.id,
+    )
+    events_b = list_conversation_events(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_b.id,
+    )
+
+    assert [event.payload["status"] for event in events_a if event.event_type == "message.status"] == []
+    assert [event.payload["status"] for event in events_b if event.event_type == "message.status"] == []
+
+
+def test_list_conversation_events_prefers_message_rows_over_stale_sent_event_backfill(db):
+    company, _owner = bootstrap_company(db, "Acme")
+    contact_a = Contact(company_id=company.id, name="Cliente A", phone="+573001112233")
+    contact_b = Contact(company_id=company.id, name="Cliente B", phone="+573001112234")
+    db.add_all([contact_a, contact_b])
+    db.commit()
+
+    conversation_a = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact_a.id, channel="whatsapp"),
+    )
+    conversation_b = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact_b.id, channel="whatsapp"),
+    )
+
+    shared_external_message_id = "wamid-stale-sent"
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_a.id,
+        sender_type="agent",
+        content="Mensaje A",
+        external_message_id=shared_external_message_id,
+    )
+    create_event(
+        db,
+        company_id=company.id,
+        event_type="message.sent",
+        payload={
+            "conversation_id": str(conversation_b.id),
+            "contact_id": str(contact_b.id),
+            "message_id": "local-message-id-b",
+            "meta_message_id": shared_external_message_id,
+            "source": "agent_manual",
+        },
+    )
+    create_event(
+        db,
+        company_id=company.id,
+        event_type="message.status",
+        payload={
+            "message_id": shared_external_message_id,
+            "status": "delivered",
+        },
+    )
+
+    events_a = list_conversation_events(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_a.id,
+    )
+    events_b = list_conversation_events(
+        db,
+        company_id=company.id,
+        conversation_id=conversation_b.id,
+    )
+
+    assert [event.payload["status"] for event in events_a if event.event_type == "message.status"] == [
+        "delivered"
+    ]
+    assert [event.payload["status"] for event in events_b if event.event_type == "message.status"] == []
+
+
 def test_prepare_appointment_intent_records_conversation_event(db, client):
     company, owner = bootstrap_company(db, "Acme")
     contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
@@ -1246,6 +1639,7 @@ def test_prepare_appointment_intent_records_conversation_event(db, client):
     assert prepared_event["payload"]["funnel_name"] is not None
     assert prepared_event["payload"]["prepared_at"] is not None
     assert prepared_event["payload"]["source"] == "inbox"
+    original_funnel_id = conversation.funnel_id
 
     assign_conversation(
         db,
@@ -1277,11 +1671,23 @@ def test_prepare_appointment_intent_records_conversation_event(db, client):
         if event.event_type == "conversation.appointment_intent_prepared"
     ]
     assert len(prepared_events) == 2
-    fixed_timestamp = datetime.now(UTC)
-    fixed_timestamp_value = fixed_timestamp.isoformat()
-    for event in prepared_events:
-        event.created_at = fixed_timestamp
-        event.payload["prepared_at"] = fixed_timestamp_value
+    original_snapshot_event = next(
+        event for event in prepared_events if event.payload["funnel_id"] == str(original_funnel_id)
+    )
+    latest_snapshot_event = next(event for event in prepared_events if event.payload["funnel_id"] is None)
+    fixed_prepared_at_dt = datetime(2026, 7, 1, 12, 5, tzinfo=UTC)
+    fixed_prepared_at = fixed_prepared_at_dt.isoformat()
+    older_timestamp = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)
+    original_snapshot_event.created_at = older_timestamp
+    original_snapshot_event.payload = {
+        **original_snapshot_event.payload,
+        "prepared_at": fixed_prepared_at,
+    }
+    latest_snapshot_event.created_at = datetime(2026, 7, 1, 12, 10, tzinfo=UTC)
+    latest_snapshot_event.payload = {
+        **latest_snapshot_event.payload,
+        "prepared_at": fixed_prepared_at,
+    }
     db.commit()
 
     context_response = client.get(
@@ -1297,23 +1703,21 @@ def test_prepare_appointment_intent_records_conversation_event(db, client):
     assert second_context_response.status_code == 200
     assert second_context_response.json() == context
 
-    selected_event = next(
-        event
-        for event in prepared_events
-        if event.payload["funnel_id"] == context["funnel_id"]
-        and event.payload["current_step"] == context["current_step"]
-        and event.payload["assigned_user_id"] == context["assigned_user_id"]
-    )
     assert context["conversation_id"] == str(conversation.id)
     assert context["contact_id"] == str(contact.id)
     assert context["contact_name"] == "Cliente"
-    assert context["funnel_id"] == selected_event.payload["funnel_id"]
-    assert context["funnel_name"] == selected_event.payload["funnel_name"]
-    assert context["current_step"] == selected_event.payload["current_step"]
-    assert context["assigned_user_id"] == selected_event.payload["assigned_user_id"]
-    assert datetime.fromisoformat(context["prepared_at"].replace("Z", "+00:00")) == datetime.fromisoformat(
-        selected_event.payload["prepared_at"].replace("Z", "+00:00")
-    )
+    assert context["funnel_id"] == latest_snapshot_event.payload["funnel_id"]
+    assert context["funnel_name"] == latest_snapshot_event.payload["funnel_name"]
+    assert context["current_step"] == latest_snapshot_event.payload["current_step"]
+    assert context["assigned_user_id"] == latest_snapshot_event.payload["assigned_user_id"]
+    assert datetime.fromisoformat(context["prepared_at"].replace("Z", "+00:00")) == fixed_prepared_at_dt
+    prepared_part, event_part = context["snapshot_version"].split("|")
+    prepared_version_dt = datetime.fromisoformat(prepared_part.replace("Z", "+00:00"))
+    if prepared_version_dt.tzinfo is None:
+        prepared_version_dt = prepared_version_dt.replace(tzinfo=UTC)
+    assert prepared_version_dt == fixed_prepared_at_dt
+    assert event_part == str(latest_snapshot_event.id)
+    assert original_snapshot_event.created_at < latest_snapshot_event.created_at
 
 
 def test_get_appointment_intent_requires_prepared_context(db, client):

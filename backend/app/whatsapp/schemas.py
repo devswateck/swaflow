@@ -34,7 +34,6 @@ class WhatsAppAccountRead(TimestampedRead):
     company_id: UUID
     phone_number_id: str
     business_account_id: str | None
-    verify_token: str
     status: str
 
 
@@ -45,7 +44,7 @@ class WhatsAppWebhookResponse(BaseModel):
 
 class WhatsAppSetupRead(BaseModel):
     callback_url: str
-    verify_token: str | None
+    verify_token_configured: bool
     graph_api_version: str
     app_secret_configured: bool
 

@@ -1,7 +1,9 @@
 import logging
+import re
 from collections.abc import Mapping
 from uuid import UUID
 
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -10,25 +12,41 @@ from app.users.models import User
 
 logger = logging.getLogger(__name__)
 
-_SENSITIVE_KEY_FRAGMENTS = (
+_SENSITIVE_KEY_NAMES = (
     "credential",
+    "credentials",
     "password",
     "private_key",
     "secret",
+    "secret_token",
     "token",
+    "access_token",
     "signature",
     "api_key",
     "client_secret",
 )
+_SAFE_AUDIT_FLAGS = {
+    "credentials_configured",
+    "secret_configured",
+    "app_secret_configured",
+    "signature_algorithm",
+    "token_count",
+}
+
+
+def _normalize_key_name(key: str) -> str:
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", key).lower()
 
 
 def _is_sensitive_key(key: object) -> bool:
     if not isinstance(key, str):
         return False
-    normalized = key.lower()
+    normalized = _normalize_key_name(key)
+    if normalized in _SAFE_AUDIT_FLAGS:
+        return False
     return any(
-        fragment in normalized or normalized.endswith(fragment)
-        for fragment in _SENSITIVE_KEY_FRAGMENTS
+        re.search(rf"(^|[._-]){re.escape(fragment)}([._-]|$)", normalized) is not None
+        for fragment in _SENSITIVE_KEY_NAMES
     )
 
 
@@ -44,6 +62,10 @@ def _sanitize_metadata_value(value):
     if isinstance(value, tuple):
         return tuple(_sanitize_metadata_value(item) for item in value)
     return value
+
+
+def _normalize_audit_metadata(metadata: dict | None) -> dict:
+    return jsonable_encoder(_sanitize_metadata_value(metadata or {}))
 
 
 def record_audit(
@@ -65,7 +87,7 @@ def record_audit(
         entity_type=entity_type,
         entity_id=entity_id,
         summary=summary,
-        metadata_json=_sanitize_metadata_value(metadata or {}),
+        metadata_json=_normalize_audit_metadata(metadata),
     )
     db.add(log)
     db.flush()

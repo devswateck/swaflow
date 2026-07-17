@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import importlib.util
 import hashlib
 import hmac
 import json
 from collections.abc import Generator
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import Column, MetaData, String, Table, Text, create_engine, inspect, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -19,11 +23,14 @@ from app.audit.service import list_audit_logs
 from app.auth.service import build_token
 from app.companies.schemas import CompanyCreate, CompanyUpdate
 from app.companies.service import create_company_with_owner, update_company
+from app.core.crypto import encrypt_secret
 from app.core.crypto import decrypt_secret
 from app.core.database import Base, get_db
 from app.core.schemas import OwnerCreate
 from app.main import app
 from app.contacts.models import Contact
+from app.conversations.schemas import ConversationCreate
+from app.conversations.service import assign_conversation, create_conversation
 from app.conversations.models import Conversation
 from app.inventory.models import Inventory
 from app.messages.models import Message
@@ -39,6 +46,7 @@ from app.whatsapp.service import (
     create_account,
     send_product_cards_from_db,
     send_product_cards_message,
+    verify_token_exists,
 )
 
 
@@ -107,7 +115,7 @@ def test_whatsapp_setup_and_account_lifecycle_exposes_honest_configuration(db, c
     assert setup_response.status_code == 200
     assert setup_response.json() == {
         "callback_url": "https://swaflow.example/api/v1/webhooks/whatsapp",
-        "verify_token": "global-verify-token",
+        "verify_token_configured": True,
         "graph_api_version": "v26.0",
         "app_secret_configured": True,
     }
@@ -126,7 +134,6 @@ def test_whatsapp_setup_and_account_lifecycle_exposes_honest_configuration(db, c
     assert created["company_id"] == str(company.id)
     assert created["phone_number_id"] == "phone-number-id-1"
     assert created["business_account_id"] == "business-account-id-1"
-    assert created["verify_token"] == "global-verify-token"
     assert created["status"] == "active"
     assert "access_token" not in created
 
@@ -134,11 +141,13 @@ def test_whatsapp_setup_and_account_lifecycle_exposes_honest_configuration(db, c
     assert stored_account is not None
     assert stored_account.access_token_encrypted != "EAA-test-access-token"
     assert decrypt_secret(stored_account.access_token_encrypted) == "EAA-test-access-token"
+    assert decrypt_secret(stored_account.verify_token) == "global-verify-token"
 
     list_response = client.get("/api/v1/whatsapp/accounts", headers=auth_headers(owner))
     assert list_response.status_code == 200
     assert len(list_response.json()) == 1
     assert list_response.json()[0]["id"] == created["id"]
+    assert "verify_token" not in list_response.json()[0]
 
     monkeypatch.setattr(
         "app.whatsapp.service._meta_request",
@@ -169,10 +178,366 @@ def test_whatsapp_setup_and_account_lifecycle_exposes_honest_configuration(db, c
     }
 
 
-def test_whatsapp_webhook_verification_prefers_global_token_over_account_tokens(
+def _load_whatsapp_verify_token_migration():
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "migrations"
+        / "versions"
+        / "20260715_0023_whatsapp_verify_token_text.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "whatsapp_verify_token_text_migration", migration_path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_whatsapp_verify_token_migration_upgrade_runs_on_sqlite_and_backfills_plaintext_rows(
+    monkeypatch,
+):
+    engine = create_engine(
+        "sqlite+pysqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    metadata = MetaData()
+    Table(
+        "companies",
+        metadata,
+        Column("id", String(36), primary_key=True),
+    )
+    whatsapp_accounts = WhatsAppAccount.__table__.to_metadata(metadata)
+    whatsapp_accounts.c.verify_token.type = String(255)
+    metadata.create_all(bind=engine)
+
+    with engine.begin() as connection:
+        connection.execute(
+            whatsapp_accounts.insert().values(
+                id=UUID("00000000-0000-0000-0000-000000000101"),
+                company_id=UUID("00000000-0000-0000-0000-000000000001"),
+                phone_number_id="phone-number-id-legacy",
+                business_account_id="business-account-id-legacy",
+                access_token_encrypted="legacy-access-token",
+                verify_token="legacy-plain-token",
+                status="active",
+            )
+        )
+        connection.execute(
+            whatsapp_accounts.insert().values(
+                id=UUID("00000000-0000-0000-0000-000000000102"),
+                company_id=UUID("00000000-0000-0000-0000-000000000002"),
+                phone_number_id="phone-number-id-encrypted",
+                business_account_id="business-account-id-encrypted",
+                access_token_encrypted="legacy-access-token-2",
+                verify_token=encrypt_secret("already-encrypted-token"),
+                status="active",
+            )
+        )
+        migration = _load_whatsapp_verify_token_migration()
+        context = MigrationContext.configure(connection)
+        monkeypatch.setattr(migration, "op", Operations(context))
+        migration.upgrade()
+        verify_token_type = next(
+            column["type"]
+            for column in inspect(connection).get_columns("whatsapp_accounts")
+            if column["name"] == "verify_token"
+        )
+        stored_rows = {
+            row.id: row.verify_token
+            for row in connection.execute(
+                select(whatsapp_accounts.c.id, whatsapp_accounts.c.verify_token)
+            ).all()
+        }
+
+    assert "TEXT" in str(verify_token_type).upper()
+    assert stored_rows[UUID("00000000-0000-0000-0000-000000000101")] != "legacy-plain-token"
+    assert decrypt_secret(stored_rows[UUID("00000000-0000-0000-0000-000000000101")]) == "legacy-plain-token"
+    assert decrypt_secret(stored_rows[UUID("00000000-0000-0000-0000-000000000102")]) == "already-encrypted-token"
+
+
+def test_whatsapp_account_update_preserves_legacy_plaintext_verify_token_when_omitted(
+    db, monkeypatch
+):
+    company, _ = bootstrap_company(db, "Acme")
+    settings = SimpleNamespace(
+        public_base_url="https://swaflow.example/",
+        whatsapp_verify_token=None,
+        whatsapp_app_secret="webhook-secret",
+        whatsapp_graph_api_version="v26.0",
+    )
+    monkeypatch.setattr("app.whatsapp.service.get_settings", lambda: settings)
+
+    account = WhatsAppAccount(
+        company_id=company.id,
+        phone_number_id="phone-number-id-legacy",
+        business_account_id="business-account-id-legacy",
+        access_token_encrypted="encrypted-access-token",
+        verify_token="legacy-plain-token",
+    )
+    db.add(account)
+    db.commit()
+
+    updated = create_account(
+        db,
+        company_id=company.id,
+        payload=WhatsAppAccountCreate(
+            phone_number_id="phone-number-id-legacy",
+            business_account_id="business-account-id-updated",
+            access_token="EAA-updated-access-token",
+        ),
+    )
+
+    assert decrypt_secret(updated.verify_token) == "legacy-plain-token"
+    assert decrypt_secret(updated.access_token_encrypted) == "EAA-updated-access-token"
+    assert updated.business_account_id == "business-account-id-updated"
+
+
+def test_whatsapp_account_update_preserves_legacy_plaintext_verify_token_through_api_when_omitted(
     db, client, monkeypatch
 ):
     company, owner = bootstrap_company(db, "Acme")
+    settings = SimpleNamespace(
+        public_base_url="https://swaflow.example/",
+        whatsapp_verify_token=None,
+        whatsapp_app_secret="webhook-secret",
+        whatsapp_graph_api_version="v26.0",
+    )
+    monkeypatch.setattr("app.whatsapp.routes.get_settings", lambda: settings)
+    monkeypatch.setattr("app.whatsapp.service.get_settings", lambda: settings)
+
+    legacy_account = WhatsAppAccount(
+        company_id=company.id,
+        phone_number_id="phone-number-id-api-legacy",
+        business_account_id="business-account-id-api-legacy",
+        access_token_encrypted="legacy-access-token",
+        verify_token="legacy-plain-token",
+    )
+    db.add(legacy_account)
+    db.commit()
+
+    response = client.post(
+        "/api/v1/whatsapp/accounts",
+        headers=auth_headers(owner),
+        json={
+            "phone_number_id": "phone-number-id-api-legacy",
+            "business_account_id": "business-account-id-api-updated",
+            "access_token": "EAA-updated-access-token",
+        },
+    )
+    assert response.status_code == 201
+
+    stored_account = db.scalar(
+        select(WhatsAppAccount).where(WhatsAppAccount.phone_number_id == "phone-number-id-api-legacy")
+    )
+    assert stored_account is not None
+    assert decrypt_secret(stored_account.verify_token) == "legacy-plain-token"
+    assert decrypt_secret(stored_account.access_token_encrypted) == "EAA-updated-access-token"
+    assert stored_account.business_account_id == "business-account-id-api-updated"
+
+
+def test_whatsapp_account_update_preserves_unreadable_verify_token_when_omitted(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    settings = SimpleNamespace(
+        public_base_url="https://swaflow.example/",
+        whatsapp_verify_token=None,
+        whatsapp_app_secret="webhook-secret",
+        whatsapp_graph_api_version="v26.0",
+    )
+    monkeypatch.setattr("app.whatsapp.service.get_settings", lambda: settings)
+
+    corrupted_verify_token = encrypt_secret("legacy-plain-token")
+    corrupted_verify_token = corrupted_verify_token[:-1] + (
+        "A" if corrupted_verify_token[-1] != "A" else "B"
+    )
+
+    account = WhatsAppAccount(
+        company_id=company.id,
+        phone_number_id="phone-number-id-corrupted",
+        business_account_id="business-account-id-corrupted",
+        access_token_encrypted="encrypted-access-token",
+        verify_token=corrupted_verify_token,
+    )
+    db.add(account)
+    db.commit()
+
+    updated = create_account(
+        db,
+        company_id=company.id,
+        payload=WhatsAppAccountCreate(
+            phone_number_id="phone-number-id-corrupted",
+            business_account_id="business-account-id-updated",
+            access_token="EAA-updated-access-token",
+        ),
+    )
+
+    assert updated.verify_token == corrupted_verify_token
+    assert decrypt_secret(updated.access_token_encrypted) == "EAA-updated-access-token"
+    assert updated.business_account_id == "business-account-id-updated"
+
+
+def test_whatsapp_verify_token_column_uses_text_storage():
+    assert isinstance(WhatsAppAccount.__table__.c.verify_token.type, Text)
+
+
+def test_whatsapp_account_update_preserves_existing_verify_token_when_omitted(
+    db, client, monkeypatch
+):
+    company, owner = bootstrap_company(db, "Acme")
+    settings = SimpleNamespace(
+        public_base_url="https://swaflow.example/",
+        whatsapp_verify_token=None,
+        whatsapp_app_secret="webhook-secret",
+        whatsapp_graph_api_version="v26.0",
+    )
+    monkeypatch.setattr("app.whatsapp.routes.get_settings", lambda: settings)
+    monkeypatch.setattr("app.whatsapp.service.get_settings", lambda: settings)
+
+    create_response = client.post(
+        "/api/v1/whatsapp/accounts",
+        headers=auth_headers(owner),
+        json={
+            "phone_number_id": "phone-number-id-1",
+            "business_account_id": "business-account-id-1",
+            "access_token": "EAA-test-access-token",
+            "verify_token": "account-token",
+        },
+    )
+    assert create_response.status_code == 201
+
+    update_response = client.post(
+        "/api/v1/whatsapp/accounts",
+        headers=auth_headers(owner),
+        json={
+            "phone_number_id": "phone-number-id-1",
+            "business_account_id": "business-account-id-2",
+            "access_token": "EAA-updated-access-token",
+        },
+    )
+    assert update_response.status_code == 201
+    assert "verify_token" not in update_response.json()
+
+    stored_account = db.scalar(select(WhatsAppAccount).where(WhatsAppAccount.company_id == company.id))
+    assert stored_account is not None
+    assert decrypt_secret(stored_account.verify_token) == "account-token"
+    assert decrypt_secret(stored_account.access_token_encrypted) == "EAA-updated-access-token"
+    assert stored_account.business_account_id == "business-account-id-2"
+
+
+def test_whatsapp_setup_does_not_report_account_token_configuration_when_global_missing(
+    db, client, monkeypatch
+):
+    company, owner = bootstrap_company(db, "Acme")
+    settings = SimpleNamespace(
+        public_base_url="https://swaflow.example/",
+        whatsapp_verify_token=None,
+        whatsapp_app_secret="webhook-secret",
+        whatsapp_graph_api_version="v26.0",
+    )
+    monkeypatch.setattr("app.whatsapp.routes.get_settings", lambda: settings)
+    monkeypatch.setattr("app.whatsapp.service.get_settings", lambda: settings)
+
+    create_account(
+        db,
+        company_id=company.id,
+        payload=WhatsAppAccountCreate(
+            phone_number_id="phone-number-id-1",
+            business_account_id="business-account-id-1",
+            access_token="EAA-test-access-token",
+            verify_token="account-token",
+        ),
+    )
+
+    response = client.get("/api/v1/whatsapp/setup", headers=auth_headers(owner))
+    assert response.status_code == 200
+    assert response.json()["verify_token_configured"] is False
+
+
+def test_whatsapp_verify_token_lookup_is_tenant_scoped(db, monkeypatch):
+    company_a, _ = bootstrap_company(db, "Acme")
+    company_b, _ = bootstrap_company(db, "Bravo")
+    settings = SimpleNamespace(
+        public_base_url="https://swaflow.example/",
+        whatsapp_verify_token=None,
+        whatsapp_app_secret="webhook-secret",
+        whatsapp_graph_api_version="v26.0",
+    )
+    monkeypatch.setattr("app.whatsapp.service.get_settings", lambda: settings)
+
+    create_account(
+        db,
+        company_id=company_a.id,
+        payload=WhatsAppAccountCreate(
+            phone_number_id="phone-number-id-a",
+            business_account_id="business-account-id-a",
+            access_token="EAA-test-access-token-a",
+            verify_token="company-token",
+        ),
+    )
+    create_account(
+        db,
+        company_id=company_b.id,
+        payload=WhatsAppAccountCreate(
+            phone_number_id="phone-number-id-b",
+            business_account_id="business-account-id-b",
+            access_token="EAA-test-access-token-b",
+            verify_token="other-company-token",
+        ),
+    )
+
+    assert verify_token_exists(
+        db,
+        company_id=company_a.id,
+        verify_token="company-token",
+    )
+    assert not verify_token_exists(
+        db,
+        company_id=company_a.id,
+        verify_token="other-company-token",
+    )
+    assert verify_token_exists(
+        db,
+        company_id=company_b.id,
+        verify_token="other-company-token",
+    )
+    assert not verify_token_exists(
+        db,
+        company_id=company_b.id,
+        verify_token="wrong-token",
+    )
+
+
+def test_whatsapp_account_creation_rejects_meta_access_token_as_verify_token(db, client, monkeypatch):
+    company, owner = bootstrap_company(db, "Acme")
+    settings = SimpleNamespace(
+        public_base_url="https://swaflow.example/",
+        whatsapp_verify_token=None,
+        whatsapp_app_secret="webhook-secret",
+        whatsapp_graph_api_version="v26.0",
+    )
+    monkeypatch.setattr("app.whatsapp.routes.get_settings", lambda: settings)
+    monkeypatch.setattr("app.whatsapp.service.get_settings", lambda: settings)
+
+    response = client.post(
+        "/api/v1/whatsapp/accounts",
+        headers=auth_headers(owner),
+        json={
+            "phone_number_id": "phone-number-id-1",
+            "business_account_id": "business-account-id-1",
+            "access_token": "EAA-test-access-token",
+            "verify_token": "EAA-should-not-be-accepted",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "El verify token no es el access token de Meta" in str(response.json())
+
+
+def test_whatsapp_webhook_verification_rejects_account_tokens_without_global_token(
+    db, client, monkeypatch
+):
+    company, _ = bootstrap_company(db, "Acme")
     settings_with_global_token = SimpleNamespace(
         public_base_url="https://swaflow.example",
         whatsapp_verify_token="global-token",
@@ -212,9 +577,9 @@ def test_whatsapp_webhook_verification_prefers_global_token_over_account_tokens(
             verify_token="account-token",
         ),
     )
-    assert account.verify_token == "account-token"
+    assert decrypt_secret(account.verify_token) == "account-token"
 
-    account_token_rejected = client.get(
+    account_token_response = client.get(
         "/api/v1/webhooks/whatsapp",
         params={
             "hub.mode": "subscribe",
@@ -222,7 +587,7 @@ def test_whatsapp_webhook_verification_prefers_global_token_over_account_tokens(
             "hub.challenge": "challenge-456",
         },
     )
-    assert account_token_rejected.status_code == 403
+    assert account_token_response.status_code == 403
 
     account_token_settings = SimpleNamespace(
         public_base_url="https://swaflow.example",
@@ -240,8 +605,7 @@ def test_whatsapp_webhook_verification_prefers_global_token_over_account_tokens(
             "hub.challenge": "challenge-456",
         },
     )
-    assert account_response.status_code == 200
-    assert account_response.text == "challenge-456"
+    assert account_response.status_code == 403
 
 
 def test_whatsapp_webhook_signature_validation_enforces_secret(db, client, monkeypatch):
@@ -252,7 +616,13 @@ def test_whatsapp_webhook_signature_validation_enforces_secret(db, client, monke
         whatsapp_graph_api_version="v26.0",
     )
     monkeypatch.setattr("app.whatsapp.routes.get_settings", lambda: settings)
-    monkeypatch.setattr("app.whatsapp.service.process_webhook_payload", lambda *args, **kwargs: (2, 1))
+    call_count = {"count": 0}
+
+    def capture_process_webhook_payload(*args, **kwargs):
+        call_count["count"] += 1
+        return 2, 1
+
+    monkeypatch.setattr("app.whatsapp.service.process_webhook_payload", capture_process_webhook_payload)
 
     body = b'{"entry":[{"changes":[{"value":{"metadata":{"phone_number_id":"phone-number-id-1"},"messages":[]}}]}]}'
     digest = hmac.new(settings.whatsapp_app_secret.encode(), body, hashlib.sha256).hexdigest()
@@ -265,12 +635,14 @@ def test_whatsapp_webhook_signature_validation_enforces_secret(db, client, monke
     )
     assert valid_response.status_code == 200
     assert valid_response.json() == {"processed": 2, "skipped": 1}
+    assert call_count["count"] == 1
 
     missing_signature_response = client.post(
         "/api/v1/webhooks/whatsapp",
         content=body,
     )
     assert missing_signature_response.status_code == 401
+    assert call_count["count"] == 1
 
     invalid_signature_response = client.post(
         "/api/v1/webhooks/whatsapp",
@@ -278,6 +650,7 @@ def test_whatsapp_webhook_signature_validation_enforces_secret(db, client, monke
         headers={"x-hub-signature-256": "sha256=invalid"},
     )
     assert invalid_signature_response.status_code == 401
+    assert call_count["count"] == 1
 
 
 def test_whatsapp_webhook_processes_inbound_message_and_links_tenant_contact_conversation(
@@ -558,6 +931,62 @@ def test_whatsapp_manual_send_auto_assigns_single_inbox_user(db, client, monkeyp
         if log.action == "conversation.assigned"
     )
     assert audit_log.entity_id == conversation.id
+
+
+def test_autoassign_and_manual_reassignment_do_not_duplicate_assignment_side_effects(
+    db, monkeypatch
+):
+    company, owner = bootstrap_company(db, "Acme")
+    agent = create_user(
+        db,
+        company_id=company.id,
+        payload=UserCreate(
+            name="Agente Inbox",
+            email="agent-autoassign-overlap@acme.example.com",
+            password="super-secret-13",
+            role="agent",
+            module_permissions={"inbox": True},
+        ),
+    )
+    update_company(
+        db,
+        company_id=company.id,
+        current_company_id=company.id,
+        payload=CompanyUpdate(auto_assign_single_additional_user_chats=True),
+        actor_user=owner,
+    )
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112299")
+    db.add(contact)
+    db.commit()
+
+    published: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        "app.conversations.service.realtime_manager.publish",
+        lambda company_id, event_type, payload: published.append((event_type, payload)),
+    )
+
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    assert conversation.assigned_user_id == agent.id
+
+    reassigned = assign_conversation(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        assigned_user_id=agent.id,
+        actor_user=owner,
+    )
+
+    assert reassigned.assigned_user_id == agent.id
+    assert [event_type for event_type, _ in published] == ["conversation.assigned"]
+
+    audit_actions = [
+        log.action for log in list_audit_logs(db, company_id=company.id, limit=10, offset=0)
+    ]
+    assert audit_actions.count("conversation.assigned") == 1
 
 
 def test_whatsapp_account_test_endpoint_returns_404_for_other_tenant(db, client, monkeypatch):

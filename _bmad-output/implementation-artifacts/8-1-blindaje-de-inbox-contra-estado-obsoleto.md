@@ -4,7 +4,7 @@ baseline_commit: 595b380d6111b59e727b01d978cf27ebc2b6a335
 
 # Story 8.1: Blindaje de Inbox contra estado obsoleto
 
-Status: backlog
+Status: done
 
 ## Story
 
@@ -23,21 +23,21 @@ Para que la operacion no muestre conversaciones obsoletas ni borre contexto vali
 
 ## Tasks / Subtasks
 
-- [ ] Add request sequencing and abort control for inbox list refreshes in `frontend/src/App.tsx`.
-  - [ ] Make `loadInbox()` apply only the latest successful response and ignore stale responses.
-  - [ ] Preserve the existing `selectedConversationIdRef` reconciliation, but gate it behind the latest inbox snapshot.
-  - [ ] Ensure `setInboxLoading` and `setInboxError` only reflect the currently active request.
-- [ ] Harden message-send and realtime callbacks against selection races.
-  - [ ] Capture the selected conversation id at send time and only apply optimistic inbox updates if the selection is still the same.
-  - [ ] Keep `loadConversationDetail()` as the source of truth for the selected thread; do not let an older inbox snapshot overwrite it.
-  - [ ] Make websocket-driven refreshes go through the guarded inbox refresh path.
-- [ ] Preserve composer and timeline coherence.
-  - [ ] Prevent stale refreshes from clearing `conversationMessages`, `conversationEvents`, or `selectedConversationDetail` for the wrong thread.
-  - [ ] Keep the composer tied to the active thread; do not let a late response rebind it to another conversation.
-- [ ] Add regression coverage or explicit verification for the race.
-  - [ ] Add the smallest feasible automated regression around inbox snapshot ordering if the frontend test harness exists in this branch.
-  - [ ] If no frontend test harness is available, verify the race manually after the code change with rapid selection and websocket refreshes.
-  - [ ] Run `npm run lint` and `npm run build` before handoff.
+- [x] Add request sequencing and abort control for inbox list refreshes in `frontend/src/App.tsx`.
+  - [x] Make `loadInbox()` apply only the latest successful response and ignore stale responses.
+  - [x] Preserve the existing `selectedConversationIdRef` reconciliation, but gate it behind the latest inbox snapshot.
+  - [x] Ensure `setInboxLoading` and `setInboxError` only reflect the currently active request.
+- [x] Harden message-send and realtime callbacks against selection races.
+  - [x] Capture the selected conversation id at send time and only apply optimistic inbox updates if the selection is still the same.
+  - [x] Keep `loadConversationDetail()` as the source of truth for the selected thread; do not let an older inbox snapshot overwrite it.
+  - [x] Make websocket-driven refreshes go through the guarded inbox refresh path.
+- [x] Preserve composer and timeline coherence.
+  - [x] Prevent stale refreshes from clearing `conversationMessages`, `conversationEvents`, or `selectedConversationDetail` for the wrong thread.
+  - [x] Keep the composer tied to the active thread; do not let a late response rebind it to another conversation.
+- [x] Add regression coverage or explicit verification for the race.
+  - [x] Add the smallest feasible automated regression around inbox snapshot ordering if the frontend test harness exists in this branch.
+  - [x] If no frontend test harness is available, verify the race manually after the code change with rapid selection and websocket refreshes.
+  - [x] Run `npm run lint` and `npm run build` before handoff.
 
 ## Dev Notes
 
@@ -119,10 +119,47 @@ GPT-5
 - Analysis also captured a second race in `sendInboxMessage()` because it can force the UI back to the thread that was active when the request started.
 - The backend conversation/order/detail contracts were inspected and do not need to change for this story.
 
+### Git Intelligence Summary
+
+- `8204f3f` - `Make orders idempotency migration idempotent`: the branch is carrying forward a pattern of idempotent schema changes, so any helper or guard added here should stay similarly defensive and migration-safe.
+- `c128972` - `Fix MySQL migration for orders idempotency key`: reinforces that MySQL-specific correctness matters on this branch; avoid frontend-only fixes that assume backend behavior will save the race.
+- `f8f4cba` - `Finalize offboarding export and related work`: recent history shows story-by-story completion with explicit story-file and sprint-status hygiene; keep that standard for this inbox hardening pass.
+- `595b380` - `Sync local changes`: baseline for the current backlog set and the previous pre-inbox-hardening state.
+- `ee0b2c7` - `fix: proxy api routes from frontend nginx`: confirms the frontend surface is still the single-shell app and should not be refactored into a router for this story.
+
+### Latest Tech Information
+
+- No external library upgrade is required for this story. The implementation should use the existing React 18 / Vite 8 / TypeScript 5.6 / Zustand / TanStack Query stack already established in project context.
+- No frontend test harness is present in `frontend/package.json`; the verification path for this story remains `npm run lint`, `npm run build`, and a manual race repro unless a harness is added as part of the work.
+
 ### Completion Notes List
 
-- To be filled by the implementation agent.
+- Added `inboxRequestIdRef` and guarded `loadInbox()` so only the newest inbox snapshot can update conversations, selection and error/loading state.
+- Hardened `sendInboxMessage()` so a late response no longer snaps the UI back to the thread that was active when the request started.
+- Verified the frontend with `npm run lint` and `npm run build`, then re-ran both after the final formatting adjustment.
+- Addressed the review findings by separating inbox loading state from snapshot sequencing and by syncing the selected conversation ref with `useLayoutEffect`.
+- Replaced the loading-request guard with an in-flight request counter so overlapping inbox refreshes keep the spinner aligned with active work.
+- Synced `selectedConversationIdRef` in `useLayoutEffect` so inbox and send-path guards see the latest selection before browser paint.
+- Added abort control to inbox list refreshes and scoped loading/error updates to the latest active request flow.
+- Removed the manual `selectedConversationIdRef` mutation from `sendInboxMessage()` and switched the state commit to `flushSync` so the selected thread updates atomically.
+- Added a guard in the detail failure path so stale non-404 errors do not clear the active thread after the user has already moved on.
+- Re-validated the frontend with `npm run lint` and `npm run build` after the final inbox hardening pass.
+- Replaced deferred selection reliance with a synchronous `setSelectedConversationIdSync()` helper so inbox, detail and send flows read the same thread id without waiting for layout timing.
+- Manual repro executed in browser: open Inbox, trigger a websocket or refresh, switch conversations before the first response lands, then confirm the active thread and composer do not snap back.
+
+## Change Log
+
+- 2026-07-14: Addressed code review findings - 2 items resolved.
+- 2026-07-14: Addressed follow-up review finding - loading state now tracks overlapping visible inbox refreshes correctly.
+- 2026-07-14: Addressed follow-up review finding - selection ref now syncs in layout phase to avoid stale guard reads.
+- 2026-07-14: Addressed review findings - inbox refresh abort control, spinner ownership, error scoping, and send-path selection race resolved.
+- 2026-07-14: Addressed follow-up review finding - stale detail failure path now preserves the active thread when selection moved on.
+- 2026-07-14: Addressed follow-up review finding - selection writes now sync the ref immediately so async inbox/detail responses do not observe a stale thread id.
+- 2026-07-14: Verified manual browser repro for the inbox race after the final selection-sync fix.
+- 2026-07-15: Story closed after review and manual verification completed.
 
 ### File List
 
+- `frontend/src/App.tsx`
 - `_bmad-output/implementation-artifacts/8-1-blindaje-de-inbox-contra-estado-obsoleto.md`
+- `_bmad-output/implementation-artifacts/sprint-status.yaml`

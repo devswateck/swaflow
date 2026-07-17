@@ -31,7 +31,7 @@ def list_conversations(
     status: str | None = None,
     funnel_id: UUID | None = None,
     funnel_step_id: UUID | None = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> list[dict]:
     conversations = service.list_conversations(
@@ -52,7 +52,7 @@ def list_conversations(
 @router.post("", response_model=ConversationRead, status_code=201)
 def create_conversation(
     payload: ConversationCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> Conversation:
     return service.create_conversation(db, company_id=current_user.company_id, payload=payload)
@@ -61,7 +61,7 @@ def create_conversation(
 @router.get("/{conversation_id}", response_model=ConversationDetailRead)
 def get_conversation(
     conversation_id: UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> dict:
     conversation = service.get_conversation(
@@ -144,7 +144,7 @@ def get_conversation_appointment_intent(
 @router.post("/{conversation_id}/close", response_model=ConversationRead)
 def close_conversation(
     conversation_id: UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> Conversation:
     return service.close_conversation(
@@ -185,7 +185,7 @@ def resume_conversation_ai(
 @router.post("/{conversation_id}/read", response_model=ConversationRead)
 def mark_conversation_read(
     conversation_id: UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> Conversation:
     return service.mark_conversation_read(
@@ -197,7 +197,7 @@ def mark_conversation_read(
 def send_message(
     conversation_id: UUID,
     payload: ConversationSendMessage,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> Message:
     return service.append_message(

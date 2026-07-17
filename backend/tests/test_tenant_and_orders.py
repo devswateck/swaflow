@@ -2945,8 +2945,80 @@ def test_payment_integration_requires_provider_and_webhook_secret_when_active(db
     }
 
 
+def test_payment_integration_update_rejects_invalid_contracts(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    integration = create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="payments",
+            credentials=json.dumps(
+                {"private_key": "pk_test", "events_secret": "evt_test"}
+            ),
+            config={
+                "provider": "wompi",
+                "environment": "sandbox",
+                "currency": "COP",
+                "payment_link_ttl_minutes": "45",
+            },
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        update_integration(
+            db,
+            company_id=company.id,
+            integration_id=integration.id,
+            payload=IntegrationUpdate(
+                config={
+                    "provider": "stripe",
+                    "environment": "sandbox",
+                    "currency": "COP",
+                    "payment_link_ttl_minutes": "45",
+                }
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Unsupported payment provider" in str(exc_info.value.detail)
+
+    monkeypatch.setattr(
+        "app.payments.contract.get_settings",
+        lambda: SimpleNamespace(app_env="production"),
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        update_integration(
+            db,
+            company_id=company.id,
+            integration_id=integration.id,
+            payload=IntegrationUpdate(
+                config={
+                    "provider": "mock",
+                    "environment": "sandbox",
+                    "currency": "COP",
+                    "payment_link_ttl_minutes": "45",
+                }
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Local payment provider is not allowed in production" in str(exc_info.value.detail)
+
+
 def test_audit_logs_redact_integration_secrets(db):
     company, _ = bootstrap_company(db, "Acme")
+
+    def collect_keys(value):
+        keys = set()
+        if isinstance(value, dict):
+            for key, child in value.items():
+                keys.add(key)
+                keys.update(collect_keys(child))
+        elif isinstance(value, list):
+            for item in value:
+                keys.update(collect_keys(item))
+        elif isinstance(value, tuple):
+            for item in value:
+                keys.update(collect_keys(item))
+        return keys
 
     integration = create_integration(
         db,
@@ -3006,6 +3078,63 @@ def test_audit_logs_redact_integration_secrets(db):
     )
     assert "credentials" not in webhook_log.metadata_json
     assert "secret_token" not in webhook_log.metadata_json
+
+    update_integration(
+        db,
+        company_id=company.id,
+        integration_id=integration.id,
+        payload=IntegrationUpdate(
+            config={
+                "provider": "wompi",
+                "environment": "sandbox",
+                "currency": "COP",
+                "payment_link_ttl_minutes": "90",
+                "nested": {
+                    "token_count": 3,
+                    "signature_algorithm": "RS256",
+                    "secret_token": "nested-secret",
+                    "api_key": "nested-api-key",
+                    "access_token_id": "nested-access-token-id",
+                    "secretTokenMarker": "nested-secret-token-marker",
+                    "clientSecretJson": "nested-client-secret-json",
+                    "items": [
+                        {"client_secret": "nested-client-secret"},
+                        {"signature": "nested-signature"},
+                    ],
+                },
+            }
+        ),
+    )
+
+    nested_integration_log = next(
+        log
+        for log in list_audit_logs(db, company_id=company.id, limit=20, offset=0)
+        if log.action == "integration.updated"
+        and isinstance(log.metadata_json, dict)
+        and isinstance(log.metadata_json.get("config"), dict)
+        and "nested" in log.metadata_json["config"]
+    )
+    nested_serialized = json.dumps(
+        nested_integration_log.metadata_json, ensure_ascii=False, sort_keys=True
+    )
+    assert "nested-secret" not in nested_serialized
+    assert "nested-api-key" not in nested_serialized
+    assert "nested-client-secret" not in nested_serialized
+    assert "nested-signature" not in nested_serialized
+    assert "nested-access-token-id" not in nested_serialized
+    assert "nested-secret-token-marker" not in nested_serialized
+    assert "nested-client-secret-json" not in nested_serialized
+    assert "secret_token" not in nested_serialized
+    assert "api_key" not in nested_serialized
+    assert "client_secret" not in nested_serialized
+    assert not {"credentials", "secret_token", "api_key", "client_secret", "signature"} & collect_keys(
+        nested_integration_log.metadata_json
+    )
+    assert nested_integration_log.metadata_json["config"]["nested"]["token_count"] == 3
+    assert (
+        nested_integration_log.metadata_json["config"]["nested"]["signature_algorithm"]
+        == "RS256"
+    )
 
 
 def test_email_notification_uses_tenant_brand_and_recipient_headers(db, monkeypatch):
@@ -3467,6 +3596,58 @@ def test_calendar_integration_validates_provider_and_normalizes_alias(db):
     assert decrypt_secret(stored.credentials_encrypted or "") == "calendar-secret"
 
 
+def test_calendar_integration_update_rejects_invalid_contracts(db):
+    company, _ = bootstrap_company(db, "Acme")
+    integration = create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="calendar",
+            credentials="calendar-secret",
+            config={
+                "provider": "google_calendar",
+                "calendar_id": "primary",
+                "timezone": "America/Bogota",
+            },
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        update_integration(
+            db,
+            company_id=company.id,
+            integration_id=integration.id,
+            payload=IntegrationUpdate(
+                config={
+                    "provider": "calendly",
+                    "calendar_id": "primary",
+                    "timezone": "America/Bogota",
+                }
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Calendar provider must be Google Calendar or Microsoft Calendar" in str(
+        exc_info.value.detail
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        update_integration(
+            db,
+            company_id=company.id,
+            integration_id=integration.id,
+            payload=IntegrationUpdate(
+                credentials="",
+                config={
+                    "provider": "google_calendar",
+                    "calendar_id": "primary",
+                    "timezone": "America/Bogota",
+                },
+            ),
+        )
+    assert exc_info.value.status_code == 422
+    assert "Calendar credentials are required" in str(exc_info.value.detail)
+
+
 def test_calendar_integration_is_tenant_scoped(db):
     company, _ = bootstrap_company(db, "Acme")
     other_company, _ = bootstrap_company(db, "Beta")
@@ -3618,6 +3799,66 @@ def test_calendar_appointment_syncs_on_create_and_update(db, monkeypatch):
         )
     )
     assert len(synced_events) == 2
+
+
+def test_calendar_appointment_failed_create_keeps_internal_appointment_committed(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente Demo", phone="573000000000")
+    db.add(contact)
+    db.commit()
+
+    create_integration(
+        db,
+        company_id=company.id,
+        payload=IntegrationCreate(
+            type="calendar",
+            credentials="calendar-secret",
+            config={
+                "provider": "google_calendar",
+                "calendar_id": "primary",
+                "timezone": "America/Bogota",
+                "api_base_url": "https://www.googleapis.com/calendar/v3",
+                "create_event_path": "calendars/{calendar_id}/events",
+                "update_event_path": "calendars/{calendar_id}/events/{event_id}",
+                "response_event_id_path": "id",
+            },
+        ),
+    )
+
+    def failing_sync(*args, **kwargs):
+        raise RuntimeError("calendar down")
+
+    monkeypatch.setattr("app.appointments.service.sync_appointment_with_calendar", failing_sync)
+
+    appointment = create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=contact.id,
+            scheduled_at=datetime(2026, 1, 15, 10, 30, tzinfo=UTC),
+            duration_minutes=45,
+            notes="Primera cita",
+        ),
+    )
+
+    assert appointment.id is not None
+    assert appointment.calendar_sync_status == "failed"
+    assert appointment.calendar_sync_error is not None
+    assert "calendar down" in appointment.calendar_sync_error
+    assert appointment.calendar_sync_obsolete_at is None
+    assert appointment.external_calendar_event_id is None
+
+    failed_events = list(
+        db.scalars(
+            select(Event).where(
+                Event.company_id == company.id,
+                Event.event_type == "appointment.calendar_sync_failed",
+            )
+        )
+    )
+    assert len(failed_events) == 1
+    assert failed_events[0].payload["sync_status"] == "failed"
+    assert failed_events[0].payload["external_calendar_event_id"] is None
 
 
 def test_calendar_appointment_failed_resync_marks_appointment_obsolete(db, monkeypatch):

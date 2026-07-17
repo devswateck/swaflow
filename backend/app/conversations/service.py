@@ -199,6 +199,37 @@ def get_conversation(db: Session, *, company_id: UUID, conversation_id: UUID) ->
     return conversation
 
 
+def _lock_company_scope(db: Session, *, company_id: UUID) -> Company:
+    company = db.scalar(
+        select(Company)
+        .where(Company.id == company_id)
+        .with_for_update()
+    )
+    if company is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
+    db.refresh(company)
+    return company
+
+
+def _lock_conversation_scope(
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+) -> Conversation:
+    conversation = db.scalar(
+        select(Conversation)
+        .where(
+            Conversation.company_id == company_id,
+            Conversation.id == conversation_id,
+        )
+        .with_for_update()
+    )
+    if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversacion no encontrada")
+    return conversation
+
+
 def _build_assignment_payload(
     *,
     conversation: Conversation,
@@ -295,23 +326,14 @@ def auto_assign_single_additional_user_chat(
     company_id: UUID,
     conversation: Conversation,
 ) -> dict | None:
-    company = db.scalar(
-        select(Company)
-        .where(Company.id == company_id)
-        .with_for_update()
-    )
+    company = _lock_company_scope(db, company_id=company_id)
     if company is None or company.auto_assign_single_additional_user_chats is False:
         return None
-    locked_conversation = db.scalar(
-        select(Conversation)
-        .where(
-            Conversation.company_id == company_id,
-            Conversation.id == conversation.id,
-        )
-        .with_for_update()
+    locked_conversation = _lock_conversation_scope(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
     )
-    if locked_conversation is None:
-        return None
     if locked_conversation.assigned_user_id is not None:
         return None
     candidate_users = [
@@ -443,10 +465,14 @@ def get_conversation_appointment_intent(
             str(event.id),
         ),
     )
+    prepared_at = str(appointment_event.payload.get("prepared_at") or appointment_event.created_at.isoformat())
     return _build_conversation_appointment_intent_context(
         conversation=conversation,
         payload=appointment_event.payload,
-        prepared_at=appointment_event.created_at.isoformat(),
+        prepared_at=prepared_at,
+        snapshot_version=_conversation_appointment_intent_snapshot_version(
+            appointment_event, prepared_at=prepared_at
+        ),
     )
 
 
@@ -455,6 +481,7 @@ def _build_conversation_appointment_intent_context(
     conversation: Conversation,
     payload: dict,
     prepared_at: str,
+    snapshot_version: str,
 ) -> dict:
     def _string_or_none(value: object) -> str | None:
         return value if isinstance(value, str) else None
@@ -475,7 +502,12 @@ def _build_conversation_appointment_intent_context(
         "current_step": _string_or_none(payload.get("current_step")),
         "source": _string_or_none(payload.get("source")) or "inbox",
         "prepared_at": _string_or_none(payload.get("prepared_at")) or prepared_at,
+        "snapshot_version": snapshot_version,
     }
+
+
+def _conversation_appointment_intent_snapshot_version(event: Event, *, prepared_at: str) -> str:
+    return f"{prepared_at}|{event.id}"
 
 
 def _record_conversation_event(
@@ -485,8 +517,8 @@ def _record_conversation_event(
     conversation: Conversation,
     event_type: str,
     payload: dict,
-) -> None:
-    create_event(
+) -> Event:
+    return create_event(
         db,
         company_id=company_id,
         event_type=event_type,
@@ -582,16 +614,12 @@ def assign_conversation(
     assigned_user_id: UUID | None,
     actor_user: User | None = None,
 ) -> Conversation:
-    conversation = db.scalar(
-        select(Conversation)
-        .where(
-            Conversation.company_id == company_id,
-            Conversation.id == conversation_id,
-        )
-        .with_for_update()
+    _lock_company_scope(db, company_id=company_id)
+    conversation = _lock_conversation_scope(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
     )
-    if conversation is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversacion no encontrada")
     transition = _apply_conversation_assignment(
         db,
         company_id=company_id,
@@ -799,7 +827,7 @@ def prepare_conversation_appointment_intent(
         "prepared_at": prepared_at,
         "source": "inbox",
     }
-    _record_conversation_event(
+    appointment_event = _record_conversation_event(
         db,
         company_id=company_id,
         conversation=conversation,
@@ -830,6 +858,7 @@ def prepare_conversation_appointment_intent(
         conversation=conversation,
         payload=payload,
         prepared_at=prepared_at,
+        snapshot_version=_conversation_appointment_intent_snapshot_version(appointment_event, prepared_at=prepared_at),
     )
 
 

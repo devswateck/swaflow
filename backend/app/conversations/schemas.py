@@ -84,3 +84,4 @@ class ConversationAppointmentIntentRead(ORMModel):
     preferred_period: str | None = None
     source: str
     prepared_at: datetime
+    snapshot_version: str
