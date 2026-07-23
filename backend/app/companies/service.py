@@ -1,4 +1,6 @@
 import logging
+import secrets
+from pathlib import Path
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -11,12 +13,22 @@ from app.companies.models import Company
 from app.companies.schemas import CompanyCreate, CompanyUpdate
 from app.audit.service import record_audit_best_effort, record_superadmin_access
 from app.core.security import hash_password
+from app.core.storage import BRANDING_STORAGE_ROOT, build_public_media_url, media_relative_path_from_url
 from app.funnels.service import ensure_welcome_funnel
 from app.users.permissions import can_access_module, normalize_module_permissions
 from app.users.models import User
 
 COMPANY_BUSINESS_MODES = {"products", "appointments", "mixed"}
 TENANT_ADDITIONAL_USER_ROLES = {"agent", "viewer"}
+COMPANY_BRANDING_ASSET_FIELDS = {"logo": "logo_url", "banner": "banner_url", "profile": "profile_url"}
+BRANDING_ALLOWED_CONTENT_TYPES = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+}
 logger = logging.getLogger(__name__)
 
 
@@ -39,6 +51,44 @@ def _validate_timezone(value: str) -> None:
         ZoneInfo(value)
     except ZoneInfoNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid timezone") from exc
+
+
+def _validate_branding_asset(asset: str) -> str:
+    if asset not in COMPANY_BRANDING_ASSET_FIELDS:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid branding asset")
+    return COMPANY_BRANDING_ASSET_FIELDS[asset]
+
+
+def _resolve_branding_suffix(filename: str | None, content_type: str | None) -> str:
+    if content_type in BRANDING_ALLOWED_CONTENT_TYPES:
+        return BRANDING_ALLOWED_CONTENT_TYPES[content_type]
+
+    if filename:
+        suffix = Path(filename).suffix.lower()
+        if suffix in BRANDING_ALLOWED_CONTENT_TYPES.values():
+            return suffix
+
+    raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Unsupported image type")
+
+
+def _remove_previous_branding_file(company: Company, field_name: str) -> None:
+    previous_relative_path = media_relative_path_from_url(getattr(company, field_name))
+    if previous_relative_path is None:
+        return
+
+    previous_file = BRANDING_STORAGE_ROOT.parent / previous_relative_path
+    if previous_file.exists():
+        previous_file.unlink()
+
+    parent = previous_file.parent
+    while parent != BRANDING_STORAGE_ROOT.parent and parent.exists():
+        try:
+            next(parent.iterdir())
+        except StopIteration:
+            parent.rmdir()
+            parent = parent.parent
+            continue
+        break
 
 
 def list_companies(
@@ -234,5 +284,54 @@ def update_company(
         entity_id=company.id,
         summary="Company profile updated",
         metadata=payload.model_dump(exclude_unset=True),
+    )
+    return company
+
+
+def update_company_branding_asset(
+    db: Session,
+    *,
+    company_id: UUID,
+    current_company_id: UUID,
+    asset: str,
+    filename: str | None,
+    content_type: str | None,
+    content: bytes,
+    is_superuser: bool = False,
+    actor_user: User | None = None,
+) -> Company:
+    company = get_company_for_user(
+        db,
+        company_id=company_id,
+        current_company_id=current_company_id,
+        is_superuser=is_superuser,
+        actor_user=actor_user,
+    )
+    field_name = _validate_branding_asset(asset)
+    if not content:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty image upload")
+    suffix = _resolve_branding_suffix(filename, content_type)
+    target_dir = BRANDING_STORAGE_ROOT / str(company.id) / asset
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_file = target_dir / f"{secrets.token_hex(16)}{suffix}"
+    _remove_previous_branding_file(company, field_name)
+    target_file.write_bytes(content)
+    setattr(company, field_name, build_public_media_url(target_file.relative_to(BRANDING_STORAGE_ROOT.parent).as_posix()))
+    db.commit()
+    db.refresh(company)
+    _audit_company_event(
+        db,
+        company_id=company.id,
+        actor_user=actor_user,
+        action="company.branding_asset.updated",
+        entity_type="company",
+        entity_id=company.id,
+        summary="Company branding asset updated",
+        metadata={
+            "asset": asset,
+            "filename": filename,
+            "content_type": content_type,
+            "url": getattr(company, field_name),
+        },
     )
     return company

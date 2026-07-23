@@ -8,6 +8,7 @@ La configuración actual usa MySQL por defecto mediante `mysql+pymysql`.
 
 ```bash
 docker compose up -d
+export SWAFLOW_ENV_FILE=.env.development
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -16,7 +17,7 @@ uvicorn app.main:app --reload
 ```
 
 La API queda disponible en `http://localhost:8000`.
-Configura `backend/.env` con los valores de tu entorno antes de arrancar.
+Usa `backend/.env.development` para desarrollo local. El archivo `backend/.env` queda reservado para otro perfil si lo necesitas.
 
 ## Primer tenant
 
@@ -35,6 +36,8 @@ DATABASE_URL=mysql+pymysql://usuario:password@host:3306/nombre_db?charset=utf8mb
 ```
 
 Luego ejecuta `alembic upgrade head` desde `backend/`.
+
+Si quieres apuntar a otro archivo de entorno, exporta `SWAFLOW_ENV_FILE` antes de arrancar Alembic o Uvicorn.
 
 En producción real, el backend corre en Docker en el VPS de la app y usa la
 base MySQL externa de StackCP directamente.

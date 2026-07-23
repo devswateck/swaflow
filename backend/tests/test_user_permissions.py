@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from pathlib import Path
+from urllib.parse import urlparse
 from uuid import UUID
 
 import pytest
@@ -10,7 +12,9 @@ from sqlalchemy import func, select
 
 from app.auth.service import build_current_user_payload, build_token
 from app.audit.service import list_audit_logs
+from app.companies.models import Company
 from app.companies.service import create_company_with_owner, update_company
+from app.companies.service import update_company_branding_asset
 from app.companies.schemas import CompanyCreate, CompanyUpdate
 from app.contacts.models import Contact
 from app.core.database import get_db
@@ -97,6 +101,43 @@ def test_current_user_payload_includes_company_currency(db, client):
 
     assert response.status_code == 200
     assert response.json()["company_currency"] == "USD"
+
+
+def test_company_branding_upload_persists_file_and_url(db, client):
+    company, owner = bootstrap_company(db, "Acme")
+
+    updated = update_company_branding_asset(
+        db,
+        company_id=company.id,
+        current_company_id=company.id,
+        asset="logo",
+        filename="logo.png",
+        content_type="image/png",
+        content=b"fake-png-content",
+        actor_user=owner,
+    )
+
+    assert updated.logo_url is not None
+    assert updated.logo_url.startswith("http://localhost:8000/media/company-branding/")
+
+    stored_company = db.scalar(select(Company).where(Company.id == company.id))
+    assert stored_company is not None
+    assert stored_company.logo_url == updated.logo_url
+
+    media_path = Path(urlparse(updated.logo_url).path.lstrip("/"))
+    file_path = Path(__file__).resolve().parents[1] / "storage" / media_path.relative_to("media")
+    assert file_path.exists()
+    media_response = client.get(urlparse(updated.logo_url).path)
+    assert media_response.status_code == 200
+    assert media_response.content == b"fake-png-content"
+    file_path.unlink()
+    for parent in file_path.parents:
+        if parent == Path(__file__).resolve().parents[1] / "storage":
+            break
+        try:
+            parent.rmdir()
+        except OSError:
+            break
 
 
 def test_module_permissions_can_enable_restricted_access_without_changing_role(db):

@@ -18,3 +18,5 @@ dist/
 backend/.env
 frontend/.env
 
+# Local uploaded assets
+backend/storage/

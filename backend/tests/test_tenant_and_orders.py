@@ -395,6 +395,37 @@ def test_existing_open_conversation_repairs_inactive_welcome_funnel_on_outer_com
     assert reloaded.status == "active"
 
 
+def test_stale_open_conversation_is_closed_and_recreated_after_24_hours(db):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    stale_conversation = Conversation(company_id=company.id, contact_id=contact.id, channel="whatsapp")
+    stale_conversation.last_message_at = datetime.now(UTC) - timedelta(hours=25)
+    db.add(stale_conversation)
+    db.commit()
+
+    recreated = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+
+    assert recreated.id != stale_conversation.id
+    assert recreated.status == "open"
+
+    closed_stale = db.scalar(
+        select(Conversation).where(
+            Conversation.company_id == company.id,
+            Conversation.id == stale_conversation.id,
+        )
+    )
+    assert closed_stale is not None
+    assert closed_stale.status == "closed"
+
+
 def test_inbox_conversations_can_filter_by_funnel(db):
     company, _ = bootstrap_company(db, "Acme")
     first_contact = Contact(company_id=company.id, name="Cliente 1", phone="+573001112233")

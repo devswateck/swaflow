@@ -46,3 +46,6 @@ class CompanyBootstrapRead(ORMModel):
 
 class CompanyIdPath(BaseModel):
     id: UUID
+
+
+CompanyBrandingAsset = str

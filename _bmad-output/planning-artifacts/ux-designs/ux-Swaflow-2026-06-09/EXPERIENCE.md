@@ -75,14 +75,14 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 | Componente | Uso | Reglas de comportamiento |
 |---|---|---|
 | Sidebar agrupado | Shell global | Agrupa nav items. El activo tiene acento izquierdo persistente. La pagina actual se anuncia en el header. |
-| Page header | Shell global | Muestra titulo, subtitulo, busqueda global, tema, notificaciones y cuenta. No sobrecargar con acciones especificas de pagina; esas viven dentro de la superficie. |
+| Page header | Shell global | Muestra titulo, subtitulo, busqueda contextual, tema, notificaciones accionables y cuenta. No sobrecargar con acciones especificas de pagina; esas viven dentro de la superficie. |
 | KPI card | Dashboard | Muestra label, valor principal, delta de periodo y mini trend. Click navega al modulo fuente cuando el dato lo permite. |
 | Chart panel | Dashboard | Usa Recharts para line charts, bar charts, areas, ejes, leyendas y tooltips. Debe tener labels reales, rango de fecha y estados vacio/cargando. |
 | Activity list | Dashboard | Muestra conversaciones, ordenes, citas o eventos recientes. Click navega a la fuente cuando exista id. |
-| Conversation list item | Inbox | Click abre chat. Muestra contacto, telefono, ultimo mensaje, no leidos, responsable, estado IA/humano, funnel/paso y tiempo. El seleccionado persiste visualmente. |
-| Chat thread | Inbox | Mensajes muestran tipo de emisor, timestamp y metadata de entrega/fuente cuando exista. Auto-scroll solo si el operador ya estaba cerca del fondo. |
-| Message composer | Inbox | Envio por boton. El comportamiento de `Enter` debe decidirse explicitamente despues. Deshabilitar al enviar. Mantener draft si falla. |
-| Handoff actions | Inbox | Botones de "Retomar humano" y "Asignar a IA" visibles en el header del chat o rail de acciones. Deben reflejar el estado actual de la conversacion y no depender de hover. |
+| Conversation list item | Inbox | Click abre chat. Muestra contacto, telefono, ultimo mensaje, no leidos, tags compactos de responsable, IA y funnel/paso, y tiempo. El seleccionado persiste visualmente. |
+| Chat thread | Inbox | Mensajes muestran tipo de emisor, timestamp y metadata de entrega/fuente cuando exista. El hilo ocupa la superficie principal y el composer permanece visible al final. Auto-scroll solo si el operador ya estaba cerca del fondo. |
+| Message composer | Inbox | Envio por boton. El composer es pequeno, fijo al pie del hilo, deshabilita envio al procesar y preserva draft si falla. |
+| Handoff actions | Inbox | Botones de "Tomar humano" y "Pasar a IA" visibles en la cabecera del chat o rail de acciones. Deben reflejar el estado actual de la conversacion y no depender de hover. |
 | Status badge | Todos | Mapea codigos internos a labels en espanol. El tono sigue estado semantico, no color arbitrario por modulo. |
 | Data table | Productos, Ordenes, Citas | Escaneable: columnas estables, badges compactos, acciones de fila al final, estado vacio bajo header. |
 | Notice / Toast | Global | Error usa `role="alert"`, success usa `role="status"`. Mensajes cortos y accionables. |
@@ -100,8 +100,8 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 | Conversacion no seleccionada | Inbox | Prompt en detalle: "Selecciona una conversacion". En desktop, rail contextual oculto hasta seleccionar. |
 | Enviando mensaje | Inbox | Composer deshabilitado, texto inline "Enviando". Draft visible hasta exito. |
 | Envio fallido | Inbox | Error inline junto al composer: "No se pudo enviar. Reintentar." Draft preservado. |
-| IA activa | Rail de Inbox | Mostrar estado, ultima decision de handoff si existe y accion "Pasar a humano". |
-| Handoff humano | Rail de Inbox | Mostrar responsable y accion para reactivar IA donde aplique. |
+| IA activa | Rail de Inbox | Mostrar estado, ultima decision de handoff si existe y accion "Tomar humano". |
+| Handoff humano | Rail de Inbox | Mostrar responsable y accion para reactivar IA donde aplique con el CTA "Pasar a IA". |
 | Actualizando funnel | Rail de Inbox | Deshabilitar selectores afectados y mostrar "Actualizando funnel...". |
 | Pago pendiente | Inbox, Ordenes | Mostrar link, expiracion, copiar/abrir y warning cuando se acerque vencimiento. Nunca insinuar pagado sin backend. |
 | Permiso denegado | Cualquier modulo | Ocultar acciones no autorizadas cuando sea posible. Si hay acceso directo, mostrar estado bloqueado conciso. |
@@ -110,7 +110,7 @@ Patrones de comportamiento. La visual vive en `DESIGN.md.Components`.
 ## Primitivos de interacción
 
 - Click/tap para navegar y actuar.
-- Busqueda global permanece en el header; una futura command palette puede reutilizarla.
+- Busqueda contextual permanece en el header y filtra el modulo activo cuando aplica; una futura command palette puede reutilizarla.
 - `Esc` cierra dialogos, menus y limpia busqueda transitoria cuando este enfocada.
 - Tab order va de sidebar a header y contenido de pagina.
 - Hover puede revelar acciones secundarias en desktop, pero toda accion debe existir tambien en touch.

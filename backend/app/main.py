@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.ai.routes import router as ai_router
 from app.audit.routes import router as audit_router
@@ -21,6 +22,7 @@ from app.orders.routes import router as orders_router
 from app.payments.routes import router as payments_router
 from app.products.routes import router as products_router
 from app.realtime import realtime_manager, router as realtime_router
+from app.core.storage import STORAGE_ROOT, ensure_storage_root
 from app.users.routes import router as users_router
 from app.whatsapp.routes import router as whatsapp_router
 
@@ -42,6 +44,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+ensure_storage_root()
+app.mount("/media", StaticFiles(directory=STORAGE_ROOT), name="media")
 
 app.add_middleware(
     CORSMiddleware,

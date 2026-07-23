@@ -17,6 +17,7 @@ Backend:
 ```bash
 cd backend
 docker compose up -d
+export SWAFLOW_ENV_FILE=.env.development
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
@@ -24,7 +25,7 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Configura `backend/.env` con los valores de tu entorno antes de arrancar.
+Configura `backend/.env.development` para desarrollo local. El backend carga ese archivo por defecto si existe; si quieres usar otro, define `SWAFLOW_ENV_FILE`.
 
 Frontend:
 

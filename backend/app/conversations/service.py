@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import HTTPException, status
@@ -26,6 +26,50 @@ from app.users.permissions import can_access_module
 from app.users.models import User
 
 PRIVILEGED_ASSIGNMENT_ROLES = {"owner", "admin", "superadmin"}
+CONVERSATION_INACTIVITY_CLOSE_HOURS = 24
+
+
+def _conversation_is_expired(conversation: Conversation) -> bool:
+    if conversation.status == "closed" or conversation.last_message_at is None:
+        return False
+    last_message_at = conversation.last_message_at
+    if last_message_at.tzinfo is None:
+        last_message_at = last_message_at.replace(tzinfo=UTC)
+    else:
+        last_message_at = last_message_at.astimezone(UTC)
+    return datetime.now(UTC) - last_message_at >= timedelta(
+        hours=CONVERSATION_INACTIVITY_CLOSE_HOURS
+    )
+
+
+def _close_conversation_for_inactivity(
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation: Conversation,
+) -> bool:
+    if not _conversation_is_expired(conversation):
+        return False
+    conversation.status = "closed"
+    _record_conversation_event(
+        db,
+        company_id=company_id,
+        conversation=conversation,
+        event_type="conversation.closed",
+        payload={"status": conversation.status, "reason": "inactivity"},
+    )
+    db.commit()
+    db.refresh(conversation)
+    realtime_manager.publish(
+        company_id,
+        "conversation.closed",
+        {
+            "conversation_id": str(conversation.id),
+            "status": conversation.status,
+            "reason": "inactivity",
+        },
+    )
+    return True
 
 
 def list_conversations(
@@ -45,7 +89,7 @@ def list_conversations(
         stmt = stmt.where(Conversation.funnel_id == funnel_id)
     if funnel_step_id is not None:
         stmt = stmt.where(Conversation.funnel_step_id == funnel_step_id)
-    return list(
+    conversations = list(
         db.scalars(
             stmt.order_by(
                 Conversation.last_message_at.is_(None).asc(),
@@ -56,6 +100,13 @@ def list_conversations(
             .offset(offset)
         )
     )
+    filtered_conversations: list[Conversation] = []
+    for conversation in conversations:
+        was_closed = _close_conversation_for_inactivity(db, company_id=company_id, conversation=conversation)
+        if was_closed and status_filter is not None and status_filter != "closed":
+            continue
+        filtered_conversations.append(conversation)
+    return filtered_conversations
 
 
 def conversation_to_inbox_item(db: Session, *, conversation: Conversation) -> dict:
@@ -196,6 +247,7 @@ def get_conversation(db: Session, *, company_id: UUID, conversation_id: UUID) ->
     )
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversación no encontrada")
+    _close_conversation_for_inactivity(db, company_id=company_id, conversation=conversation)
     return conversation
 
 
@@ -555,9 +607,12 @@ def get_or_create_open_conversation(
         )
     )
     if conversation is not None:
-        if conversation.funnel_id is None:
-            _apply_default_funnel(db, company_id=company_id, conversation=conversation)
-        return conversation
+        if _close_conversation_for_inactivity(db, company_id=company_id, conversation=conversation):
+            conversation = None
+        else:
+            if conversation.funnel_id is None:
+                _apply_default_funnel(db, company_id=company_id, conversation=conversation)
+            return conversation
     conversation = Conversation(
         company_id=company_id,
         contact_id=contact_id,

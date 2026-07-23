@@ -1,7 +1,18 @@
+import os
+from pathlib import Path
 from functools import lru_cache
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _resolve_env_file() -> str:
+    override = os.getenv("SWAFLOW_ENV_FILE")
+    if override:
+        return override
+    if Path(".env.development").exists():
+        return ".env.development"
+    return ".env"
 
 
 class Settings(BaseSettings):
@@ -21,7 +32,7 @@ class Settings(BaseSettings):
     n8n_webhook_url: str | None = None
     cors_allow_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=_resolve_env_file(), env_file_encoding="utf-8", extra="ignore")
 
 
 @lru_cache

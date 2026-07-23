@@ -1,6 +1,7 @@
 from uuid import UUID
+from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.auth.service import is_superadmin, require_module_access, require_roles
@@ -61,6 +62,29 @@ def update_company(
         company_id=company_id,
         current_company_id=current_user.company_id,
         payload=payload,
+        is_superuser=is_superadmin(current_user),
+        actor_user=current_user,
+    )
+
+
+@router.post("/{company_id}/branding/{asset}", response_model=CompanyRead)
+async def upload_company_branding_asset(
+    company_id: UUID,
+    asset: Literal["logo", "banner", "profile"],
+    file: UploadFile = File(...),
+    current_user: User = Depends(require_module_access("settings")),
+    db: Session = Depends(get_db),
+) -> object:
+    service.require_company_profile_access(current_user)
+    content = await file.read()
+    return service.update_company_branding_asset(
+        db,
+        company_id=company_id,
+        current_company_id=current_user.company_id,
+        asset=asset,
+        filename=file.filename,
+        content_type=file.content_type,
+        content=content,
         is_superuser=is_superadmin(current_user),
         actor_user=current_user,
     )

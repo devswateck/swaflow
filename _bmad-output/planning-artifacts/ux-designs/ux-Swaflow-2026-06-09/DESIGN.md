@@ -211,7 +211,7 @@ Usar ritmo basado en 8px con densidad SaaS compacta. Tarjetas y paneles deben se
 - Shell desktop: sidebar agrupado fijo de `{spacing.sidebar}`, header superior y gutter `{spacing.gutter-desktop}`.
 - Shell desktop: sidebar agrupado fijo/sticky de `{spacing.sidebar}`; el panel izquierdo permanece visible mientras el contenido principal scrolla.
 - Dashboard: grid responsivo de 12 columnas. KPI primero, graficas segundo, listas operativas debajo o al costado.
-- Inbox desktop: tres zonas - lista de conversaciones, hilo de mensajes y rail de contexto/acciones.
+- Inbox desktop: tres zonas - lista de conversaciones, hilo de mensajes y rail de contexto/acciones. La cabecera del hilo concentra tags compactos y acciones primarias; el hilo sigue siendo la superficie dominante.
 - Tablas: columnas estables, headers claros, scroll horizontal solo cuando sea inevitable.
 
 No poner cards dentro de cards. Las secciones de pagina deben ser areas de contenido; las cards son para items repetidos, paneles y herramientas enfocadas.
@@ -245,9 +245,9 @@ El logo usa circulo, pero la aplicacion no debe convertir circulos en patron gen
 - **Primary button** - Usar `{colors.action}` en light mode y `{colors.action-dark}` en dark mode. Reservar neon para foco, no para cada boton.
 - **Metric card** - Titulo KPI, valor, delta de periodo y mini trend. El acento es regla fina o linea pequena, no fill neon.
 - **Chart panel** - Card clara/oscura con grid sutil, leyenda clara, una serie magenta primaria, una azul secundaria y amber solo para warning/comparacion.
-- **Conversation list item** - Contacto, telefono, ultimo mensaje, no leidos, responsable, estado y funnel/paso. El item activo tiene acento izquierdo, no relleno verde.
-- **Message bubble** - Cliente: neutro muted. Asesor humano: violeta action. IA: brand night con acento magenta o label bot. Incluir timestamp y tipo de emisor en caption.
-- **Conversation context rail** - Panel derecho estable para estado IA, responsable, funnel/paso, orden/pago, cita, datos del cliente y acciones rapidas.
+- **Conversation list item** - Contacto, telefono, ultimo mensaje, no leidos, tags compactos de responsable, IA y funnel/paso. El item activo tiene acento izquierdo, no relleno verde.
+- **Message bubble** - Cliente: neutro muted. Asesor humano: violeta action. IA: brand night con acento magenta o label bot. Incluir timestamp y tipo de emisor en caption. El composer debe quedar visible al pie del hilo.
+- **Conversation context rail** - Panel derecho estable para orden/pago, cita, datos del cliente y acciones rapidas. Las acciones de handoff y clasificacion principales viven en la cabecera del chat como controles compactos.
 - **Status badge** - Color semantico por estado. Confirmado usa cyan/azul, espera usa amber, error usa rose. Mantener copy en espanol.
 - **Data table** - Header en superficie muted, filas con hover, badges compactos y accion principal al final de fila.
 

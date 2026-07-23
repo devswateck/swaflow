@@ -64,7 +64,7 @@ Antes de tocar codigo, revisar y aprobar `../architecture/swaflow-frontend-archi
    - Sidebar desktop oscuro Swa Tech.
    - Grupos nav: Operacion, Comercio, Automatizacion, Administracion.
    - Item activo con acento izquierdo magenta.
-   - Header compacto con busqueda, tema, notificaciones y cuenta.
+   - Header compacto con busqueda contextual, tema, notificaciones accionables y cuenta.
    - Reemplazar el label actual "Swatek Flow AI" por `SWAFLOW`.
    - Hacer dark mode el default cuando no exista preferencia guardada en localStorage.
    - Usar el concepto de logo como referencia visual, pero implementar preferiblemente SVG/vector cuando exista arte final.
@@ -82,11 +82,11 @@ Antes de tocar codigo, revisar y aprobar `../architecture/swaflow-frontend-archi
 
 6. Rediseniar Inbox:
    - Layout desktop: lista de conversaciones, hilo de chat, rail de contexto.
-   - Filas de lista muestran contacto, telefono, no leidos, estado, responsable, funnel/paso, ultimo mensaje y tiempo si existe.
-   - Header de chat muestra contacto, telefono, status, responsable y estado IA/humano.
+   - Filas de lista muestran contacto, telefono, no leidos, estado, tags compactos de responsable, IA y funnel/paso, ultimo mensaje y tiempo si existe.
+   - Header de chat muestra contacto, telefono, status y tags compactos de responsable, IA y clasificacion.
    - Burbujas distinguen cliente, asesor humano e IA/system cuando el dato lo permita.
-   - Mover "Pasar a humano", "Agendar cita", selectores de funnel y paso al rail.
-   - Composer preserva draft cuando falla y muestra error inline.
+   - Mover "Tomar humano", "Pasar a IA", "Agendar cita", selectores de funnel y paso a la barra superior compacta.
+   - Composer permanece visible al pie del hilo, preserva draft cuando falla y muestra error inline.
    - Estados vacio/no seleccionado siguen `EXPERIENCE.md`.
 
 7. Mantener modulos funcionales:
@@ -105,7 +105,9 @@ Antes de tocar codigo, revisar y aprobar `../architecture/swaflow-frontend-archi
 - No quedan acentos verdes/teal visibles en shell, nav, botones, estados activos, burbujas, progress bars o foco.
 - Dashboard tiene paneles tipo grafica con datos reales o estados vacios honestos, no placeholders decorativos.
 - Inbox desktop tiene rail de contexto/acciones estable.
+- Inbox desktop mantiene el hilo como superficie dominante y los tags compactos en la cabecera.
 - Navegacion esta agrupada y es mas escaneable.
+- La busqueda contextual y la campana de notificaciones tienen proposito claro.
 - Dark mode sigue funcionando y se siente intencional.
 - Dark mode es el tema inicial por defecto.
 - Texto cabe en botones, nav items, cards y filas de chat en desktop.
