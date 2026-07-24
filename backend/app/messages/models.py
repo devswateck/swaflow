@@ -19,4 +19,7 @@ class Message(Base, IdMixin, TenantMixin, CreatedAtMixin):
     message_type: Mapped[str] = mapped_column(String(50), nullable=False, default="text")
     metadata_json: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, default=dict)
 
-    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+    conversation: Mapped["Conversation"] = relationship(
+        back_populates="messages",
+        foreign_keys=[conversation_id],
+    )

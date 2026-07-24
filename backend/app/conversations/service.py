@@ -42,6 +42,30 @@ def _conversation_is_expired(conversation: Conversation) -> bool:
     )
 
 
+def _database_now(db: Session) -> datetime:
+    now = db.scalar(select(func.now()))
+    return now if isinstance(now, datetime) else datetime.now(UTC)
+
+
+def _latest_conversation_message_id(db: Session, *, company_id: UUID, conversation_id: UUID) -> UUID | None:
+    return db.scalar(
+        select(Message.id)
+        .where(
+            Message.company_id == company_id,
+            Message.conversation_id == conversation_id,
+        )
+        .order_by(Message.created_at.desc(), Message.id.desc())
+    )
+
+
+def _normalize_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _close_conversation_for_inactivity(
     db: Session,
     *,
@@ -50,6 +74,12 @@ def _close_conversation_for_inactivity(
 ) -> bool:
     if not _conversation_is_expired(conversation):
         return False
+    conversation.memory_reset_after_message_id = _latest_conversation_message_id(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+    )
+    conversation.memory_reset_at = _database_now(db)
     conversation.status = "closed"
     _record_conversation_event(
         db,
@@ -159,6 +189,7 @@ def conversation_to_inbox_item(db: Session, *, conversation: Conversation) -> di
         "funnel_id": conversation.funnel_id,
         "funnel_step_id": conversation.funnel_step_id,
         "current_step": conversation.current_step,
+        "memory_reset_at": conversation.memory_reset_at,
         "funnel_name": funnel_name,
         "funnel_step_name": funnel_step_name,
         "last_message_at": conversation.last_message_at,
@@ -467,15 +498,57 @@ def set_conversation_ai_enabled(
 
 
 def get_conversation_messages(
-    db: Session, *, company_id: UUID, conversation_id: UUID
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+    memory_reset_at: datetime | None = None,
 ) -> list[Message]:
-    return list(
-        db.scalars(
-            select(Message)
-            .where(Message.company_id == company_id, Message.conversation_id == conversation_id)
-            .order_by(Message.created_at.asc())
+    stmt = select(Message).where(Message.company_id == company_id, Message.conversation_id == conversation_id)
+    messages = list(db.scalars(stmt.order_by(Message.created_at.asc(), Message.id.asc())))
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.company_id == company_id,
+            Conversation.id == conversation_id,
         )
     )
+    if conversation is not None and conversation.memory_reset_after_message_id is not None:
+        return _messages_after_memory_reset(
+            messages,
+            memory_reset_after_message_id=conversation.memory_reset_after_message_id,
+        )
+    cutoff = _normalize_utc(memory_reset_at)
+    if cutoff is None:
+        return messages
+    return _messages_after_memory_reset(messages, memory_reset_at=cutoff)
+
+
+def _messages_after_memory_reset(
+    messages: list[Message],
+    *,
+    memory_reset_at: datetime | None = None,
+    memory_reset_after_message_id: UUID | None = None,
+) -> list[Message]:
+    if memory_reset_after_message_id is not None:
+        filtered_messages: list[Message] = []
+        seen_marker = False
+        for message in messages:
+            if seen_marker:
+                filtered_messages.append(message)
+                continue
+            if message.id == memory_reset_after_message_id:
+                seen_marker = True
+        if seen_marker:
+            return filtered_messages
+    cutoff = _normalize_utc(memory_reset_at)
+    if cutoff is None:
+        return messages
+    cutoff = cutoff - timedelta(seconds=1)
+    return [
+        message
+        for message in messages
+        if (created_at := _normalize_utc(message.created_at)) is not None and created_at >= cutoff
+    ]
 
 
 def get_conversation_events(
@@ -493,8 +566,11 @@ def get_conversation_appointment_intent(
     *,
     company_id: UUID,
     conversation_id: UUID,
+    memory_reset_at: datetime | None = None,
+    conversation: Conversation | None = None,
 ) -> dict:
-    conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
+    if conversation is None:
+        conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
     events = [
         event
         for event in list_conversation_events(
@@ -504,6 +580,14 @@ def get_conversation_appointment_intent(
         )
         if event.event_type == "conversation.appointment_intent_prepared"
     ]
+    cutoff = _normalize_utc(memory_reset_at)
+    if cutoff is not None:
+        cutoff = cutoff - timedelta(seconds=1)
+        events = [
+            event
+            for event in events
+            if (created_at := _normalize_utc(event.created_at)) is not None and created_at >= cutoff
+        ]
     if not events:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -591,6 +675,17 @@ def _apply_default_funnel(
         conversation.current_step = default_step.code if default_step else "bienvenida"
 
 
+def _reset_conversation_session(conversation: Conversation) -> None:
+    conversation.status = "open"
+    conversation.assigned_user_id = None
+    conversation.funnel_id = None
+    conversation.funnel_step_id = None
+    conversation.current_step = None
+    if conversation.memory_reset_at is None:
+        conversation.memory_reset_at = datetime.now(UTC)
+    conversation.unread_count = 0
+
+
 def get_or_create_open_conversation(
     db: Session,
     *,
@@ -613,6 +708,17 @@ def get_or_create_open_conversation(
             if conversation.funnel_id is None:
                 _apply_default_funnel(db, company_id=company_id, conversation=conversation)
             return conversation
+    latest_conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.company_id == company_id,
+            Conversation.contact_id == contact_id,
+            Conversation.channel == channel,
+        ).order_by(Conversation.created_at.desc())
+    )
+    if latest_conversation is not None and latest_conversation.status == "closed":
+        _reset_conversation_session(latest_conversation)
+        _apply_default_funnel(db, company_id=company_id, conversation=latest_conversation)
+        return latest_conversation
     conversation = Conversation(
         company_id=company_id,
         contact_id=contact_id,
@@ -919,6 +1025,12 @@ def prepare_conversation_appointment_intent(
 
 def close_conversation(db: Session, *, company_id: UUID, conversation_id: UUID) -> Conversation:
     conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
+    conversation.memory_reset_after_message_id = _latest_conversation_message_id(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+    )
+    conversation.memory_reset_at = _database_now(db)
     conversation.status = "closed"
     _record_conversation_event(
         db,

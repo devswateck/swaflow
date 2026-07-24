@@ -38,7 +38,14 @@ class Conversation(Base, IdMixin, TenantMixin, TimestampMixin):
         Uuid(as_uuid=True), ForeignKey("sales_funnel_steps.id"), index=True
     )
     current_step: Mapped[str | None] = mapped_column(String(100))
+    memory_reset_after_message_id: Mapped[object | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("messages.id")
+    )
+    memory_reset_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     unread_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
-    messages: Mapped[list["Message"]] = relationship(back_populates="conversation")
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="conversation",
+        foreign_keys="Message.conversation_id",
+    )

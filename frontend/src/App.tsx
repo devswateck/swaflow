@@ -488,6 +488,7 @@ type ApiConversation = {
   funnel_name: string | null;
   funnel_step_name: string | null;
   current_step: string | null;
+  memory_reset_at: string | null;
   available_product_count: number;
 };
 
@@ -759,6 +760,7 @@ type Conversation = {
   funnelName: string | null;
   funnelStepName: string | null;
   currentStep: string | null;
+  memoryResetAt: string | null;
   availableProductCount: number;
 };
 
@@ -1923,6 +1925,7 @@ function mapApiConversation(conversation: ApiConversation): Conversation {
     funnelName: conversation.funnel_name,
     funnelStepName: conversation.funnel_step_name,
     currentStep: conversation.current_step,
+    memoryResetAt: conversation.memory_reset_at,
     availableProductCount: conversation.available_product_count ?? 0,
   };
 }
@@ -1949,6 +1952,7 @@ function buildAppointmentDraftFromContext(
     funnelName: context.funnel_name,
     funnelStepName: context.funnel_step_name,
     currentStep: context.current_step,
+    memoryResetAt: null,
     availableProductCount: 0,
   };
   return {
@@ -1986,6 +1990,7 @@ function buildManualAppointmentDraft(currentUser: CurrentUser, tenantUsers: Tena
     funnelName: null,
     funnelStepName: null,
     currentStep: null,
+    memoryResetAt: null,
     availableProductCount: 0,
   };
   return {
@@ -2033,10 +2038,19 @@ function mapApiMessage(message: ApiMessage): InboxMessage {
   };
 }
 
-function getLatestAppointmentIntentSnapshotMeta(events: ApiEvent[] | null | undefined) {
-  const candidates = (events ?? []).filter(
-    (event) => event.event_type === "conversation.appointment_intent_prepared",
-  );
+function getLatestAppointmentIntentSnapshotMeta(
+  events: ApiEvent[] | null | undefined,
+  memoryResetAt: string | null | undefined = null,
+) {
+  const candidates = (events ?? []).filter((event) => {
+    if (event.event_type !== "conversation.appointment_intent_prepared") {
+      return false;
+    }
+    if (!memoryResetAt) {
+      return true;
+    }
+    return event.created_at >= memoryResetAt;
+  });
   if (!candidates.length) {
     return null;
   }
@@ -2845,25 +2859,26 @@ function App() {
         return;
       }
       if (markRead) {
-        try {
-          await api<unknown>(`/conversations/${conversationId}/read`, {
-            method: "POST",
-            signal,
+        void api<unknown>(`/conversations/${conversationId}/read`, {
+          method: "POST",
+          signal,
+        })
+          .then(() => {
+            if (signal.aborted || selectedConversationIdRef.current !== conversationId) {
+              return;
+            }
+            setConversations((current) =>
+              current.map((conversation) =>
+                conversation.id === conversationId
+                  ? { ...conversation, unreadCount: 0 }
+                  : conversation,
+              ),
+            );
+            void refreshDashboardSnapshot();
+          })
+          .catch(() => {
+            // Best effort: if marking as read fails, keep the existing unread count.
           });
-          if (signal.aborted || selectedConversationIdRef.current !== conversationId) {
-            return;
-          }
-          setConversations((current) =>
-            current.map((conversation) =>
-              conversation.id === conversationId
-                ? { ...conversation, unreadCount: 0 }
-                : conversation,
-            ),
-          );
-          void refreshDashboardSnapshot();
-        } catch {
-          // Best effort: if marking as read fails, keep the existing unread count.
-        }
       }
       if (signal.aborted || conversationDetailRequestIdRef.current !== requestId) {
         return;
@@ -2882,7 +2897,10 @@ function App() {
         ...mapApiConversation(detail),
         unreadCount: detail.unread_count,
       };
-      const latestAppointmentIntent = getLatestAppointmentIntentSnapshotMeta(detail.events);
+      const latestAppointmentIntent = getLatestAppointmentIntentSnapshotMeta(
+        detail.events,
+        detail.memory_reset_at ?? mappedDetail.memoryResetAt,
+      );
       setSelectedConversationAppointmentIntentPreparedAt(latestAppointmentIntent?.preparedAt ?? null);
       setSelectedConversationAppointmentIntentSnapshotVersion(
         latestAppointmentIntent?.snapshotVersion ?? null,
@@ -4842,6 +4860,22 @@ function InboxPage({
                     </p>
                   </div>
                 </div>
+                {selectedConversation.memoryResetAt ? (
+                  <div className="border-b border-line bg-amber-50 px-4 py-2 text-xs text-amber-900">
+                    <span className="font-semibold">Nueva sesión</span>{" "}
+                    <span>
+                      desde{" "}
+                      {new Intl.DateTimeFormat("es-CO", {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                        timeZone,
+                      }).format(new Date(selectedConversation.memoryResetAt))}
+                    </span>
+                    <span className="ml-2 text-amber-800">
+                      Los mensajes anteriores quedaron fuera de la memoria activa.
+                    </span>
+                  </div>
+                ) : null}
                 <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
                   {messages.length ? (
                     messages.map((message) => (

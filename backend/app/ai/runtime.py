@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 import unicodedata
 from uuid import UUID
@@ -84,6 +85,42 @@ def _as_json_context(value: object) -> str:
     return json.dumps(value, ensure_ascii=True, sort_keys=True)
 
 
+def _normalize_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _messages_after_memory_reset(
+    messages: list[Message],
+    *,
+    memory_reset_at: datetime | None = None,
+    memory_reset_after_message_id: UUID | None = None,
+) -> list[Message]:
+    if memory_reset_after_message_id is not None:
+        filtered_messages: list[Message] = []
+        seen_marker = False
+        for message in messages:
+            if seen_marker:
+                filtered_messages.append(message)
+                continue
+            if message.id == memory_reset_after_message_id:
+                seen_marker = True
+        if seen_marker:
+            return filtered_messages
+    cutoff = _normalize_utc(memory_reset_at)
+    if cutoff is None:
+        return messages
+    cutoff = cutoff - timedelta(seconds=1)
+    return [
+        message
+        for message in messages
+        if (created_at := _normalize_utc(message.created_at)) is not None and created_at >= cutoff
+    ]
+
+
 def _normalize_text(value: str) -> str:
     return " ".join(value.strip().lower().split())
 
@@ -101,21 +138,33 @@ def _load_latest_conversation_ai_enabled(db: Session, *, company_id: UUID, conve
     return bool(value)
 
 
-def _appointment_preference_pending(db: Session, *, company_id: UUID, conversation_id: UUID) -> bool:
-    latest_relevant_event = db.scalar(
-        select(Event)
-        .where(
-            Event.company_id == company_id,
-            Event.event_type.in_(
-                {
-                    "conversation.appointment_intent_prepared",
-                    "conversation.appointment_preference_selected",
-                }
-            ),
-            Event.payload["conversation_id"].as_string() == str(conversation_id),
-        )
-        .order_by(Event.created_at.desc(), Event.id.desc())
+def _appointment_preference_pending(
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+    memory_reset_at: datetime | None = None,
+) -> bool:
+    stmt = select(Event).where(
+        Event.company_id == company_id,
+        Event.event_type.in_(
+            {
+                "conversation.appointment_intent_prepared",
+                "conversation.appointment_preference_selected",
+            }
+        ),
+        Event.payload["conversation_id"].as_string() == str(conversation_id),
     )
+    relevant_events = list(db.scalars(stmt.order_by(Event.created_at.desc(), Event.id.desc())))
+    cutoff = _normalize_utc(memory_reset_at)
+    if cutoff is not None:
+        cutoff = cutoff - timedelta(seconds=1)
+        relevant_events = [
+            event
+            for event in relevant_events
+            if (created_at := _normalize_utc(event.created_at)) is not None and created_at >= cutoff
+        ]
+    latest_relevant_event = relevant_events[0] if relevant_events else None
     return latest_relevant_event is not None and latest_relevant_event.event_type == "conversation.appointment_intent_prepared"
 
 
@@ -137,20 +186,26 @@ def _is_greeting(text: str) -> bool:
 
 
 def _customer_message_count(
-    db: Session, *, company_id: UUID, conversation_id: UUID
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+    memory_reset_at: datetime | None = None,
+    memory_reset_after_message_id: UUID | None = None,
 ) -> int:
-    return len(
-        list(
-            db.scalars(
-                select(Message.id).where(
-                    Message.company_id == company_id,
-                    Message.conversation_id == conversation_id,
-                    Message.sender_type == "customer",
-                    Message.content.is_not(None),
-                )
-            )
-        )
+    stmt = select(Message).where(
+        Message.company_id == company_id,
+        Message.conversation_id == conversation_id,
+        Message.sender_type == "customer",
+        Message.content.is_not(None),
     )
+    messages = list(db.scalars(stmt))
+    messages = _messages_after_memory_reset(
+        messages,
+        memory_reset_at=memory_reset_at,
+        memory_reset_after_message_id=memory_reset_after_message_id,
+    )
+    return len(messages)
 
 
 def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) -> str:
@@ -206,20 +261,26 @@ def _build_catalog_context(db: Session, *, company_id: UUID, limit: int = 20) ->
 
 
 def _build_recent_conversation_context(
-    db: Session, *, company_id: UUID, conversation_id: UUID, limit: int = 14
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+    limit: int = 14,
+    memory_reset_at: datetime | None = None,
+    memory_reset_after_message_id: UUID | None = None,
 ) -> list[dict[str, str]]:
-    messages = list(
-        db.scalars(
-            select(Message)
-            .where(
-                Message.company_id == company_id,
-                Message.conversation_id == conversation_id,
-                Message.content.is_not(None),
-            )
-            .order_by(Message.created_at.desc())
-            .limit(limit)
-        )
+    stmt = select(Message).where(
+        Message.company_id == company_id,
+        Message.conversation_id == conversation_id,
+        Message.content.is_not(None),
     )
+    messages = list(db.scalars(stmt.order_by(Message.created_at.desc())))
+    messages = _messages_after_memory_reset(
+        messages,
+        memory_reset_at=memory_reset_at,
+        memory_reset_after_message_id=memory_reset_after_message_id,
+    )
+    messages = messages[:limit]
     chat_messages: list[dict[str, str]] = []
     for message in reversed(messages):
         content = (message.content or "").strip()
@@ -231,16 +292,30 @@ def _build_recent_conversation_context(
 
 
 def _payment_context_orders(
-    db: Session, *, company_id: UUID, conversation_id: UUID
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+    memory_reset_at: datetime | None = None,
+    memory_reset_after_message_id: UUID | None = None,
 ) -> tuple[Order | None, Order | None]:
-    latest_order = db.scalar(
-        select(Order)
-        .where(
-            Order.company_id == company_id,
-            Order.conversation_id == conversation_id,
-        )
-        .order_by(Order.created_at.desc())
+    stmt = select(Order).where(
+        Order.company_id == company_id,
+        Order.conversation_id == conversation_id,
     )
+    orders = list(db.scalars(stmt.order_by(Order.created_at.desc())))
+    if memory_reset_after_message_id is not None:
+        # Orders are not message-ordered, so fall back to the timestamp cutoff for them.
+        memory_reset_after_message_id = None
+    cutoff = _normalize_utc(memory_reset_at)
+    if cutoff is not None:
+        cutoff = cutoff - timedelta(seconds=1)
+        orders = [
+            order
+            for order in orders
+            if (created_at := _normalize_utc(order.created_at)) is not None and created_at >= cutoff
+        ]
+    latest_order = orders[0] if orders else None
     if latest_order is None:
         return None, None
 
@@ -264,12 +339,19 @@ def _payment_context_orders(
 
 
 def _build_payment_context(
-    db: Session, *, company_id: UUID, conversation_id: UUID
+    db: Session,
+    *,
+    company_id: UUID,
+    conversation_id: UUID,
+    memory_reset_at: datetime | None = None,
+    memory_reset_after_message_id: UUID | None = None,
 ) -> str:
     order, origin_order = _payment_context_orders(
         db,
         company_id=company_id,
         conversation_id=conversation_id,
+        memory_reset_at=memory_reset_at,
+        memory_reset_after_message_id=memory_reset_after_message_id,
     )
     if order is None:
         return ""
@@ -527,7 +609,11 @@ def generate_auto_reply(
     funnel_capture_fields = list(funnel.capture_fields) if funnel and isinstance(funnel.capture_fields, list) else []
     funnel_step_names = [step.name for step in funnel.steps] if funnel and funnel.steps else []
     customer_messages = _customer_message_count(
-        db, company_id=company_id, conversation_id=conversation.id
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+        memory_reset_at=conversation.memory_reset_at,
+        memory_reset_after_message_id=conversation.memory_reset_after_message_id,
     )
     use_welcome_on_greeting = _as_bool(
         rules.get("use_welcome_on_greeting"), default=True
@@ -580,7 +666,12 @@ def generate_auto_reply(
             action=None,
             is_first_contact=first_contact,
         )
-    if _appointment_preference_pending(db, company_id=company_id, conversation_id=conversation.id):
+    if _appointment_preference_pending(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+        memory_reset_at=conversation.memory_reset_at,
+    ):
         return AutoReplyResult(
             reply_text="¿Prefieres mañana o tarde?",
             action=None,
@@ -610,7 +701,7 @@ def generate_auto_reply(
         f"Criterio de asignacion del funnel: {funnel_assignment_criteria or 'no definido'}\n"
         f"Fuentes de conocimiento: {knowledge_sources or 'catalogo y mensajes del tenant'}\n"
         f"{_build_faq_context(db, company_id=company_id)}\n"
-        f"{payment_context or _build_payment_context(db, company_id=company_id, conversation_id=conversation.id)}\n"
+        f"{payment_context or _build_payment_context(db, company_id=company_id, conversation_id=conversation.id, memory_reset_at=conversation.memory_reset_at, memory_reset_after_message_id=conversation.memory_reset_after_message_id)}\n"
         "Reglas de pago vencido:\n"
         "- Si el contexto indica que un link de pago ya vencio y el seguimiento automatico ya fue enviado, no repitas el recordatorio.\n"
         "- Si el cliente quiere continuar, ofrece seguir el flujo comercial sin confirmar pagos, sin extender vencimientos y sin retener inventario.\n"
@@ -659,7 +750,11 @@ def generate_auto_reply(
     messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
     messages.extend(
         _build_recent_conversation_context(
-            db, company_id=company_id, conversation_id=conversation.id
+            db,
+            company_id=company_id,
+            conversation_id=conversation.id,
+            memory_reset_at=conversation.memory_reset_at,
+            memory_reset_after_message_id=conversation.memory_reset_after_message_id,
         )
     )
     messages.append({"role": "user", "content": incoming_text})

@@ -68,7 +68,10 @@ def get_conversation(
         db, company_id=current_user.company_id, conversation_id=conversation_id
     )
     messages = service.get_conversation_messages(
-        db, company_id=current_user.company_id, conversation_id=conversation_id
+        db,
+        company_id=current_user.company_id,
+        conversation_id=conversation_id,
+        memory_reset_at=conversation.memory_reset_at,
     )
     events = service.get_conversation_events(
         db, company_id=current_user.company_id, conversation_id=conversation_id
@@ -134,10 +137,15 @@ def get_conversation_appointment_intent(
     current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> dict:
+    conversation = service.get_conversation(
+        db, company_id=current_user.company_id, conversation_id=conversation_id
+    )
     return service.get_conversation_appointment_intent(
         db,
         company_id=current_user.company_id,
         conversation_id=conversation_id,
+        memory_reset_at=conversation.memory_reset_at,
+        conversation=conversation,
     )
 
 

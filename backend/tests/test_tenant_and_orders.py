@@ -66,7 +66,9 @@ from app.conversations.schemas import ConversationCreate
 from app.conversations.service import (
     assign_conversation_funnel,
     assign_conversation,
+    close_conversation,
     create_conversation,
+    get_conversation_messages,
     get_conversation,
     get_or_create_open_conversation,
     list_conversations,
@@ -395,35 +397,62 @@ def test_existing_open_conversation_repairs_inactive_welcome_funnel_on_outer_com
     assert reloaded.status == "active"
 
 
-def test_stale_open_conversation_is_closed_and_recreated_after_24_hours(db):
+def test_closed_conversation_reuses_same_record_and_resets_visible_history(db):
     company, _ = bootstrap_company(db, "Acme")
     contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
     db.add(contact)
     db.commit()
 
-    stale_conversation = Conversation(company_id=company.id, contact_id=contact.id, channel="whatsapp")
-    stale_conversation.last_message_at = datetime.now(UTC) - timedelta(hours=25)
-    db.add(stale_conversation)
+    conversation = get_or_create_open_conversation(
+        db,
+        company_id=company.id,
+        contact_id=contact.id,
+        channel="whatsapp",
+    )
+    db.add(
+        Message(
+            company_id=company.id,
+            conversation_id=conversation.id,
+            sender_type="customer",
+            content="Hola",
+            message_type="text",
+            metadata_json={},
+        )
+    )
     db.commit()
 
-    recreated = get_or_create_open_conversation(
+    close_conversation(db, company_id=company.id, conversation_id=conversation.id)
+
+    reopened = get_or_create_open_conversation(
         db,
         company_id=company.id,
         contact_id=contact.id,
         channel="whatsapp",
     )
 
-    assert recreated.id != stale_conversation.id
-    assert recreated.status == "open"
+    assert reopened.id == conversation.id
+    assert reopened.status == "open"
+    assert reopened.memory_reset_at is not None
 
-    closed_stale = db.scalar(
-        select(Conversation).where(
-            Conversation.company_id == company.id,
-            Conversation.id == stale_conversation.id,
+    db.add(
+        Message(
+            company_id=company.id,
+            conversation_id=reopened.id,
+            sender_type="customer",
+            content="Nueva consulta",
+            message_type="text",
+            metadata_json={},
         )
     )
-    assert closed_stale is not None
-    assert closed_stale.status == "closed"
+    db.commit()
+
+    visible_messages = get_conversation_messages(
+        db,
+        company_id=company.id,
+        conversation_id=reopened.id,
+        memory_reset_at=reopened.memory_reset_at,
+    )
+    assert [message.content for message in visible_messages] == ["Nueva consulta"]
 
 
 def test_inbox_conversations_can_filter_by_funnel(db):

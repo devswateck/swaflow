@@ -44,6 +44,8 @@ class ConversationRead(TimestampedRead):
     funnel_id: UUID | None = None
     funnel_step_id: UUID | None = None
     current_step: str | None
+    memory_reset_after_message_id: UUID | None
+    memory_reset_at: datetime | None
     last_message_at: datetime | None
     unread_count: int = 0
     available_product_count: int = 0
