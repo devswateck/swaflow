@@ -13,10 +13,14 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# Env
+# Variables de entorno
 .env
-backend/.env
-frontend/.env
+.env.*
+!.env.example
 
-# Local uploaded assets
+# Archivos de ejemplo
+!backend/.env.example
+!frontend/.env.example
+
+# Archivos locales
 backend/storage/
