@@ -139,7 +139,12 @@ def list_conversations(
     return filtered_conversations
 
 
-def conversation_to_inbox_item(db: Session, *, conversation: Conversation) -> dict:
+def conversation_to_inbox_item(
+    db: Session,
+    *,
+    conversation: Conversation,
+    include_available_products_context: bool = True,
+) -> dict:
     contact = db.scalar(
         select(Contact).where(
             Contact.company_id == conversation.company_id,
@@ -172,13 +177,7 @@ def conversation_to_inbox_item(db: Session, *, conversation: Conversation) -> di
             )
         )
         funnel_step_name = step.name if step else None
-    available_product_count = _count_available_products(db, company_id=conversation.company_id)
-    available_products_preview = _list_available_products_preview(
-        db,
-        company_id=conversation.company_id,
-        limit=3,
-    )
-    return {
+    payload = {
         "id": conversation.id,
         "company_id": conversation.company_id,
         "contact_id": conversation.contact_id,
@@ -200,9 +199,27 @@ def conversation_to_inbox_item(db: Session, *, conversation: Conversation) -> di
         "contact_phone": contact.phone if contact else "",
         "last_message": last_message.content if last_message else None,
         "last_sender_type": last_message.sender_type if last_message else None,
-        "available_product_count": available_product_count,
-        "available_products_preview": available_products_preview,
     }
+    if include_available_products_context:
+        payload["available_product_count"] = _count_available_products(
+            db, company_id=conversation.company_id
+        )
+        payload["available_products_preview"] = _list_available_products_preview(
+            db,
+            company_id=conversation.company_id,
+            limit=3,
+        )
+    else:
+        payload["available_product_count"] = 0
+    return payload
+
+
+def conversation_to_inbox_list_item(db: Session, *, conversation: Conversation) -> dict:
+    return conversation_to_inbox_item(
+        db,
+        conversation=conversation,
+        include_available_products_context=False,
+    )
 
 
 def _available_products_stmt(
@@ -505,22 +522,7 @@ def get_conversation_messages(
     memory_reset_at: datetime | None = None,
 ) -> list[Message]:
     stmt = select(Message).where(Message.company_id == company_id, Message.conversation_id == conversation_id)
-    messages = list(db.scalars(stmt.order_by(Message.created_at.asc(), Message.id.asc())))
-    conversation = db.scalar(
-        select(Conversation).where(
-            Conversation.company_id == company_id,
-            Conversation.id == conversation_id,
-        )
-    )
-    if conversation is not None and conversation.memory_reset_after_message_id is not None:
-        return _messages_after_memory_reset(
-            messages,
-            memory_reset_after_message_id=conversation.memory_reset_after_message_id,
-        )
-    cutoff = _normalize_utc(memory_reset_at)
-    if cutoff is None:
-        return messages
-    return _messages_after_memory_reset(messages, memory_reset_at=cutoff)
+    return list(db.scalars(stmt.order_by(Message.created_at.asc(), Message.id.asc())))
 
 
 def _messages_after_memory_reset(

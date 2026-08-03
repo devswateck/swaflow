@@ -764,6 +764,13 @@ type Conversation = {
   availableProductCount: number;
 };
 
+type ConversationDetailCacheEntry = {
+  detail: Conversation;
+  messages: InboxMessage[];
+  appointmentIntentPreparedAt: string | null;
+  appointmentIntentSnapshotVersion: string | null;
+};
+
 type InboxMessage = {
   id: string;
   side: "left" | "right";
@@ -1791,6 +1798,39 @@ function operationalConfigFromAgent(
   return normalizeOperationalConfig(operational, fallbackTimezone);
 }
 
+function syncOperationalTimezone(
+  config: AiOperationalConfig,
+  timezone: string | null | undefined,
+): AiOperationalConfig {
+  const normalizedTimezone = normalizeTimeZone(timezone ?? null);
+  if (!normalizedTimezone) {
+    return config;
+  }
+  if (
+    config.draft.schedule.timezone === normalizedTimezone &&
+    config.published.schedule.timezone === normalizedTimezone
+  ) {
+    return config;
+  }
+  return {
+    ...config,
+    draft: {
+      ...config.draft,
+      schedule: {
+        ...config.draft.schedule,
+        timezone: normalizedTimezone,
+      },
+    },
+    published: {
+      ...config.published,
+      schedule: {
+        ...config.published.schedule,
+        timezone: normalizedTimezone,
+      },
+    },
+  };
+}
+
 function operationalPayloadFromConfig(config: AiOperationalConfig): Record<string, unknown> {
   return {
     status: config.status,
@@ -2035,6 +2075,23 @@ function mapApiMessage(message: ApiMessage): InboxMessage {
     text: message.content ?? `[${message.message_type}]`,
     createdAt: message.created_at,
     metadataJson: message.metadata_json ?? {},
+  };
+}
+
+function buildConversationDetailCacheEntry(detail: ApiConversationDetail): ConversationDetailCacheEntry {
+  const mappedDetail = {
+    ...mapApiConversation(detail),
+    unreadCount: detail.unread_count,
+  };
+  const latestAppointmentIntent = getLatestAppointmentIntentSnapshotMeta(
+    detail.events,
+    detail.memory_reset_at ?? mappedDetail.memoryResetAt,
+  );
+  return {
+    detail: mappedDetail,
+    messages: detail.messages.map(mapApiMessage),
+    appointmentIntentPreparedAt: latestAppointmentIntent?.preparedAt ?? null,
+    appointmentIntentSnapshotVersion: latestAppointmentIntent?.snapshotVersion ?? null,
   };
 }
 
@@ -2466,6 +2523,7 @@ function App() {
   const inboxAbortControllerRef = useRef<AbortController | null>(null);
   const conversationDetailRequestIdRef = useRef(0);
   const conversationDetailAbortControllerRef = useRef<AbortController | null>(null);
+  const conversationDetailCacheRef = useRef<Map<string, ConversationDetailCacheEntry>>(new Map());
   const loadConversationDetailRef = useRef<((conversationId: string, markRead?: boolean) => Promise<void>) | null>(
     null,
   );
@@ -2499,6 +2557,17 @@ function App() {
     selectedConversationDetail?.id === selectedConversationId
       ? selectedConversationDetail
       : selectedConversationFromList;
+  const hydrateConversationDetailFromCache = useCallback((conversationId: string) => {
+    const cached = conversationDetailCacheRef.current.get(conversationId);
+    if (!cached || selectedConversationIdRef.current !== conversationId) {
+      return false;
+    }
+    setConversationMessages(cached.messages);
+    setSelectedConversationDetail(cached.detail);
+    setSelectedConversationAppointmentIntentPreparedAt(cached.appointmentIntentPreparedAt);
+    setSelectedConversationAppointmentIntentSnapshotVersion(cached.appointmentIntentSnapshotVersion);
+    return true;
+  }, []);
   const totalUnread = useMemo(
     () => conversations.reduce((total, conversation) => total + conversation.unreadCount, 0),
     [conversations],
@@ -2883,9 +2952,12 @@ function App() {
       if (signal.aborted || conversationDetailRequestIdRef.current !== requestId) {
         return;
       }
-      const detail = await api<ApiConversationDetail>(`/conversations/${conversationId}`, {
+      const detail = await api<ApiConversationDetail>(
+        `/conversations/${conversationId}?include_events=false&include_available_products_context=false`,
+        {
         signal,
-      });
+        },
+      );
       if (
         signal.aborted ||
         conversationDetailRequestIdRef.current !== requestId ||
@@ -2893,24 +2965,16 @@ function App() {
       ) {
         return;
       }
-      const mappedDetail = {
-        ...mapApiConversation(detail),
-        unreadCount: detail.unread_count,
-      };
-      const latestAppointmentIntent = getLatestAppointmentIntentSnapshotMeta(
-        detail.events,
-        detail.memory_reset_at ?? mappedDetail.memoryResetAt,
-      );
-      setSelectedConversationAppointmentIntentPreparedAt(latestAppointmentIntent?.preparedAt ?? null);
-      setSelectedConversationAppointmentIntentSnapshotVersion(
-        latestAppointmentIntent?.snapshotVersion ?? null,
-      );
-      setConversationMessages(detail.messages.map(mapApiMessage));
-      setSelectedConversationDetail(mappedDetail);
+      const cached = buildConversationDetailCacheEntry(detail);
+      conversationDetailCacheRef.current.set(conversationId, cached);
+      setSelectedConversationAppointmentIntentPreparedAt(cached.appointmentIntentPreparedAt);
+      setSelectedConversationAppointmentIntentSnapshotVersion(cached.appointmentIntentSnapshotVersion);
+      setConversationMessages(cached.messages);
+      setSelectedConversationDetail(cached.detail);
       setConversations((current) =>
         current.map((conversation) =>
           conversation.id === detail.id
-            ? mappedDetail
+            ? cached.detail
             : conversation,
         ),
       );
@@ -2920,6 +2984,7 @@ function App() {
         return;
       }
       if (caught instanceof ApiError && caught.status === 404 && selectedConversationIdRef.current === conversationId) {
+        conversationDetailCacheRef.current.delete(conversationId);
         setSelectedConversationIdSync(null);
         setSelectedConversationDetail(null);
         setSelectedConversationAppointmentIntentPreparedAt(null);
@@ -2930,10 +2995,13 @@ function App() {
       if (selectedConversationIdRef.current !== conversationId) {
         return;
       }
-      setConversationMessages([]);
-      setSelectedConversationDetail(null);
-      setSelectedConversationAppointmentIntentPreparedAt(null);
-      setSelectedConversationAppointmentIntentSnapshotVersion(null);
+      const cached = conversationDetailCacheRef.current.get(conversationId);
+      if (!cached) {
+        setConversationMessages([]);
+        setSelectedConversationDetail(null);
+        setSelectedConversationAppointmentIntentPreparedAt(null);
+        setSelectedConversationAppointmentIntentSnapshotVersion(null);
+      }
       setInboxError(caught instanceof Error ? caught.message : "No fue posible cargar la conversacion");
     } finally {
       if (conversationDetailAbortControllerRef.current === abortController) {
@@ -3285,13 +3353,17 @@ function App() {
       return;
     }
 
-    setConversationMessages([]);
-    setSelectedConversationDetail(null);
+    if (!hydrateConversationDetailFromCache(selectedConversationId)) {
+      setConversationMessages([]);
+      setSelectedConversationDetail(null);
+      setSelectedConversationAppointmentIntentPreparedAt(null);
+      setSelectedConversationAppointmentIntentSnapshotVersion(null);
+    }
     void loadConversationDetail(selectedConversationId);
     return () => {
       conversationDetailAbortControllerRef.current?.abort();
     };
-  }, [loadConversationDetail, selectedConversationId]);
+  }, [hydrateConversationDetailFromCache, loadConversationDetail, selectedConversationId]);
 
   useEffect(() => {
     if (activePage !== "appointments" || !currentUser) {
@@ -3543,7 +3615,6 @@ function App() {
 
   function selectInboxConversation(conversationId: string) {
     setSelectedConversationIdSync(conversationId);
-    void loadConversationDetail(conversationId);
   }
 
   function openAppointmentDraft() {
@@ -3603,31 +3674,110 @@ function App() {
       return;
     }
     const requestedPhone = selectedConversation.phone;
+    const optimisticMessageId = crypto.randomUUID();
+    const optimisticCreatedAt = new Date().toISOString();
+    const optimisticMessage: InboxMessage = {
+      id: optimisticMessageId,
+      side: "right",
+      text: content,
+      createdAt: optimisticCreatedAt,
+      metadataJson: { pending: true },
+    };
     setInboxError("");
-    const response = await api<ApiWhatsAppSendTextResponse>("/whatsapp/messages", {
+    setConversationMessages((current) => [...current, optimisticMessage]);
+    const selectedConversationId = selectedConversation.id;
+    const cachedConversation = conversationDetailCacheRef.current.get(selectedConversationId);
+    if (cachedConversation) {
+      conversationDetailCacheRef.current.set(selectedConversationId, {
+        ...cachedConversation,
+        messages: [...cachedConversation.messages, optimisticMessage],
+      });
+    }
+    void api<ApiWhatsAppSendTextResponse>("/whatsapp/messages", {
       method: "POST",
       body: JSON.stringify({
         to: requestedPhone,
         body: content,
       }),
-    });
-    if (selectedConversationIdRef.current === response.conversation_id) {
-      flushSync(() => {
-        setSelectedConversationIdSync(response.conversation_id);
+    })
+      .then((response) => {
+        if (selectedConversationIdRef.current === response.conversation_id) {
+          flushSync(() => {
+            setSelectedConversationIdSync(response.conversation_id);
+          });
+          setConversationMessages((current) =>
+            current.map((message) =>
+              message.id === optimisticMessageId
+                ? {
+                    id: response.message_id,
+                    side: "right",
+                    text: content,
+                    createdAt: optimisticCreatedAt,
+                    metadataJson: {},
+                  }
+                : message,
+            ),
+          );
+          const cached = conversationDetailCacheRef.current.get(response.conversation_id);
+          if (cached) {
+            conversationDetailCacheRef.current.set(response.conversation_id, {
+              ...cached,
+              messages: cached.messages.map((message) =>
+                message.id === optimisticMessageId
+                  ? {
+                      id: response.message_id,
+                      side: "right",
+                      text: content,
+                      createdAt: optimisticCreatedAt,
+                      metadataJson: {},
+                    }
+                  : message,
+              ),
+            });
+          }
+          void loadConversationDetail(response.conversation_id, false);
+        }
+        void refreshInbox();
+      })
+      .catch((caught) => {
+        setConversationMessages((current) =>
+          current.map((message) =>
+            message.id === optimisticMessageId
+              ? {
+                  ...message,
+                  metadataJson: {
+                    ...message.metadataJson,
+                    pending: false,
+                    failed: true,
+                    error: caught instanceof Error ? caught.message : "No fue posible enviar el mensaje",
+                  },
+                }
+              : message,
+          ),
+        );
+        if (selectedConversationIdRef.current === selectedConversationId) {
+          const cached = conversationDetailCacheRef.current.get(selectedConversationId);
+          if (cached) {
+            conversationDetailCacheRef.current.set(selectedConversationId, {
+              ...cached,
+              messages: cached.messages.map((message) =>
+                message.id === optimisticMessageId
+                  ? {
+                      ...message,
+                      metadataJson: {
+                        ...message.metadataJson,
+                        pending: false,
+                        failed: true,
+                        error: caught instanceof Error ? caught.message : "No fue posible enviar el mensaje",
+                      },
+                    }
+                  : message,
+              ),
+            });
+          }
+        }
+        setInboxError(caught instanceof Error ? caught.message : "No fue posible enviar el mensaje");
       });
-      setConversationMessages((current) => [
-        ...current,
-        {
-          id: response.message_id,
-          side: "right",
-          text: content,
-          createdAt: new Date().toISOString(),
-          metadataJson: {},
-        },
-      ]);
-      void loadConversationDetail(response.conversation_id, false);
-    }
-    void refreshInbox();
   }
 
   async function assignConversationFunnel(
@@ -6853,7 +7003,10 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
     try {
       const nextAgents = await api<AiAgentResponse[]>("/ai/agents");
       const selected = nextAgents.find((agent) => agent.active) ?? nextAgents[0] ?? null;
-      const nextOperationalConfig = operationalConfigFromAgent(selected, currentUser.company_timezone);
+      const nextOperationalConfig = syncOperationalTimezone(
+        operationalConfigFromAgent(selected, currentUser.company_timezone),
+        currentUser.company_timezone,
+      );
       setAgents(nextAgents);
       setActiveAgentId(selected?.id ?? null);
       setForm(aiFormFromAgent(selected, systemPrompt));
@@ -6923,6 +7076,20 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
   }, [loadFaqEntries]);
 
   useEffect(() => {
+    setOperationalConfig((current) => {
+      const next = syncOperationalTimezone(current, currentUser.company_timezone);
+      if (next === current) {
+        return current;
+      }
+      setForm((currentForm) => ({
+        ...currentForm,
+        schedule: operationalScheduleSummary(next.draft),
+      }));
+      return next;
+    });
+  }, [currentUser.company_timezone]);
+
+  useEffect(() => {
     if (!notice) {
       return;
     }
@@ -6953,21 +7120,32 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
   function updateOperationalDraft(updater: (current: AiOperationalSection) => AiOperationalSection) {
     setOperationalConfig((current) => {
       const draft = updater(current.draft);
+      const syncedDraft = syncOperationalTimezone(
+        {
+          ...current,
+          draft,
+          published: current.published,
+        },
+        currentUser.company_timezone,
+      ).draft;
       setForm((currentForm) => ({
         ...currentForm,
-        schedule: operationalScheduleSummary(draft),
+        schedule: operationalScheduleSummary(syncedDraft),
       }));
       return {
         ...current,
         status: "draft",
-        draft,
+        draft: syncedDraft,
       };
     });
   }
 
   function selectAgent(agentId: string) {
     const selected = agents.find((agent) => agent.id === agentId) ?? null;
-    const nextOperationalConfig = operationalConfigFromAgent(selected, currentUser.company_timezone);
+    const nextOperationalConfig = syncOperationalTimezone(
+      operationalConfigFromAgent(selected, currentUser.company_timezone),
+      currentUser.company_timezone,
+    );
     setActiveAgentId(selected?.id ?? null);
     setForm(aiFormFromAgent(selected, defaultSystemPrompt));
     setOperationalConfig(nextOperationalConfig);
@@ -6985,7 +7163,11 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
     setNotice("");
     setError("");
     try {
-      const payload = aiPayloadFromForm(form, operationalConfig);
+      const syncedOperationalConfig = syncOperationalTimezone(
+        operationalConfig,
+        currentUser.company_timezone,
+      );
+      const payload = aiPayloadFromForm(form, syncedOperationalConfig);
       const saved = activeAgent
         ? await api<AiAgentResponse>(`/ai/agents/${activeAgent.id}`, {
             method: "PUT",
@@ -7017,23 +7199,29 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
         await publishOperationalConfig();
         return;
       }
+      const syncedOperationalConfig = syncOperationalTimezone(
+        {
+          ...operationalConfig,
+          status: nextStatus,
+        },
+        currentUser.company_timezone,
+      );
       const payload = operationalPayloadFromConfig({
-        ...operationalConfig,
-        status: nextStatus,
+        ...syncedOperationalConfig,
       });
       const saved = await api<AiAgentResponse>(`/ai/agents/${activeAgent.id}`, {
         method: "PUT",
         body: JSON.stringify({
-          ...aiPayloadFromForm(form, {
-            ...operationalConfig,
-            status: nextStatus,
-          }),
+          ...aiPayloadFromForm(form, syncedOperationalConfig),
           operational_config: payload,
         }),
       });
       setAgents((current) => current.map((agent) => (agent.id === saved.id ? saved : agent)));
       setActiveAgentId(saved.id);
-      const nextOperational = operationalConfigFromAgent(saved, currentUser.company_timezone);
+      const nextOperational = syncOperationalTimezone(
+        operationalConfigFromAgent(saved, currentUser.company_timezone),
+        currentUser.company_timezone,
+      );
       setForm({
         ...aiFormFromAgent(saved, defaultSystemPrompt),
         schedule: operationalScheduleSummary(nextOperational.draft),
@@ -7060,7 +7248,10 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
       });
       setAgents((current) => current.map((agent) => (agent.id === saved.id ? saved : agent)));
       setActiveAgentId(saved.id);
-      const nextOperational = operationalConfigFromAgent(saved, currentUser.company_timezone);
+      const nextOperational = syncOperationalTimezone(
+        operationalConfigFromAgent(saved, currentUser.company_timezone),
+        currentUser.company_timezone,
+      );
       setForm({
         ...aiFormFromAgent(saved, defaultSystemPrompt),
         schedule: operationalScheduleSummary(nextOperational.draft),

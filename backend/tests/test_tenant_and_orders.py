@@ -57,6 +57,7 @@ from app.ai.runtime import (
     _selected_interactive_source_action,
     generate_auto_reply,
 )
+from app.ai.operational import evaluate_business_hours
 from app.ai.tools import check_stock_tool, search_products_tool
 from app.ai.routes import get_default_system_prompt
 from app.ai.models import AiAgent
@@ -72,6 +73,7 @@ from app.conversations.service import (
     get_conversation,
     get_or_create_open_conversation,
     list_conversations,
+    conversation_to_inbox_list_item,
     prepare_conversation_appointment_intent,
 )
 from app.funnels import service as funnel_service
@@ -452,7 +454,115 @@ def test_closed_conversation_reuses_same_record_and_resets_visible_history(db):
         conversation_id=reopened.id,
         memory_reset_at=reopened.memory_reset_at,
     )
-    assert [message.content for message in visible_messages] == ["Nueva consulta"]
+    assert [message.content for message in visible_messages] == ["Hola", "Nueva consulta"]
+
+
+def test_inbox_list_item_skips_catalog_context(db, monkeypatch):
+    company, _ = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+
+    called = {"count": 0, "preview": 0}
+
+    def count_available_products(*args, **kwargs):
+        called["count"] += 1
+        return 99
+
+    def list_available_products_preview(*args, **kwargs):
+        called["preview"] += 1
+        return [{"id": uuid4(), "name": "Producto", "available_units": 1}]
+
+    monkeypatch.setattr("app.conversations.service._count_available_products", count_available_products)
+    monkeypatch.setattr(
+        "app.conversations.service._list_available_products_preview",
+        list_available_products_preview,
+    )
+
+    item = conversation_to_inbox_list_item(db, conversation=conversation)
+
+    assert item["available_product_count"] == 0
+    assert "available_products_preview" not in item
+    assert called == {"count": 0, "preview": 0}
+
+
+def test_evaluate_business_hours_prefers_operational_timezone_over_tenant_timezone():
+    operational_config = {
+        "status": "published",
+        "version": 1,
+        "published_at": None,
+        "draft": {
+            "schedule": {
+                "timezone": "UTC",
+                "weekday": {"start": "08:00", "end": "18:00"},
+                "weekend": {"start": "08:00", "end": "14:00"},
+                "outside_hours_behavior": "handoff",
+                "outside_hours_message": "Estamos fuera de horario.",
+                "handoff_message": "Te paso con un humano.",
+            }
+        },
+        "published": {
+            "schedule": {
+                "timezone": "UTC",
+                "weekday": {"start": "08:00", "end": "18:00"},
+                "weekend": {"start": "08:00", "end": "14:00"},
+                "outside_hours_behavior": "handoff",
+                "outside_hours_message": "Estamos fuera de horario.",
+                "handoff_message": "Te paso con un humano.",
+            }
+        },
+    }
+
+    hours = evaluate_business_hours(
+        operational_config,
+        timezone_name="America/Bogota",
+        now=datetime(2026, 7, 31, 21, 0, tzinfo=UTC),
+    )
+
+    assert hours["timezone"] == "UTC"
+    assert hours["within_hours"] is False
+
+
+def test_evaluate_business_hours_falls_back_to_tenant_timezone_when_operational_timezone_is_missing():
+    operational_config = {
+        "status": "published",
+        "version": 1,
+        "published_at": None,
+        "draft": {
+            "schedule": {
+                "timezone": "",
+                "weekday": {"start": "08:00", "end": "18:00"},
+                "weekend": {"start": "08:00", "end": "14:00"},
+                "outside_hours_behavior": "handoff",
+                "outside_hours_message": "Estamos fuera de horario.",
+                "handoff_message": "Te paso con un humano.",
+            }
+        },
+        "published": {
+            "schedule": {
+                "timezone": "",
+                "weekday": {"start": "08:00", "end": "18:00"},
+                "weekend": {"start": "08:00", "end": "14:00"},
+                "outside_hours_behavior": "handoff",
+                "outside_hours_message": "Estamos fuera de horario.",
+                "handoff_message": "Te paso con un humano.",
+            }
+        },
+    }
+
+    hours = evaluate_business_hours(
+        operational_config,
+        timezone_name="America/Bogota",
+        now=datetime(2026, 7, 31, 21, 0, tzinfo=UTC),
+    )
+
+    assert hours["timezone"] == "America/Bogota"
+    assert hours["within_hours"] is True
 
 
 def test_inbox_conversations_can_filter_by_funnel(db):

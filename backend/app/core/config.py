@@ -10,9 +10,9 @@ def _resolve_env_file() -> str:
     override = os.getenv("SWAFLOW_ENV_FILE")
     if override:
         return override
-    if Path(".env.development").exists():
-        return ".env.development"
-    return ".env"
+    if Path(".env.local").exists():
+        return ".env.local"
+    return ".env.development"
 
 
 class Settings(BaseSettings):

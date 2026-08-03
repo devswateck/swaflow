@@ -44,7 +44,7 @@ def list_conversations(
         funnel_step_id=funnel_step_id,
     )
     return [
-        service.conversation_to_inbox_item(db, conversation=conversation)
+        service.conversation_to_inbox_list_item(db, conversation=conversation)
         for conversation in conversations
     ]
 
@@ -61,6 +61,8 @@ def create_conversation(
 @router.get("/{conversation_id}", response_model=ConversationDetailRead)
 def get_conversation(
     conversation_id: UUID,
+    include_events: bool = True,
+    include_available_products_context: bool = True,
     current_user: User = Depends(require_module_access("inbox")),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -73,14 +75,17 @@ def get_conversation(
         conversation_id=conversation_id,
         memory_reset_at=conversation.memory_reset_at,
     )
-    events = service.get_conversation_events(
-        db, company_id=current_user.company_id, conversation_id=conversation_id
+    payload = service.conversation_to_inbox_item(
+        db,
+        conversation=conversation,
+        include_available_products_context=include_available_products_context,
     )
-    return {
-        **service.conversation_to_inbox_item(db, conversation=conversation),
-        "messages": messages,
-        "events": events,
-    }
+    if include_events:
+        payload["events"] = service.get_conversation_events(
+            db, company_id=current_user.company_id, conversation_id=conversation_id
+        )
+    payload["messages"] = messages
+    return payload
 
 
 @router.post("/{conversation_id}/assign", response_model=ConversationRead)

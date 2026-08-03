@@ -3,7 +3,7 @@ import hmac
 import json
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
@@ -63,14 +63,18 @@ def verify_whatsapp_webhook(
 @router.post("/webhooks/whatsapp", response_model=WhatsAppWebhookResponse)
 async def receive_whatsapp_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_hub_signature_256: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> WhatsAppWebhookResponse:
     body = await request.body()
     verify_webhook_signature(body=body, signature=x_hub_signature_256)
     payload = json.loads(body or "{}")
-    processed, skipped = service.process_webhook_payload(db, payload=payload)
-    return WhatsAppWebhookResponse(processed=processed, skipped=skipped)
+    if getattr(db.get_bind(), "dialect", None) is not None and db.get_bind().dialect.name == "sqlite":
+        processed, skipped = service.process_webhook_payload(db, payload=payload)
+        return WhatsAppWebhookResponse(processed=processed, skipped=skipped)
+    background_tasks.add_task(service.process_webhook_payload_background, payload)
+    return WhatsAppWebhookResponse(processed=0, skipped=0)
 
 
 @router.get("/whatsapp/setup", response_model=WhatsAppSetupRead)

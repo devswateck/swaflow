@@ -289,7 +289,7 @@ def test_inbox_detail_includes_events_and_orders_by_recent_activity(db, client):
     assert [row["id"] for row in inbox_rows] == [str(second_conversation.id), str(first_conversation.id)]
     assert inbox_rows[0]["last_message"] == "Claro, te ayudo"
     assert inbox_rows[0]["unread_count"] == 1
-    assert inbox_rows[0]["available_product_count"] == 1
+    assert inbox_rows[0]["available_product_count"] == 0
     assert inbox_rows[1]["last_message"] == "Hola, quiero saber mas"
 
     detail_response = client.get(
@@ -719,6 +719,45 @@ def test_list_conversation_events_applies_limit_and_offset_without_status_events
     )
 
     assert [event.id for event in page] == [second_event.id]
+
+
+def test_conversation_detail_lite_skips_events_and_product_context(db, client, monkeypatch):
+    company, owner = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        sender_type="customer",
+        content="Hola",
+        external_message_id="wamid-lite-1",
+    )
+    db.commit()
+
+    def boom(*args, **kwargs):
+        raise AssertionError("heavy path should not run")
+
+    monkeypatch.setattr("app.conversations.service.get_conversation_events", boom)
+    monkeypatch.setattr("app.conversations.service._count_available_products", boom)
+    monkeypatch.setattr("app.conversations.service._list_available_products_preview", boom)
+
+    response = client.get(
+        f"/api/v1/conversations/{conversation.id}?include_events=false&include_available_products_context=false",
+        headers=auth_headers(owner),
+    )
+    assert response.status_code == 200
+    detail = response.json()
+    assert [message["content"] for message in detail["messages"]] == ["Hola"]
+    assert detail["available_product_count"] == 0
+    assert detail["events"] == []
 
 
 def test_conversation_timeline_does_not_truncate_after_one_hundred_events(db, client):

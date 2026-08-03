@@ -448,6 +448,19 @@ def _timezone_for_value(timezone_name: str | None) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
+def _resolve_timezone_name(preferred: str | None, fallback: str | None) -> str:
+    for candidate in (preferred, fallback, "UTC"):
+        timezone = _normalize_text(candidate)
+        if not timezone:
+            continue
+        try:
+            ZoneInfo(timezone)
+        except ZoneInfoNotFoundError:
+            continue
+        return timezone
+    return "UTC"
+
+
 def evaluate_business_hours(
     operational_config: dict[str, Any],
     *,
@@ -458,7 +471,7 @@ def evaluate_business_hours(
     schedule = section.get("schedule") if isinstance(section, dict) else {}
     if not isinstance(schedule, dict):
         schedule = {}
-    tz_name = _normalize_text(schedule.get("timezone"), default=timezone_name or "UTC")
+    tz_name = _resolve_timezone_name(_normalize_text(schedule.get("timezone")), timezone_name)
     tzinfo = _timezone_for_value(tz_name)
     current = now or datetime.now(tzinfo)
     if current.tzinfo is None:

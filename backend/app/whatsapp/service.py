@@ -2517,3 +2517,13 @@ def process_webhook_payload(db: Session, *, payload: dict) -> tuple[int, int]:
                 processed += 1
 
     return processed, skipped
+
+
+def process_webhook_payload_background(payload: dict) -> None:
+    from app.core.database import SessionLocal
+
+    with SessionLocal() as db:
+        try:
+            process_webhook_payload(db, payload=payload)
+        except Exception:
+            logger.exception("Failed to process WhatsApp webhook in background")
