@@ -30,6 +30,7 @@ BRANDING_ALLOWED_CONTENT_TYPES = {
     "image/svg+xml": ".svg",
 }
 logger = logging.getLogger(__name__)
+DEFAULT_TIMEZONE = "America/Bogota"
 
 
 def _audit_company_event(db: Session, **kwargs) -> None:
@@ -166,7 +167,7 @@ def create_company_with_owner(
     *,
     actor_user: User | None = None,
 ) -> tuple[Company, User]:
-    company = Company(name=payload.name)
+    company = Company(name=payload.name, timezone=DEFAULT_TIMEZONE)
     db.add(company)
     db.flush()
 

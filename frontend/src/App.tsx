@@ -1,5 +1,6 @@
 import {
   type FormEvent,
+  type MouseEvent,
   type ReactNode,
   type SetStateAction,
   useCallback,
@@ -383,6 +384,8 @@ const FALLBACK_CURRENCIES = [
   "CHF",
   "JPY",
 ];
+
+const DEFAULT_TIME_ZONE = "America/Bogota";
 
 function buildTimezoneOptions(currentValue: string): IntegrationOption[] {
   const intlWithSupportedValuesOf = Intl as typeof Intl & {
@@ -1151,7 +1154,7 @@ function defaultDashboardAnalytics(): DashboardAnalytics {
   return {
     date_from: "",
     date_to: "",
-    timezone: "UTC",
+    timezone: DEFAULT_TIME_ZONE,
     summary: defaultDashboardSummary(),
     series: [],
   };
@@ -1174,7 +1177,7 @@ function formatDateKeyInTimeZone(value: Date, timeZone: string) {
 }
 
 function getDefaultDashboardFilters(timeZone?: string | null): DashboardFilters {
-  const normalizedTimeZone = normalizeTimeZone(timeZone ?? null) ?? "UTC";
+  const normalizedTimeZone = normalizeTimeZone(timeZone ?? null) ?? DEFAULT_TIME_ZONE;
   const today = formatDateKeyInTimeZone(new Date(), normalizedTimeZone);
   return {
     dateFrom: shiftDateKey(today, -29),
@@ -1490,7 +1493,7 @@ function buildDefaultFunnelSteps(): FunnelStepDraft[] {
   return [buildEmptyFunnelStep(1), buildEmptyFunnelStep(2), buildEmptyFunnelStep(3)];
 }
 
-function buildDefaultOperationalSection(timezone = "UTC"): AiOperationalSection {
+function buildDefaultOperationalSection(timezone = DEFAULT_TIME_ZONE): AiOperationalSection {
   return {
     security: {
       mandatory_guardrails: {
@@ -1545,7 +1548,7 @@ function buildDefaultOperationalSection(timezone = "UTC"): AiOperationalSection 
   };
 }
 
-function buildDefaultAgendaSchedule(timezone = "UTC"): AiOperationalSchedule {
+function buildDefaultAgendaSchedule(timezone = DEFAULT_TIME_ZONE): AiOperationalSchedule {
   return buildDefaultOperationalSection(timezone).schedule;
 }
 
@@ -1731,7 +1734,7 @@ function readAgendaSchedule(value: unknown, fallback = buildDefaultAgendaSchedul
 }
 
 function buildDefaultOperationalConfig(timezone?: string | null): AiOperationalConfig {
-  const section = buildDefaultOperationalSection(timezone ?? "UTC");
+  const section = buildDefaultOperationalSection(timezone ?? DEFAULT_TIME_ZONE);
   return {
     status: "draft",
     version: 1,
@@ -1746,7 +1749,7 @@ function normalizeOperationalConfig(value: unknown, fallbackTimezone?: string | 
     return buildDefaultOperationalConfig(fallbackTimezone);
   }
   const source = value as Record<string, unknown>;
-  const defaultSection = buildDefaultOperationalSection(fallbackTimezone ?? "UTC");
+  const defaultSection = buildDefaultOperationalSection(fallbackTimezone ?? DEFAULT_TIME_ZONE);
   const hasVersionedSections = Boolean(source.draft || source.published);
   const draftSource = hasVersionedSections ? source.draft : source;
   const publishedSource = hasVersionedSections ? source.published : source;
@@ -1761,7 +1764,7 @@ function normalizeOperationalConfig(value: unknown, fallbackTimezone?: string | 
 }
 
 function buildDefaultAgendaConfig(timezone?: string | null): AppointmentOperationalConfig {
-  const schedule = buildDefaultAgendaSchedule(timezone ?? "UTC");
+  const schedule = buildDefaultAgendaSchedule(timezone ?? DEFAULT_TIME_ZONE);
   return {
     status: "draft",
     version: 1,
@@ -1776,7 +1779,7 @@ function normalizeAgendaConfig(value: unknown, fallbackTimezone?: string | null)
     return buildDefaultAgendaConfig(fallbackTimezone);
   }
   const source = value as Record<string, unknown>;
-  const defaultSchedule = buildDefaultAgendaSchedule(fallbackTimezone ?? "UTC");
+  const defaultSchedule = buildDefaultAgendaSchedule(fallbackTimezone ?? DEFAULT_TIME_ZONE);
   const hasVersionedSections = Boolean(source.draft || source.published);
   const draftSource = hasVersionedSections ? source.draft : source;
   const publishedSource = hasVersionedSections ? source.published : source;
@@ -1939,6 +1942,9 @@ function aiChecklist(form: AiAgentForm) {
 }
 
 function mapConversationStatus(status: string, lastSenderType: string | null) {
+  if (status === "deleted") {
+    return "Eliminada";
+  }
   if (status === "closed") {
     return "Cerrada";
   }
@@ -2277,7 +2283,7 @@ function formatDashboardDateLabel(value: string, timeZone?: string) {
   return new Intl.DateTimeFormat("es-CO", {
     day: "2-digit",
     month: "short",
-    timeZone: "UTC",
+    timeZone: DEFAULT_TIME_ZONE,
   }).format(date);
 }
 
@@ -2353,7 +2359,7 @@ function mapApiDashboardAnalytics(analytics: ApiDashboardAnalytics): DashboardAn
   return {
     date_from: analytics.date_from,
     date_to: analytics.date_to,
-    timezone: analytics.timezone || "UTC",
+    timezone: analytics.timezone || DEFAULT_TIME_ZONE,
     summary: {
       total_conversations: Number(analytics.summary.total_conversations) || 0,
       total_unread: Number(analytics.summary.total_unread) || 0,
@@ -3839,6 +3845,37 @@ function App() {
     }
   }
 
+  async function closeConversation(conversationId: string) {
+    const response = await api<ApiConversation>(`/conversations/${conversationId}/close`, {
+      method: "POST",
+    });
+    await loadInbox();
+    return mapApiConversation(response);
+  }
+
+  async function markConversationUnread(conversationId: string) {
+    const response = await api<ApiConversation>(`/conversations/${conversationId}/unread`, {
+      method: "POST",
+    });
+    await loadInbox();
+    return mapApiConversation(response);
+  }
+
+  async function deleteConversation(conversationId: string) {
+    await api<{ conversation_id: string } & Record<string, number>>(`/conversations/${conversationId}`, {
+      method: "DELETE",
+    });
+    conversationDetailCacheRef.current.delete(conversationId);
+    if (selectedConversationIdRef.current === conversationId) {
+      setSelectedConversationIdSync(null);
+      setSelectedConversationDetail(null);
+      setSelectedConversationAppointmentIntentPreparedAt(null);
+      setSelectedConversationAppointmentIntentSnapshotVersion(null);
+      setConversationMessages([]);
+    }
+    await loadInbox();
+  }
+
   function logout() {
     setToken(null);
     setCurrentUser(null);
@@ -4047,11 +4084,14 @@ function App() {
                   onSendMessage={sendInboxMessage}
                   onPauseAi={pauseConversationAi}
                   onResumeAi={resumeConversationAi}
+                  onCloseConversation={closeConversation}
+                  onMarkConversationUnread={markConversationUnread}
+                  onDeleteConversation={deleteConversation}
                   funnels={funnels}
                   currentUser={currentUser}
                   tenantUsers={tenantUsers}
                   query={query}
-                  timeZone={normalizeTimeZone(currentUser?.company_timezone ?? null) ?? "UTC"}
+                  timeZone={normalizeTimeZone(currentUser?.company_timezone ?? null) ?? DEFAULT_TIME_ZONE}
                   onAssignFunnel={assignConversationFunnel}
                   funnelFilterId={inboxFunnelFilterId}
                   funnelStepFilterId={inboxStepFilterId}
@@ -4069,7 +4109,7 @@ function App() {
               <OrdersPage
                 orders={orders}
                 loadError={orderLoadError}
-                timeZone={normalizeTimeZone(currentUser?.company_timezone ?? null)}
+                timeZone={normalizeTimeZone(currentUser?.company_timezone ?? null) ?? DEFAULT_TIME_ZONE}
                 filters={orderFilters}
                 onChangeFilters={setOrderFilters}
                 onCreatePaymentLink={createPaymentLink}
@@ -4746,6 +4786,9 @@ function InboxPage({
   onSendMessage,
   onPauseAi,
   onResumeAi,
+  onCloseConversation,
+  onMarkConversationUnread,
+  onDeleteConversation,
   funnels,
   currentUser,
   tenantUsers,
@@ -4767,6 +4810,9 @@ function InboxPage({
   onSendMessage: (content: string) => Promise<void>;
   onPauseAi: () => Promise<void>;
   onResumeAi: () => Promise<void>;
+  onCloseConversation: (conversationId: string) => Promise<Conversation>;
+  onMarkConversationUnread: (conversationId: string) => Promise<Conversation>;
+  onDeleteConversation: (conversationId: string) => Promise<void>;
   funnels: ApiFunnel[];
   currentUser: CurrentUser;
   tenantUsers: TenantUser[];
@@ -4790,6 +4836,12 @@ function InboxPage({
   const [aiActionBusy, setAiActionBusy] = useState(false);
   const [aiEnabledOptimistic, setAiEnabledOptimistic] = useState<boolean | null>(null);
   const [assigningFunnel, setAssigningFunnel] = useState(false);
+  const [contextMenuError, setContextMenuError] = useState("");
+  const [contextMenu, setContextMenu] = useState<{
+    conversationId: string;
+    x: number;
+    y: number;
+  } | null>(null);
   const selectedFilterFunnel = funnels.find((funnel) => funnel.id === funnelFilterId) ?? null;
   const selectedFilterSteps = selectedFilterFunnel?.steps ?? [];
   const selectedConversationAssignmentLabel = selectedConversation
@@ -4802,7 +4854,71 @@ function InboxPage({
     setAiEnabledOptimistic(null);
   }, [selectedConversation?.id, selectedConversation?.aiEnabled]);
 
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+    const closeMenu = () => setContextMenu(null);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeMenu();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("resize", closeMenu);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("resize", closeMenu);
+    };
+  }, [contextMenu]);
+
   const effectiveAiEnabled = aiEnabledOptimistic ?? selectedConversation?.aiEnabled ?? false;
+
+  function openConversationContextMenu(
+    event: MouseEvent<HTMLButtonElement>,
+    conversationId: string,
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenuError("");
+    setContextMenu({
+      conversationId,
+      x: event.clientX,
+      y: event.clientY,
+    });
+  }
+
+  async function closeConversationFromMenu(conversationId: string) {
+    setContextMenu(null);
+    try {
+      await onCloseConversation(conversationId);
+      setContextMenuError("");
+    } catch (caught) {
+      setContextMenuError(caught instanceof Error ? caught.message : "No fue posible cerrar la conversacion");
+    }
+  }
+
+  async function markConversationUnreadFromMenu(conversationId: string) {
+    setContextMenu(null);
+    try {
+      await onMarkConversationUnread(conversationId);
+      setContextMenuError("");
+    } catch (caught) {
+      setContextMenuError(caught instanceof Error ? caught.message : "No fue posible marcar la conversacion como no leida");
+    }
+  }
+
+  async function deleteConversationFromMenu(conversationId: string) {
+    setContextMenu(null);
+    try {
+      await onDeleteConversation(conversationId);
+      setContextMenuError("");
+    } catch (caught) {
+      setContextMenuError(caught instanceof Error ? caught.message : "No fue posible eliminar la conversacion");
+    }
+  }
 
   async function submitMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -4898,6 +5014,9 @@ function InboxPage({
           </label>
         </div>
         {error ? <div className="border-b border-line px-4 py-3 text-sm text-red-600">{error}</div> : null}
+        {contextMenuError ? (
+          <div className="border-b border-line px-4 py-3 text-sm text-red-600">{contextMenuError}</div>
+        ) : null}
         <div className="min-h-0 flex-1 divide-y divide-line overflow-y-auto">
           {conversations.length ? (
             conversations.map((conversation) => (
@@ -4907,6 +5026,7 @@ function InboxPage({
                   selectedConversation?.id === conversation.id ? "bg-brandAccentSoft" : "hover:bg-panel"
                 }`}
                 onClick={() => onSelect(conversation.id)}
+                onContextMenu={(event) => openConversationContextMenu(event, conversation.id)}
               >
                 <div className="flex items-center justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-2">
@@ -5071,6 +5191,48 @@ function InboxPage({
             Selecciona una conversacion
           </div>
         )}
+        {contextMenu ? (
+          <div
+            className="fixed inset-0 z-50"
+            onClick={() => setContextMenu(null)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              setContextMenu(null);
+            }}
+          >
+            <div
+              className="fixed w-56 overflow-hidden rounded border border-line bg-surface shadow-soft"
+              style={{
+                left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 240)),
+                top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 180)),
+              }}
+              onClick={(event) => event.stopPropagation()}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-panel"
+                onClick={() => void markConversationUnreadFromMenu(contextMenu.conversationId)}
+              >
+                Marcar como no leida
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-panel"
+                onClick={() => void closeConversationFromMenu(contextMenu.conversationId)}
+              >
+                Cerrar conversacion
+              </button>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 transition hover:bg-red-50"
+                onClick={() => void deleteConversationFromMenu(contextMenu.conversationId)}
+              >
+                Eliminar conversacion
+              </button>
+            </div>
+          </div>
+        ) : null}
       </section>
     </div>
   );
@@ -5770,19 +5932,17 @@ function AppointmentsPage({
   const agendaSection =
     agendaConfig?.status === "published"
       ? agendaConfig.published
-      : agendaConfig?.draft ?? buildDefaultAgendaSchedule(currentUser.company_timezone ?? "UTC");
+      : agendaConfig?.draft ?? buildDefaultAgendaSchedule(currentUser.company_timezone ?? DEFAULT_TIME_ZONE);
   const normalizedCompanyTimeZone = normalizeTimeZone(agendaSection.timezone ?? currentUser.company_timezone ?? null);
-  const defaultAppointmentTimeZone =
-    normalizedCompanyTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const appointmentTimeZone =
-    availability?.timezone ??
-    normalizedCompanyTimeZone ??
-    Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const defaultAppointmentTimeZone = normalizedCompanyTimeZone ?? DEFAULT_TIME_ZONE;
+  const appointmentTimeZone = availability?.timezone ?? normalizedCompanyTimeZone ?? DEFAULT_TIME_ZONE;
   const [scheduledAtValue, setScheduledAtValue] = useState("");
   const [selectedAvailabilityOption, setSelectedAvailabilityOption] = useState<string | null>(null);
   const [durationMinutesValue, setDurationMinutesValue] = useState(DEFAULT_APPOINTMENT_DURATION_MINUTES);
   const [agendaDurationDraft, setAgendaDurationDraft] = useState(DEFAULT_APPOINTMENT_DURATION_MINUTES);
-  const [agendaTimezoneDraft, setAgendaTimezoneDraft] = useState(currentUser.company_timezone ?? "UTC");
+  const [agendaTimezoneDraft, setAgendaTimezoneDraft] = useState(
+    currentUser.company_timezone ?? DEFAULT_TIME_ZONE,
+  );
   const [agendaWeekdayStartDraft, setAgendaWeekdayStartDraft] = useState("08:00");
   const [agendaWeekdayEndDraft, setAgendaWeekdayEndDraft] = useState("18:00");
   const [agendaWeekendStartDraft, setAgendaWeekendStartDraft] = useState("08:00");
@@ -5979,11 +6139,11 @@ function AppointmentsPage({
     setAgendaConfigError("");
     setAgendaConfigMessage("");
     try {
-      const baseConfig = agendaConfig ?? buildDefaultAgendaConfig(currentUser.company_timezone);
+      const baseConfig = agendaConfig ?? buildDefaultAgendaConfig(currentUser.company_timezone ?? DEFAULT_TIME_ZONE);
       const currentSection = baseConfig.status === "published" ? baseConfig.published : baseConfig.draft;
       const nextSection = {
         ...cloneAgendaSchedule(currentSection),
-        timezone: agendaTimezoneDraft.trim() || currentUser.company_timezone || "UTC",
+        timezone: agendaTimezoneDraft.trim() || currentUser.company_timezone || DEFAULT_TIME_ZONE,
         weekday: {
           start: agendaWeekdayStartDraft.trim() || "08:00",
           end: agendaWeekdayEndDraft.trim() || "18:00",

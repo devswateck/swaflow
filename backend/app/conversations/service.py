@@ -2,10 +2,11 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from fastapi import HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.companies.models import Company
+from app.appointments.models import Appointment
 from app.contacts.models import Contact
 from app.contacts.service import get_contact
 from app.audit.service import record_audit_best_effort
@@ -20,6 +21,7 @@ from app.inventory.models import Inventory
 from app.inventory.service import available_units
 from app.messages.models import Message
 from app.messages.service import create_message
+from app.orders.models import Order, OrderItem
 from app.products.models import Product
 from app.realtime import realtime_manager
 from app.users.permissions import can_access_module
@@ -113,7 +115,9 @@ def list_conversations(
     funnel_step_id: UUID | None = None,
 ) -> list[Conversation]:
     stmt = select(Conversation).where(Conversation.company_id == company_id)
-    if status_filter:
+    if status_filter is None:
+        stmt = stmt.where(Conversation.status != "deleted")
+    elif status_filter:
         stmt = stmt.where(Conversation.status == status_filter)
     if funnel_id is not None:
         stmt = stmt.where(Conversation.funnel_id == funnel_id)
@@ -294,6 +298,8 @@ def get_conversation(db: Session, *, company_id: UUID, conversation_id: UUID) ->
         )
     )
     if conversation is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversación no encontrada")
+    if conversation.status == "deleted":
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversación no encontrada")
     _close_conversation_for_inactivity(db, company_id=company_id, conversation=conversation)
     return conversation
@@ -1052,6 +1058,162 @@ def close_conversation(db: Session, *, company_id: UUID, conversation_id: UUID) 
         },
     )
     return conversation
+
+
+def mark_conversation_unread(
+    db: Session, *, company_id: UUID, conversation_id: UUID
+) -> Conversation:
+    conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
+    previous_unread_count = conversation.unread_count
+    if previous_unread_count > 0:
+        return conversation
+    conversation.unread_count = 1
+    _record_conversation_event(
+        db,
+        company_id=company_id,
+        conversation=conversation,
+        event_type="conversation.unread",
+        payload={"previous_unread_count": previous_unread_count, "unread_count": conversation.unread_count},
+    )
+    db.commit()
+    db.refresh(conversation)
+    realtime_manager.publish(
+        company_id,
+        "conversation.unread",
+        {
+            "conversation_id": str(conversation.id),
+            "unread_count": conversation.unread_count,
+            "previous_unread_count": previous_unread_count,
+        },
+    )
+    return conversation
+
+
+def delete_conversation(
+    db: Session, *, company_id: UUID, conversation_id: UUID
+) -> dict[str, int | str]:
+    conversation = get_conversation(db, company_id=company_id, conversation_id=conversation_id)
+
+    deleted_messages = db.scalar(
+        select(func.count()).select_from(Message).where(
+            Message.company_id == company_id,
+            Message.conversation_id == conversation.id,
+        )
+    ) or 0
+    message_rows = list(
+        db.execute(
+            select(Message.id, Message.external_message_id).where(
+                Message.company_id == company_id,
+                Message.conversation_id == conversation.id,
+            )
+        )
+    )
+    message_ids = [row[0] for row in message_rows]
+    external_message_ids = [row[1] for row in message_rows if isinstance(row[1], str) and row[1]]
+
+    deleted_appointments = db.scalar(
+        select(func.count()).select_from(Appointment).where(
+            Appointment.company_id == company_id,
+            Appointment.conversation_id == conversation.id,
+        )
+    ) or 0
+    appointment_ids = [
+        appointment_id
+        for appointment_id in db.scalars(
+            select(Appointment.id).where(
+                Appointment.company_id == company_id,
+                Appointment.conversation_id == conversation.id,
+            )
+        )
+    ]
+    deleted_orders = db.scalar(
+        select(func.count()).select_from(Order).where(
+            Order.company_id == company_id,
+            Order.conversation_id == conversation.id,
+        )
+    ) or 0
+    order_ids = [
+        order_id
+        for order_id in db.scalars(
+            select(Order.id).where(
+                Order.company_id == company_id,
+                Order.conversation_id == conversation.id,
+            )
+        )
+    ]
+    deleted_order_items = db.scalar(
+        select(func.count()).select_from(OrderItem).where(OrderItem.order_id.in_(order_ids))
+    ) or 0
+
+    if order_ids:
+        db.execute(delete(OrderItem).where(OrderItem.order_id.in_(order_ids)))
+        db.execute(
+            delete(Order).where(
+                Order.company_id == company_id,
+                Order.id.in_(order_ids),
+            )
+        )
+
+    if appointment_ids:
+        db.execute(
+            delete(Appointment).where(
+                Appointment.company_id == company_id,
+                Appointment.id.in_(appointment_ids),
+            )
+        )
+
+    event_conditions = [Event.payload["conversation_id"].as_string() == str(conversation.id)]
+    if message_ids:
+        message_id_strings = [str(message_id) for message_id in message_ids]
+        event_conditions.append(Event.payload["message_id"].as_string().in_(message_id_strings))
+        event_conditions.append(Event.payload["meta_message_id"].as_string().in_(message_id_strings))
+    if external_message_ids:
+        event_conditions.append(Event.payload["message_id"].as_string().in_(external_message_ids))
+        event_conditions.append(Event.payload["meta_message_id"].as_string().in_(external_message_ids))
+    if order_ids:
+        order_id_strings = [str(order_id) for order_id in order_ids]
+        event_conditions.append(Event.payload["order_id"].as_string().in_(order_id_strings))
+        event_conditions.append(Event.payload["origin_order_id"].as_string().in_(order_id_strings))
+        event_conditions.append(Event.payload["recovery_order_id"].as_string().in_(order_id_strings))
+    if appointment_ids:
+        appointment_id_strings = [str(appointment_id) for appointment_id in appointment_ids]
+        event_conditions.append(Event.payload["appointment_id"].as_string().in_(appointment_id_strings))
+    deleted_events = db.scalar(
+        select(func.count())
+        .select_from(Event)
+        .where(Event.company_id == company_id, or_(*event_conditions))
+    ) or 0
+    db.execute(delete(Event).where(Event.company_id == company_id, or_(*event_conditions)))
+
+    db.execute(
+        delete(Message).where(
+            Message.company_id == company_id,
+            Message.conversation_id == conversation.id,
+        )
+    )
+
+    db.execute(
+        delete(Conversation).where(
+            Conversation.company_id == company_id,
+            Conversation.id == conversation.id,
+        )
+    )
+    db.commit()
+    realtime_manager.publish(
+        company_id,
+        "conversation.deleted",
+        {
+            "conversation_id": str(conversation.id),
+        },
+    )
+    return {
+        "conversation_id": str(conversation.id),
+        "deleted_messages": deleted_messages,
+        "deleted_order_items": deleted_order_items,
+        "deleted_orders": deleted_orders,
+        "deleted_appointments": deleted_appointments,
+        "deleted_events": deleted_events,
+    }
 
 
 def mark_conversation_read(

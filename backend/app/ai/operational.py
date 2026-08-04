@@ -572,12 +572,12 @@ def simulation_summary(
     confidence = intent.confidence
     critical_intents = set(_normalize_list(autonomy.get("critical_intents")) or DEFAULT_CRITICAL_INTENTS)
     min_confidence = _normalize_float(autonomy.get("min_confidence"), default=DEFAULT_MIN_CONFIDENCE)
-    outside_hours_handoff = not hours["within_hours"] and hours["outside_hours_behavior"] == "handoff"
+    outside_hours = not hours["within_hours"]
     low_confidence_critical = confidence < min_confidence and intent.intent in critical_intents
     explicit_escalation = intent.intent in {"request_human", "complaint"}
-    requires_handoff = outside_hours_handoff or low_confidence_critical or explicit_escalation
+    requires_handoff = (not outside_hours and (low_confidence_critical or explicit_escalation))
     reason = ""
-    if outside_hours_handoff:
+    if outside_hours:
         reason = "fuera de horario"
     elif low_confidence_critical:
         reason = "baja confianza"
@@ -593,10 +593,7 @@ def simulation_summary(
         "requires_handoff": requires_handoff,
         "reason": reason,
         "suggested_reply": (
-            hours["outside_hours_message"]
-            if not hours["within_hours"] and hours["outside_hours_behavior"] == "handoff"
-            else escalation.get("clarification_message")
-            or DEFAULT_OUTSIDE_HOURS_MESSAGE
+            hours["outside_hours_message"] if outside_hours else escalation.get("clarification_message") or DEFAULT_OUTSIDE_HOURS_MESSAGE
         ),
         "min_confidence": min_confidence,
         "critical_intents": list(critical_intents),

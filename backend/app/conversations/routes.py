@@ -15,6 +15,7 @@ from app.conversations.schemas import (
     ConversationListItemRead,
     ConversationRead,
     ConversationSendMessage,
+    ConversationDeleteRead,
 )
 from app.core.database import get_db
 from app.messages.models import Message
@@ -161,6 +162,28 @@ def close_conversation(
     db: Session = Depends(get_db),
 ) -> Conversation:
     return service.close_conversation(
+        db, company_id=current_user.company_id, conversation_id=conversation_id
+    )
+
+
+@router.post("/{conversation_id}/unread", response_model=ConversationRead)
+def mark_conversation_unread(
+    conversation_id: UUID,
+    current_user: User = Depends(require_module_access("inbox")),
+    db: Session = Depends(get_db),
+) -> Conversation:
+    return service.mark_conversation_unread(
+        db, company_id=current_user.company_id, conversation_id=conversation_id
+    )
+
+
+@router.delete("/{conversation_id}", response_model=ConversationDeleteRead)
+def delete_conversation(
+    conversation_id: UUID,
+    current_user: User = Depends(require_module_access("inbox")),
+    db: Session = Depends(get_db),
+) -> dict:
+    return service.delete_conversation(
         db, company_id=current_user.company_id, conversation_id=conversation_id
     )
 

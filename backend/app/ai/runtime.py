@@ -654,9 +654,9 @@ def generate_auto_reply(
         field.lower()
         for field in _as_list(autonomy.get("required_capture_fields"))
     }
-    if not hours["within_hours"] and hours["outside_hours_behavior"] == "handoff":
+    if not hours["within_hours"]:
         return AutoReplyResult(
-            reply_text=hours["outside_hours_message"] or escalation.get("handoff_message") or "Te paso con una persona del equipo.",
+            reply_text=hours["outside_hours_message"] or "Estamos fuera de horario. Te respondemos apenas retomemos atencion.",
             action=None,
             is_first_contact=first_contact,
         )

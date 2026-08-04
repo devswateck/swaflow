@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -36,10 +36,12 @@ from app.conversations.service import (
 )
 from app.conversations.models import Conversation
 from app.contacts.models import Contact
+from app.events.models import Event
 from app.events.service import list_conversation_events
 from app.events.service import create_event
 from app.main import app
 from app.messages.models import Message
+from app.orders.models import Order, OrderItem
 from app.orders.schemas import OrderCreate, OrderItemCreate
 from app.orders.service import create_order
 from app.products.models import Product
@@ -316,6 +318,129 @@ def test_inbox_detail_includes_events_and_orders_by_recent_activity(db, client):
     assert all(
         event["payload"]["conversation_id"] == str(second_conversation.id)
         for event in detail["events"]
+    )
+
+
+def test_inbox_context_actions_mark_unread_close_and_delete(db, client):
+    company, owner = bootstrap_company(db, "Acme")
+    contact = Contact(company_id=company.id, name="Cliente 1", phone="+573001112233")
+    db.add(contact)
+    db.commit()
+
+    conversation = create_conversation(
+        db,
+        company_id=company.id,
+        payload=ConversationCreate(contact_id=contact.id, channel="whatsapp"),
+    )
+    append_message(
+        db,
+        company_id=company.id,
+        conversation_id=conversation.id,
+        sender_type="agent",
+        content="Hola",
+        external_message_id="wamid-ctx-1",
+    )
+    product = Product(
+        company_id=company.id,
+        name="Producto chat",
+        price=Decimal("10000"),
+        currency="COP",
+        status="active",
+    )
+    db.add(product)
+    db.flush()
+    db.add(
+        Inventory(
+            company_id=company.id,
+            product_id=product.id,
+            quantity_available=3,
+            quantity_reserved=0,
+        )
+    )
+    db.flush()
+    create_appointment(
+        db,
+        company_id=company.id,
+        payload=AppointmentCreate(
+            contact_id=contact.id,
+            conversation_id=conversation.id,
+            scheduled_at=datetime(2026, 8, 5, 15, 0, tzinfo=UTC),
+            duration_minutes=30,
+            notes="Cita del chat",
+        ),
+    )
+    order = create_order(
+        db,
+        company_id=company.id,
+        payload=OrderCreate(
+            contact_id=contact.id,
+            conversation_id=conversation.id,
+            items=[OrderItemCreate(product_id=product.id, quantity=1)],
+            metadata={},
+        ),
+    )
+    create_event(
+        db,
+        company_id=company.id,
+        event_type="message.received",
+        payload={
+            "conversation_id": str(conversation.id),
+            "message_id": "wamid-ctx-1",
+        },
+    )
+    db.commit()
+
+    unread_response = client.post(
+        f"/api/v1/conversations/{conversation.id}/unread",
+        headers=auth_headers(owner),
+    )
+    assert unread_response.status_code == 200
+    unread_payload = unread_response.json()
+    assert unread_payload["unread_count"] == 1
+
+    close_response = client.post(
+        f"/api/v1/conversations/{conversation.id}/close",
+        headers=auth_headers(owner),
+    )
+    assert close_response.status_code == 200
+    close_payload = close_response.json()
+    assert close_payload["status"] == "closed"
+
+    delete_response = client.delete(
+        f"/api/v1/conversations/{conversation.id}",
+        headers=auth_headers(owner),
+    )
+    assert delete_response.status_code == 200
+    delete_payload = delete_response.json()
+    assert delete_payload["conversation_id"] == str(conversation.id)
+    assert delete_payload["deleted_messages"] >= 1
+    assert delete_payload["deleted_orders"] >= 1
+    assert delete_payload["deleted_order_items"] >= 1
+    assert delete_payload["deleted_appointments"] >= 1
+    assert delete_payload["deleted_events"] >= 1
+
+    inbox_response = client.get("/api/v1/conversations", headers=auth_headers(owner))
+    assert inbox_response.status_code == 200
+    assert all(row["id"] != str(conversation.id) for row in inbox_response.json())
+
+    detail_response = client.get(
+        f"/api/v1/conversations/{conversation.id}",
+        headers=auth_headers(owner),
+    )
+    assert detail_response.status_code == 404
+
+    assert db.scalar(select(func.count()).select_from(Message).where(Message.conversation_id == conversation.id)) == 0
+    assert db.scalar(select(func.count()).select_from(Order).where(Order.conversation_id == conversation.id)) == 0
+    assert db.scalar(select(func.count()).select_from(OrderItem).where(OrderItem.order_id == order.id)) == 0
+    assert (
+        db.scalar(select(func.count()).select_from(Appointment).where(Appointment.conversation_id == conversation.id))
+        == 0
+    )
+    assert (
+        db.scalar(
+            select(func.count()).select_from(Event).where(Event.payload["conversation_id"].as_string() == str(conversation.id))
+        )
+        == 0
     )
 
     cross_tenant_response = client.get(

@@ -87,3 +87,12 @@ class ConversationAppointmentIntentRead(ORMModel):
     source: str
     prepared_at: datetime
     snapshot_version: str
+
+
+class ConversationDeleteRead(BaseModel):
+    conversation_id: UUID
+    deleted_messages: int = 0
+    deleted_order_items: int = 0
+    deleted_orders: int = 0
+    deleted_appointments: int = 0
+    deleted_events: int = 0
