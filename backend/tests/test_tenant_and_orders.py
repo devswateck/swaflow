@@ -2219,6 +2219,16 @@ def test_current_user_payload_includes_company_branding(db):
     assert payload["company_profile_url"] == "https://cdn.example.com/acme/profile.jpg"
 
 
+def test_current_user_payload_defaults_company_timezone_to_bogota(db):
+    company, owner = bootstrap_company(db, "Acme")
+    company.timezone = None
+    db.commit()
+
+    payload = build_current_user_payload(owner)
+
+    assert payload["company_timezone"] == "America/Bogota"
+
+
 def test_company_profile_update_persists_configuration_fields(db):
     company, _ = bootstrap_company(db, "Acme")
 

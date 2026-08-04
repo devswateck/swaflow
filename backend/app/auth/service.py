@@ -1,5 +1,6 @@
 import logging
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -17,6 +18,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 
 
 SUPERADMIN_ROLE = "superadmin"
+DEFAULT_TIMEZONE = "America/Bogota"
 logger = logging.getLogger(__name__)
 
 
@@ -50,6 +52,18 @@ def build_token(user: User) -> str:
 
 def build_current_user_payload(user: User) -> dict[str, object]:
     company = user.company
+    company_timezone = None
+    if company is not None:
+        timezone_value = (company.timezone or "").strip()
+        if timezone_value:
+            try:
+                ZoneInfo(timezone_value)
+            except ZoneInfoNotFoundError:
+                company_timezone = DEFAULT_TIMEZONE
+            else:
+                company_timezone = timezone_value
+        else:
+            company_timezone = DEFAULT_TIMEZONE
     return {
         "id": user.id,
         "company_id": user.company_id,
@@ -59,7 +73,7 @@ def build_current_user_payload(user: User) -> dict[str, object]:
         "status": user.status,
         "module_permissions": effective_module_permissions(user),
         "company_currency": company.currency if company is not None else None,
-        "company_timezone": company.timezone if company is not None else None,
+        "company_timezone": company_timezone,
         "company_logo_url": company.logo_url if company is not None else None,
         "company_banner_url": company.banner_url if company is not None else None,
         "company_profile_url": company.profile_url if company is not None else None,

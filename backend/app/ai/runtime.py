@@ -22,6 +22,7 @@ from app.ai.operational import (
 )
 from app.events.models import Event
 from app.companies.models import Company
+from app.companies.service import DEFAULT_TIMEZONE
 from app.conversations.models import Conversation
 from app.funnels.models import SalesFunnel
 from app.inventory.models import Inventory
@@ -554,7 +555,11 @@ def generate_auto_reply(
 
     company = db.scalar(select(Company).where(Company.id == company_id))
     company_name = company.name if company else "la empresa"
-    timezone_name = company.timezone if company else None
+    timezone_name = (
+        company.timezone.strip()
+        if company is not None and isinstance(company.timezone, str) and company.timezone.strip()
+        else DEFAULT_TIMEZONE
+    )
     operational_config = build_operational_config(rules, fallback_timezone=timezone_name)
     operational_section = get_effective_operational_section(operational_config)
     hours = evaluate_business_hours(

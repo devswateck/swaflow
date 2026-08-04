@@ -10,7 +10,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { flushSync } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
 import {
   AlertCircle,
   Bell,
@@ -5191,48 +5191,51 @@ function InboxPage({
             Selecciona una conversacion
           </div>
         )}
-        {contextMenu ? (
-          <div
-            className="fixed inset-0 z-50"
-            onClick={() => setContextMenu(null)}
-            onContextMenu={(event) => {
-              event.preventDefault();
-              setContextMenu(null);
-            }}
-          >
-            <div
-              className="fixed w-56 overflow-hidden rounded border border-line bg-surface shadow-soft"
-              style={{
-                left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 240)),
-                top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 180)),
-              }}
-              onClick={(event) => event.stopPropagation()}
-              onContextMenu={(event) => event.preventDefault()}
-            >
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-panel"
-                onClick={() => void markConversationUnreadFromMenu(contextMenu.conversationId)}
+        {contextMenu
+          ? createPortal(
+              <div
+                className="fixed inset-0 z-[9999]"
+                onClick={() => setContextMenu(null)}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  setContextMenu(null);
+                }}
               >
-                Marcar como no leida
-              </button>
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-panel"
-                onClick={() => void closeConversationFromMenu(contextMenu.conversationId)}
-              >
-                Cerrar conversacion
-              </button>
-              <button
-                type="button"
-                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 transition hover:bg-red-50"
-                onClick={() => void deleteConversationFromMenu(contextMenu.conversationId)}
-              >
-                Eliminar conversacion
-              </button>
-            </div>
-          </div>
-        ) : null}
+                <div
+                  className="fixed w-56 overflow-hidden rounded border border-line bg-surface shadow-soft"
+                  style={{
+                    left: Math.max(8, Math.min(contextMenu.x, window.innerWidth - 240)),
+                    top: Math.max(8, Math.min(contextMenu.y, window.innerHeight - 180)),
+                  }}
+                  onClick={(event) => event.stopPropagation()}
+                  onContextMenu={(event) => event.preventDefault()}
+                >
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-panel"
+                    onClick={() => void markConversationUnreadFromMenu(contextMenu.conversationId)}
+                  >
+                    Marcar como no leida
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition hover:bg-panel"
+                    onClick={() => void closeConversationFromMenu(contextMenu.conversationId)}
+                  >
+                    Cerrar conversacion
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-600 transition hover:bg-red-50"
+                    onClick={() => void deleteConversationFromMenu(contextMenu.conversationId)}
+                  >
+                    Eliminar conversacion
+                  </button>
+                </div>
+              </div>,
+              document.body,
+            )
+          : null}
       </section>
     </div>
   );
