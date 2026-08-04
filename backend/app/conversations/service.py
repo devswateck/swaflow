@@ -1141,6 +1141,9 @@ def delete_conversation(
             )
         )
     ]
+    for instance in list(db.identity_map.values()):
+        if isinstance(instance, Order) and instance.id in order_ids:
+            db.expunge(instance)
     deleted_order_items = db.scalar(
         select(func.count()).select_from(OrderItem).where(OrderItem.order_id.in_(order_ids))
     ) or 0

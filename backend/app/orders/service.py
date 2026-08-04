@@ -318,9 +318,7 @@ def create_order(
         summary="Order created",
         metadata={"total": str(order.total), "currency": order.currency},
     )
-    created_order = get_order(db, company_id=company_id, order_id=order.id)
-    db.expunge(created_order)
-    return created_order
+    return get_order(db, company_id=company_id, order_id=order.id)
 
 
 def _get_payment_integration(db: Session, *, company_id: UUID) -> CompanyIntegration | None:

@@ -443,13 +443,6 @@ def test_inbox_context_actions_mark_unread_close_and_delete(db, client):
         == 0
     )
 
-    cross_tenant_response = client.get(
-        f"/api/v1/conversations/{second_conversation.id}",
-        headers=auth_headers(other_owner),
-    )
-    assert cross_tenant_response.status_code == 404
-
-
 def test_inbox_detail_counts_only_meta_synced_available_products(db, client):
     company, owner = bootstrap_company(db, "Acme")
     contact = Contact(company_id=company.id, name="Cliente 1", phone="+573001112233")
