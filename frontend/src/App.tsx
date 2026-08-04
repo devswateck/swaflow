@@ -1244,7 +1244,6 @@ const integrationDefinitions: IntegrationDefinition[] = [
     defaultConfig: {
       provider: "google_calendar",
       calendar_id: "primary",
-      timezone: "America/Bogota",
       api_base_url: "https://www.googleapis.com/calendar/v3",
       create_event_path: "calendars/{calendar_id}/events",
       update_event_path: "calendars/{calendar_id}/events/{event_id}",
@@ -1260,7 +1259,6 @@ const integrationDefinitions: IntegrationDefinition[] = [
         ],
       },
       { key: "calendar_id", label: "Calendar ID", placeholder: "primary" },
-      { key: "timezone", label: "Zona horaria", placeholder: "America/Bogota" },
       { key: "api_base_url", label: "API base URL", placeholder: "https://www.googleapis.com/calendar/v3" },
       {
         key: "create_event_path",
@@ -1419,6 +1417,12 @@ function stringifyConfig(config: Record<string, unknown> | null | undefined): Re
   return Object.fromEntries(
     Object.entries(config ?? {}).map(([key, value]) => [key, value == null ? "" : String(value)]),
   );
+}
+
+function sanitizeCalendarConfig(config: Record<string, string>): Record<string, string> {
+  const next = { ...config };
+  delete next.timezone;
+  return next;
 }
 
 function readString(value: unknown, fallback = "") {
@@ -7584,7 +7588,7 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
             <div className="rounded border border-line bg-panel p-3">
               <p className="text-xs font-medium uppercase text-slate-500">Mensaje inicial</p>
               <textarea
-                className="mt-2 min-h-20 w-full resize-y rounded border border-line bg-white p-3 text-sm outline-none focus:border-brand"
+                className="mt-2 min-h-32 w-full resize-y rounded border border-line bg-white p-3 text-sm outline-none focus:border-brand"
                 value={form.welcomeMessage}
                 onChange={(event) => updateField("welcomeMessage", event.target.value)}
               />
@@ -7606,16 +7610,6 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
                 onChange={(value) => updateField("personality", value)}
               />
               <TextInput label="Tono" value={form.tone} onChange={(value) => updateField("tone", value)} />
-              <TextInput
-                label="Idioma"
-                value={form.language}
-                onChange={(value) => updateField("language", value)}
-              />
-              <TextInput
-                label="Horario resumen"
-                value={form.schedule}
-                readOnly
-              />
             </div>
           </div>
         </section>
@@ -7791,63 +7785,6 @@ function AiPage({ currentUser }: { currentUser: CurrentUser }) {
           ) : null}
 
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
-            <div className="rounded border border-line bg-panel p-3">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-semibold uppercase text-slate-500">Guardrails obligatorios</h3>
-                <ShieldCheck className="h-4 w-4 text-brand" />
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                Si un admin intenta desactivarlos, el backend debe rechazar la configuracion.
-              </p>
-              <div className="mt-3 grid gap-2">
-                {(
-                  [
-                    ["tenant_isolation", "Aislamiento por tenant"],
-                    ["payments_locked_to_backend", "Pagos solo en backend"],
-                    ["inventory_reserved_by_backend", "Inventario reservado por backend"],
-                    ["no_invention", "No invencion"],
-                    ["no_manual_payment_confirmation", "No confirmar pagos manualmente"],
-                  ] as const
-                ).map(([key, label]) => (
-                  <label key={key} className="flex items-center gap-2 rounded bg-white px-3 py-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={operationalConfig.draft.security.mandatory_guardrails[key]}
-                      onChange={(event) =>
-                        updateOperationalDraft((current) => ({
-                          ...current,
-                          security: {
-                            ...current.security,
-                            mandatory_guardrails: {
-                              ...current.security.mandatory_guardrails,
-                              [key]: event.target.checked,
-                            },
-                          },
-                        }))
-                      }
-                    />
-                    <span>{label}</span>
-                  </label>
-                ))}
-              </div>
-              <div className="mt-3">
-                <TextAreaInput
-                  label="Reglas de seguridad personalizadas"
-                  value={operationalConfig.draft.security.custom_rules}
-                  minHeight="min-h-28"
-                  onChange={(value) =>
-                    updateOperationalDraft((current) => ({
-                      ...current,
-                      security: {
-                        ...current.security,
-                        custom_rules: value,
-                      },
-                    }))
-                  }
-                />
-              </div>
-            </div>
-
             <div className="rounded border border-line bg-panel p-3">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-xs font-semibold uppercase text-slate-500">Horario operativo</h3>
@@ -8933,11 +8870,12 @@ function IntegrationsPage() {
               (integration) => integration.type === definition.type,
             );
             const previous = current[definition.type] ?? createIntegrationForm(definition);
+            const savedConfig = saved ? sanitizeCalendarConfig(stringifyConfig(saved.config)) : {};
             next[definition.type] = {
               ...previous,
               config: {
                 ...definition.defaultConfig,
-                ...(saved ? stringifyConfig(saved.config) : {}),
+                ...savedConfig,
               },
               credentials: "",
               secondaryCredentials: "",
@@ -9027,6 +8965,7 @@ function IntegrationsPage() {
     const form = forms[definition.type] ?? createIntegrationForm(definition);
     const existing = integrationByType.get(definition.type);
     const credentials = buildCredentialsPayload(definition, form);
+    const config = definition.type === "calendar" ? sanitizeCalendarConfig(form.config) : form.config;
     setSavingType(definition.type);
     setError("");
     setMessage("");
@@ -9037,7 +8976,7 @@ function IntegrationsPage() {
           status: string;
           credentials?: string;
         } = {
-          config: form.config,
+          config,
           status: "active",
         };
         if (credentials) {
@@ -9054,7 +8993,7 @@ function IntegrationsPage() {
           credentials?: string;
         } = {
           type: definition.type,
-          config: form.config,
+          config,
         };
         if (credentials) {
           payload.credentials = credentials;

@@ -248,6 +248,7 @@ def _collect_calendar_busy_intervals(
         adapter = get_calendar_adapter(config.get("provider"))
         busy_intervals = adapter.fetch_busy_intervals(
             company_id=company_id,
+            timezone_name=getattr(tzinfo, "key", None) or str(tzinfo),
             time_min=start_at.astimezone(tzinfo),
             time_max=end_at.astimezone(tzinfo),
             config=config,

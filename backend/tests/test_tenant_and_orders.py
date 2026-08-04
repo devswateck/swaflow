@@ -3704,7 +3704,6 @@ def test_calendar_integration_validates_provider_and_normalizes_alias(db):
                 config={
                     "provider": "calendly",
                     "calendar_id": "primary",
-                    "timezone": "America/Bogota",
                 },
             ),
         )
@@ -3719,11 +3718,11 @@ def test_calendar_integration_validates_provider_and_normalizes_alias(db):
             credentials="calendar-secret",
             config={
                 "calendar_id": "primary",
-                "timezone": "America/Bogota",
             },
         ),
     )
     assert integration.config["provider"] == "google_calendar"
+    assert "timezone" not in integration.config
 
     with pytest.raises(HTTPException) as exc_info:
         create_integration(
@@ -3735,7 +3734,6 @@ def test_calendar_integration_validates_provider_and_normalizes_alias(db):
                 config={
                     "provider": "google_calendar",
                     "calendar_id": "primary",
-                    "timezone": "America/Bogota",
                 },
             ),
         )
@@ -3751,7 +3749,6 @@ def test_calendar_integration_validates_provider_and_normalizes_alias(db):
             config={
                 "provider": "outlook_calendar",
                 "calendar_id": "primary",
-                "timezone": "America/Bogota",
             },
         ),
     )
@@ -3761,6 +3758,7 @@ def test_calendar_integration_validates_provider_and_normalizes_alias(db):
     assert integration.config["create_event_path"] == "me/calendars/{calendar_id}/events"
     assert integration.config["update_event_path"] == "me/events/{event_id}"
     assert integration.config["response_event_id_path"] == "id"
+    assert "timezone" not in integration.config
     stored = db.scalar(select(CompanyIntegration).where(CompanyIntegration.id == integration.id))
     assert stored is not None
     assert decrypt_secret(stored.credentials_encrypted or "") == "calendar-secret"
@@ -3777,7 +3775,6 @@ def test_calendar_integration_update_rejects_invalid_contracts(db):
             config={
                 "provider": "google_calendar",
                 "calendar_id": "primary",
-                "timezone": "America/Bogota",
             },
         ),
     )
@@ -3791,7 +3788,6 @@ def test_calendar_integration_update_rejects_invalid_contracts(db):
                 config={
                     "provider": "calendly",
                     "calendar_id": "primary",
-                    "timezone": "America/Bogota",
                 }
             ),
         )
@@ -3810,7 +3806,6 @@ def test_calendar_integration_update_rejects_invalid_contracts(db):
                 config={
                     "provider": "google_calendar",
                     "calendar_id": "primary",
-                    "timezone": "America/Bogota",
                 },
             ),
         )
@@ -3831,7 +3826,6 @@ def test_calendar_integration_is_tenant_scoped(db):
             config={
                 "provider": "google_calendar",
                 "calendar_id": "primary",
-                "timezone": "America/Bogota",
             },
         ),
     )
@@ -3845,7 +3839,6 @@ def test_calendar_integration_is_tenant_scoped(db):
                 config={
                     "provider": "microsoft_calendar",
                     "calendar_id": "primary",
-                    "timezone": "America/Bogota",
                 }
             ),
         )
@@ -3867,7 +3860,6 @@ def test_calendar_appointment_syncs_on_create_and_update(db, monkeypatch):
             config={
                 "provider": "microsoft_calendar",
                 "calendar_id": "primary",
-                "timezone": "America/Bogota",
                 "api_base_url": "https://graph.microsoft.com/v1.0",
                 "create_event_path": "me/calendars/{calendar_id}/events",
                 "update_event_path": "me/events/{event_id}",
@@ -3986,7 +3978,6 @@ def test_calendar_appointment_failed_create_keeps_internal_appointment_committed
             config={
                 "provider": "google_calendar",
                 "calendar_id": "primary",
-                "timezone": "America/Bogota",
                 "api_base_url": "https://www.googleapis.com/calendar/v3",
                 "create_event_path": "calendars/{calendar_id}/events",
                 "update_event_path": "calendars/{calendar_id}/events/{event_id}",
@@ -4046,7 +4037,6 @@ def test_calendar_appointment_failed_resync_marks_appointment_obsolete(db, monke
             config={
                 "provider": "google_calendar",
                 "calendar_id": "primary",
-                "timezone": "America/Bogota",
                 "api_base_url": "https://www.googleapis.com/calendar/v3",
                 "create_event_path": "calendars/{calendar_id}/events",
                 "update_event_path": "calendars/{calendar_id}/events/{event_id}",
@@ -4233,7 +4223,6 @@ def test_calendar_adapter_fetch_busy_intervals_parses_busy_slots(
         {
             "provider": provider,
             "calendar_id": "primary",
-            "timezone": "UTC",
         }
     )
     requests: list[tuple[str, str, dict[str, object] | None, dict[str, str] | None]] = []
@@ -4257,6 +4246,7 @@ def test_calendar_adapter_fetch_busy_intervals_parses_busy_slots(
 
     intervals = adapter.fetch_busy_intervals(
         company_id=uuid4(),
+        timezone_name="UTC",
         time_min=datetime(2026, 1, 16, 0, 0, tzinfo=UTC),
         time_max=datetime(2026, 1, 17, 0, 0, tzinfo=UTC),
         config=config,
@@ -4282,7 +4272,7 @@ def test_normalize_calendar_config_backfills_default_provider_defaults():
 
 def test_calendar_adapter_fetch_busy_intervals_raises_on_malformed_response(monkeypatch):
     adapter = HttpCalendarAdapter("google_calendar")
-    config = normalize_calendar_config({"calendar_id": "primary", "timezone": "UTC"})
+    config = normalize_calendar_config({"calendar_id": "primary"})
 
     class FakeResponse:
         def json(self) -> dict[str, object]:
@@ -4299,6 +4289,7 @@ def test_calendar_adapter_fetch_busy_intervals_raises_on_malformed_response(monk
     with pytest.raises(ValueError):
         adapter.fetch_busy_intervals(
             company_id=uuid4(),
+            timezone_name="UTC",
             time_min=datetime(2026, 1, 16, 0, 0, tzinfo=UTC),
             time_max=datetime(2026, 1, 17, 0, 0, tzinfo=UTC),
             config=config,
@@ -4312,7 +4303,6 @@ def test_calendar_adapter_fetch_busy_intervals_uses_provider_timezone_for_micros
         {
             "provider": "microsoft_calendar",
             "calendar_id": "primary",
-            "timezone": "America/New_York",
         }
     )
     requests: list[dict[str, object]] = []
@@ -4344,6 +4334,7 @@ def test_calendar_adapter_fetch_busy_intervals_uses_provider_timezone_for_micros
 
     adapter.fetch_busy_intervals(
         company_id=uuid4(),
+        timezone_name="America/New_York",
         time_min=datetime(2026, 1, 16, 0, 0, tzinfo=UTC),
         time_max=datetime(2026, 1, 17, 0, 0, tzinfo=UTC),
         config=config,

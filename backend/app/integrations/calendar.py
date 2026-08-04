@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.crypto import decrypt_secret
+from app.companies.models import Company
 from app.integrations.models import CompanyIntegration
 
 SUPPORTED_CALENDAR_PROVIDERS = {"google_calendar", "microsoft_calendar"}
@@ -64,6 +65,7 @@ class CalendarAdapter(Protocol):
         self,
         *,
         company_id: UUID,
+        timezone_name: str | None,
         appointment_id: UUID,
         scheduled_at: datetime,
         duration_minutes: int,
@@ -77,6 +79,7 @@ class CalendarAdapter(Protocol):
         self,
         *,
         company_id: UUID,
+        timezone_name: str | None,
         time_min: datetime,
         time_max: datetime,
         config: dict[str, Any],
@@ -98,6 +101,7 @@ def normalize_calendar_config(config: dict[str, Any] | None) -> dict[str, Any]:
     if not isinstance(config, dict):
         return {}
     next_config = dict(config)
+    next_config.pop("timezone", None)
     provider = normalize_calendar_provider(next_config.get("provider"))
     next_config["provider"] = provider
     for key, value in _provider_defaults(provider).items():
@@ -126,6 +130,17 @@ def _require_calendar_config_value(config: dict[str, Any], key: str) -> str:
             detail=f"Calendar {key.replace('_', ' ')} is required to activate this calendar integration",
         )
     return value
+
+
+def _resolve_timezone_name(timezone_name: str | None) -> str:
+    candidate = str(timezone_name or "").strip()
+    if not candidate:
+        return "UTC"
+    try:
+        ZoneInfo(candidate)
+    except ZoneInfoNotFoundError:
+        return "UTC"
+    return candidate
 
 
 def _normalize_datetime(value: datetime, timezone_name: str | None = None) -> datetime:
@@ -310,7 +325,6 @@ class HttpCalendarAdapter:
                 detail="Calendar provider must be Google Calendar or Microsoft Calendar",
             )
         _require_calendar_config_value(config, "calendar_id")
-        _require_calendar_config_value(config, "timezone")
         _require_calendar_config_value(config, "api_base_url")
         _require_calendar_config_value(config, "create_event_path")
         _require_calendar_config_value(config, "update_event_path")
@@ -320,6 +334,7 @@ class HttpCalendarAdapter:
         self,
         *,
         company_id: UUID,
+        timezone_name: str | None,
         appointment_id: UUID,
         scheduled_at: datetime,
         duration_minutes: int,
@@ -336,7 +351,7 @@ class HttpCalendarAdapter:
             )
         headers = _parse_credentials_headers(credentials_raw)
         calendar_id = _require_calendar_config_value(config, "calendar_id")
-        timezone = _require_calendar_config_value(config, "timezone")
+        timezone = _resolve_timezone_name(timezone_name)
         api_base_url = _require_calendar_config_value(config, "api_base_url")
         create_event_path = _require_calendar_config_value(config, "create_event_path")
         update_event_path = _require_calendar_config_value(config, "update_event_path")
@@ -388,6 +403,7 @@ class HttpCalendarAdapter:
         self,
         *,
         company_id: UUID,
+        timezone_name: str | None,
         time_min: datetime,
         time_max: datetime,
         config: dict[str, Any],
@@ -401,7 +417,7 @@ class HttpCalendarAdapter:
             )
         headers = _parse_credentials_headers(credentials_raw)
         calendar_id = _require_calendar_config_value(config, "calendar_id")
-        timezone = _require_calendar_config_value(config, "timezone")
+        timezone = _resolve_timezone_name(timezone_name)
         api_base_url = _require_calendar_config_value(config, "api_base_url")
         availability_path = _require_calendar_config_value(config, "availability_path")
         normalized_time_min = _normalize_datetime(time_min)
@@ -469,6 +485,7 @@ def sync_appointment_with_calendar(
     company_id: UUID,
     appointment,
 ) -> CalendarSyncResult | None:
+    company = db.scalar(select(Company).where(Company.id == company_id))
     integration = db.scalar(
         select(CompanyIntegration)
         .where(
@@ -484,6 +501,7 @@ def sync_appointment_with_calendar(
     config = normalize_calendar_config(integration.config)
     credentials_raw = calendar_credentials_raw(integration)
     adapter = get_calendar_adapter(config.get("provider"))
+    timezone_name = company.timezone if company else None
     adapter.validate_integration(
         config=config,
         credentials_raw=credentials_raw,
@@ -491,6 +509,7 @@ def sync_appointment_with_calendar(
     )
     return adapter.sync_appointment(
         company_id=company_id,
+        timezone_name=timezone_name,
         appointment_id=appointment.id,
         scheduled_at=appointment.scheduled_at,
         duration_minutes=appointment.duration_minutes,
