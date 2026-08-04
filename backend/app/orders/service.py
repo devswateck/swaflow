@@ -28,7 +28,7 @@ from app.payments.contract import (
 )
 from app.payments.notifications import notify_order_paid
 from app.products.models import Product
-from app.products.service import get_product, is_meta_synced_product
+from app.products.service import get_product
 from app.realtime import realtime_manager
 from app.whatsapp.service import send_expired_payment_followup
 
@@ -132,11 +132,6 @@ def _load_product_for_order(db: Session, *, company_id: UUID, product_id: UUID) 
     product = get_product(db, company_id=company_id, product_id=product_id)
     if product.status != "active":
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Inactive product")
-    if not is_meta_synced_product(product):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail="Product must be synchronized from Meta",
-        )
     return product
 
 

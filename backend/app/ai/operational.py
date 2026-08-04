@@ -575,7 +575,7 @@ def simulation_summary(
     outside_hours = not hours["within_hours"]
     low_confidence_critical = confidence < min_confidence and intent.intent in critical_intents
     explicit_escalation = intent.intent in {"request_human", "complaint"}
-    requires_handoff = (not outside_hours and (low_confidence_critical or explicit_escalation))
+    requires_handoff = outside_hours or low_confidence_critical or explicit_escalation
     reason = ""
     if outside_hours:
         reason = "fuera de horario"
