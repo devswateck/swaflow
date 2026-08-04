@@ -30,7 +30,7 @@ BRANDING_ALLOWED_CONTENT_TYPES = {
     "image/svg+xml": ".svg",
 }
 logger = logging.getLogger(__name__)
-DEFAULT_TIMEZONE = "America/Bogota"
+DEFAULT_TIMEZONE = None
 
 
 def _audit_company_event(db: Session, **kwargs) -> None:
